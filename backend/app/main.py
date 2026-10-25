@@ -67,6 +67,7 @@ async def _housekeeping_loop() -> None:
             from . import diskspace
             for w in await asyncio.to_thread(diskspace.warnings):  # in the log too, for servers nobody looks at
                 log.warning("Disk space: %s", w)
+            await asyncio.to_thread(diskspace.email_if_low)  # admins: once when it runs low, once if nearly full
         except Exception:
             log.exception("Disk space check failed")
         try:

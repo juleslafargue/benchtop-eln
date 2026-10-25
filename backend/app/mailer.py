@@ -98,6 +98,12 @@ def render(kind: str, **c: Any) -> tuple[str, str, str]:
         lines = ["Benchtop checks its data every day. Today's check found:"] + [e(p) for p in c.get("problems", [])] + [
             "Admin → Backups shows the details. You'll get one email per new problem, not one a day."]
         link = c.get("link")
+    elif kind == "disk_space":
+        subject = "Benchtop's disk is nearly full" if c.get("full") else "Benchtop's disk is running low on space"
+        lines = [e(p) for p in c.get("problems", [])] + [
+            "Admin → Backups shows each disk's free space. You'll get one more email if it gets nearly full, not one a day."
+            if not c.get("full") else "Admin → Backups shows each disk's free space."]
+        link = c.get("link")
     elif kind == "test":
         subject = "Benchtop test email"
         lines = ["This is a test from Benchtop's email settings. If you can read this, email is working."]

@@ -244,3 +244,68 @@ def test_a_backup_that_wouldnt_fit_is_refused_before_it_starts(client, admin, di
     disk["data"] = 50 * GB
     assert backup.create_backup("manual")["name"].endswith(".zip")
     assert not any("failed" in w for w in backup.health()["warnings"])
+
+
+# ------------------------------------------------------------------ email: once when it runs low, once if nearly full
+
+@pytest.fixture()
+def outbox(monkeypatch, client, admin):
+    from app import diskspace, mailer, sitesettings
+    sent = []
+    monkeypatch.setattr(mailer, "synchronous", True)
+    monkeypatch.setattr(mailer, "transport", lambda msg, cfg: sent.append(msg))
+    sitesettings.update("email", {"host": "smtp.example.org", "from_address": "eln@example.org", "password": "s3cret-app-pw"})
+    client.patch("/api/auth/me", headers=admin, json={"email": "admin@example.org"})
+    (settings.data_dir / diskspace.STATE).unlink(missing_ok=True)
+    yield sent
+    (settings.data_dir / diskspace.STATE).unlink(missing_ok=True)
+    client.patch("/api/auth/me", headers=admin, json={"email": "", "preferences": {"email_notify": {"system": True}}})
+    sitesettings.update("email", {"host": "", "from_address": ""})
+
+
+def body(msg) -> str:
+    return msg.get_body(("plain",)).get_content()
+
+
+def test_admins_get_one_email_when_a_disk_runs_low_and_one_if_nearly_full(client, admin, disk, outbox, monkeypatch):
+    from app import diskspace
+    disk["data"] = 50 * GB
+    diskspace.email_if_low()
+    assert outbox == [], "plenty of room: nothing to say"
+    disk["data"] = 3 * GB
+    diskspace.email_if_low()
+    assert len(outbox) == 1 and outbox[0]["To"] == "admin@example.org"
+    assert outbox[0]["Subject"] == "Benchtop's disk is running low on space"
+    assert "Only 3.0 GB free on the disk with Benchtop's data" in body(outbox[0]) and "/admin" in body(outbox[0])
+    disk["data"] = int(2.5 * GB)
+    diskspace.email_if_low()
+    assert len(outbox) == 1, "still low, an hour later: no second email"
+    disk["data"] = 500 * 10**6
+    diskspace.email_if_low()
+    assert len(outbox) == 2 and outbox[1]["Subject"] == "Benchtop's disk is nearly full"
+    assert "new uploads and instrument files are refused" in body(outbox[1])
+    disk["data"] = 3 * GB
+    diskspace.email_if_low()
+    assert len(outbox) == 2, "a little better again: nothing to say"
+    disk["data"] = 50 * GB
+    diskspace.email_if_low()
+    disk["data"] = 3 * GB
+    diskspace.email_if_low()
+    assert len(outbox) == 3, "low again after there was room: told again"
+
+
+def test_no_disk_email_when_turned_off_in_the_admins_settings_or_in_the_demo(client, admin, disk, outbox, monkeypatch):
+    from app import diskspace
+    r = client.patch("/api/auth/me", headers=admin, json={"preferences": {"email_notify": {"system": False}}})
+    assert r.json()["preferences"]["email_notify"]["system"] is False, "the setting is kept"
+    disk["data"] = 3 * GB
+    diskspace.email_if_low()
+    assert outbox == []
+    client.patch("/api/auth/me", headers=admin, json={"preferences": {"email_notify": {"system": True}}})
+    monkeypatch.setattr(settings, "demo", True)  # the demo lab never emails
+    diskspace.email_if_low()
+    assert outbox == []
+    monkeypatch.setattr(settings, "demo", False)
+    monkeypatch.setattr(settings, "disk_warn_gb", 0.0)  # warnings off: no email either
+    diskspace.email_if_low()
+    assert outbox == []

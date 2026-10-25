@@ -199,7 +199,8 @@ check doesn't run, and Admin says so.
 
 **Disk space.** A full disk makes saving, uploads and backups fail, so admins are warned early: on the dashboard and
 in **Admin → Backups** when the disk with Benchtop's data (or the one with the backups, or their second copy) has less
-than 5 GB free, with what to do (`BENCHTOP_DISK_WARN_GB` sets the amount; `0` turns it off). Benchtop also keeps the
+than 5 GB free, with what to do (`BENCHTOP_DISK_WARN_GB` sets the amount; `0` turns it off). Admins with an email
+address get one email when it first runs low, and one more if it gets nearly full. Benchtop also keeps the
 last 1 GB for saving what people type: an upload, an instrument file or an import that would leave less is refused
 with a plain message (an instrument file waits in its folder and comes in once there's room), and so is a backup that
 wouldn't fit. On a Mac, Finder can show more space "available" than Benchtop does, as it also counts space macOS can

@@ -11,6 +11,8 @@ of it was an "Internal Server Error".
 - An upload, an instrument file or an import that would leave less than RESERVE_BYTES (1 GB) free is refused before
   anything is written, and so is a backup that wouldn't fit: the space that's left is kept for saving what people type.
   A disk that fills up anyway (another program) gives a plain message instead of a server error.
+- Admins with an email address get one email when a disk first runs low, and one more if it gets nearly full (less
+  than the reserve); none while it stays that way. Once there's room again, the next time is told again.
 - BENCHTOP_DISK_WARN_GB=0 turns both off. A value below 1 also lowers the reserve to it (for a very small disk).
 - macOS: Finder can show more "available" than Benchtop does, as it counts space macOS can free by itself (purgeable
   space, local Time Machine snapshots). Benchtop counts only what is free now, which is what a save can use.
@@ -156,21 +158,24 @@ def _advice(holds: list[str]) -> str:
     return f"When it's full, {what}. {todo}"
 
 
-def warnings() -> list[str]:
-    """For the admin's dashboard and Admin → Backups; nothing when there's room (or the warning is turned off)."""
+def _low() -> list[dict[str, Any]]:
+    """The disks below their warning level (none when the warning is turned off)."""
     if warn_bytes() <= 0:
         return []
-    out = []
-    for p in places():
-        if p["free"] >= threshold(p["holds"]):
-            continue
-        holds = p["holds"]
-        msg = (f"Only {fmt(p['free'])} free on the disk with {_label(holds, start=False)} "
-               f"({p['path']}). {_advice(holds)}")
-        if "data" in holds and p["free"] < reserve_bytes():
-            msg += f" Until there's {fmt(reserve_bytes())} free, new uploads and instrument files are refused, to keep room for saving."
-        out.append(msg)
-    return out
+    return [p for p in places() if p["free"] < threshold(p["holds"])]
+
+
+def _warning(p: dict[str, Any]) -> str:
+    holds = p["holds"]
+    msg = f"Only {fmt(p['free'])} free on the disk with {_label(holds, start=False)} ({p['path']}). {_advice(holds)}"
+    if "data" in holds and p["free"] < reserve_bytes():
+        msg += f" Until there's {fmt(reserve_bytes())} free, new uploads and instrument files are refused, to keep room for saving."
+    return msg
+
+
+def warnings() -> list[str]:
+    """For the admin's dashboard and Admin → Backups; nothing when there's room (or the warning is turned off)."""
+    return [_warning(p) for p in _low()]
 
 
 def usage() -> dict[str, Any]:
@@ -237,3 +242,58 @@ def message(exc: BaseException, file: bool = False) -> str:
         return ("This file wasn't saved: the disk Benchtop keeps its data on is full. Tell your Benchtop admin, who'll "
                 "find what to do on their dashboard.")
     return SAVE_FAILED
+
+
+# ------------------------------------------------------------------ email, once when a disk runs low
+
+STATE = "disk-space.json"  # kept outside the database, like data-check.json
+
+
+def _load() -> dict[str, Any]:
+    import json
+    try:
+        return json.loads((settings.data_dir / STATE).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save(**changes: Any) -> None:
+    import json
+    p = settings.data_dir / STATE
+    try:  # a few bytes; on a disk that's completely full even that can fail, and then it's simply tried again
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({**_load(), **changes}))
+        tmp.replace(p)
+    except OSError:
+        pass
+
+
+def email_if_low() -> int:
+    """Called hourly: email the admins about a disk that has just run low, or just got nearly full. Returns how many
+    emails were queued."""
+    low = _low()
+    now = {"+".join(p["holds"]): "full" if p["free"] < reserve_bytes() else "low" for p in low}
+    told = _load().get("emailed") or {}
+    # new: a disk not told about yet, or one that went from low to nearly full (not back from full to low)
+    new = [p for p in low if told.get("+".join(p["holds"])) not in (now["+".join(p["holds"])], "full")]
+    if not new:
+        if told != {k: told[k] for k in now if k in told}:
+            _save(emailed={k: told[k] for k in now if k in told})  # a disk with room again: told again next time
+        return 0
+    from sqlmodel import Session, select
+
+    from . import mailer
+    from .db import engine
+    from .models import Role, User
+    if not mailer.configured():
+        return 0
+    full = any(now["+".join(p["holds"])] == "full" for p in new)
+    with Session(engine) as s:
+        admins = [u for u in s.exec(select(User).where(User.role == Role.admin)) if mailer.wants(u, "system")]
+        for u in admins:
+            mailer.queue_email(s, u.email, "disk_space", problems=[_warning(p) for p in new], full=full,
+                               link=mailer.base_url() + "/admin")
+        s.commit()
+    if admins:
+        _save(emailed={**{k: v for k, v in told.items() if k in now}, **{"+".join(p["holds"]): now["+".join(p["holds"])] for p in new}})
+    return len(admins)

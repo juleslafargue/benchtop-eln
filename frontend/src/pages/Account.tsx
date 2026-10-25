@@ -256,7 +256,7 @@ function EmailPrefs() {
   const [configured, setConfigured] = useState<boolean | null>(null)
   useEffect(() => { api.get<{ configured: boolean }>('/api/auth/email-status').then(r => setConfigured(r.configured)).catch(() => setConfigured(false)) }, [])
   const prefs = user.preferences?.email_notify || {}
-  const set = async (k: 'witness' | 'results', v: boolean) => {
+  const set = async (k: 'witness' | 'results' | 'system', v: boolean) => {
     try { setUser(await api.patch<User>('/api/auth/me', { preferences: { email_notify: { ...prefs, [k]: v } } })) } catch (e: any) { toast(e.message) }
   }
   const noAddress = !(user.email || '').trim()
@@ -266,6 +266,8 @@ function EmailPrefs() {
         When someone asks me to witness a record, and reminders while it waits</label>
       <label className="check-row"><input type="checkbox" checked={prefs.results !== false} onChange={e => set('results', e.target.checked)} disabled={noAddress} />
         When my records are witnessed or returned to me</label>
+      {user.role === 'admin' && <label className="check-row"><input type="checkbox" checked={prefs.system !== false} onChange={e => set('system', e.target.checked)} disabled={noAddress} />
+        When the daily data check finds a problem, or a disk Benchtop uses runs low on space (admins; always shown on the dashboard too)</label>}
       {noAddress ? <p className="faint" style={{ margin: 0 }}>Add your email address under Profile to get these.</p>
         : configured === false && <p className="faint" style={{ margin: 0 }}>This Benchtop doesn't send email yet (an admin sets it up in Admin → Email), so for now these arrive as notifications only.</p>}
     </div></div>
