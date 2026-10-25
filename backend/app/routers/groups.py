@@ -11,6 +11,7 @@ from .. import audit
 from ..access import access_for
 from ..models import Experiment, ExperimentShare, GroupMember, LabGroup, Notebook, Notification, Role, User
 from ..security import DB, Admin, CurrentUser
+from ..patching import cleaned
 from ..services import get_or_404, read_experiment, user_brief
 
 router = APIRouter(prefix="/api", tags=["groups & sharing"])
@@ -66,7 +67,7 @@ class GroupPatch(BaseModel):
 def update_group(gid: int, body: GroupPatch, user: CurrentUser, session: DB):
     g = get_or_404(session, LabGroup, gid)
     _manage(session, user, g)
-    changes = body.model_dump(exclude_unset=True)
+    changes = cleaned(g, body.model_dump(exclude_unset=True))
     if "name" in changes:
         changes["name"] = changes["name"].strip()
         clash = session.exec(select(LabGroup).where(LabGroup.name == changes["name"], LabGroup.id != gid)).first()

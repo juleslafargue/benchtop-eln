@@ -105,6 +105,7 @@ from ..models import (
     Signature, User, utcnow,
 )
 from ..security import DB, CurrentUser, Writer, verify_password
+from ..patching import cleaned
 from ..services import (
     content_hash, entry_out, experiment_summary, get_or_404, live_entries, read_experiment, require_editable,
     signatures_out, snapshot, user_brief,
@@ -190,7 +191,7 @@ def update_notebook(nb_id: int, body: NotebookPatch, user: Writer, session: DB):
     nb = get_or_404(session, Notebook, nb_id)
     if nb.owner_id != user.id and user.role != Role.admin:
         raise HTTPException(403, "Only the notebook owner can change it")
-    changes = body.model_dump(exclude_unset=True)
+    changes = cleaned(nb, body.model_dump(exclude_unset=True))
     if "group_id" in changes or "visibility" in changes:
         gid = changes["group_id"] if "group_id" in changes else nb.group_id
         vis = changes.get("visibility") or (nb.visibility if gid else None)
@@ -358,13 +359,14 @@ def create_experiment(body: ExperimentIn, user: Writer, session: DB):
         _require_notebook(session, user, body.notebook_id)
     elif not body.is_template:
         raise HTTPException(400, "notebook_id is required")
+    # checked before anything is written; 0 is an ID too (one that never exists), not "no template"
+    tpl = read_experiment(session, user, body.template_id) if body.template_id is not None else None
     exp = Experiment(title=body.title, notebook_id=body.notebook_id, description=body.description,
                      owner_id=user.id, is_template=body.is_template, template_id=body.template_id,
                      tags=body.tags)
     session.add(exp)
     session.flush()
-    if body.template_id:
-        tpl = read_experiment(session, user, body.template_id)
+    if tpl is not None:
         sections = [(e.kind, e.title, copy.deepcopy(e.content)) for e in live_entries(session, tpl.id)]
     else:
         sections = DEFAULT_SECTIONS
@@ -429,7 +431,7 @@ class ExperimentPatch(BaseModel):
 def update_experiment(exp_id: int, body: ExperimentPatch, user: Writer, session: DB):
     exp = read_experiment(session, user, exp_id)
     require_editable(exp, user)
-    changes = body.model_dump(exclude_unset=True)
+    changes = cleaned(exp, body.model_dump(exclude_unset=True))
     if changes.get("notebook_id") not in (None, exp.notebook_id):
         if exp.owner_id != user.id and user.role != Role.admin:
             raise HTTPException(403, "Only the owner can move an experiment to another notebook")

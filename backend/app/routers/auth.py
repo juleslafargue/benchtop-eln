@@ -11,6 +11,7 @@ from .. import audit
 from ..models import Role, User
 from ..config import settings
 from .. import passwords
+from ..patching import cleaned
 from ..models import AuthSession, utcnow
 from ..security import (MAX_PER_ACCOUNT, MAX_PER_IP, DB, Admin, CurrentUser, burn_time, check_throttle, clear_failures,
                         client_ip, end_sessions, hash_password, needs_rehash, record_failure, start_session, verify_password)
@@ -444,7 +445,7 @@ def update_user(uid: int, body: UserPatch, actor: Admin, session: DB):
     u = session.get(User, uid)
     if not u:
         raise HTTPException(404, "User not found")
-    changes = body.model_dump(exclude_unset=True)
+    changes = cleaned(u, body.model_dump(exclude_unset=True))
     if "username" in changes:
         changes["username"] = _check_username(session, changes["username"], u.id)
     if "email" in changes and changes["email"] is not None:

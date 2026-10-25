@@ -73,6 +73,24 @@ jobs:
           BENCHTOP_UPGRADE_TESTS: all
         run: python -m pytest -q -n 4 tests/test_v24_upgrades.py
 
+  fuzzing:
+    # Thousands of odd but well-formed requests to every endpoint (Schemathesis), as a scientist, an admin, a viewer
+    # and with no sign-in: Benchtop must answer each with a result or a plain refusal, never a server error.
+    name: API fuzzing (every endpoint, odd requests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: pip install -r backend/requirements-dev.txt
+      - name: Fuzz the API
+        working-directory: backend
+        run: python tests/fuzz_api.py
+
   frontend:
     name: Build the app
     runs-on: ubuntu-latest
@@ -177,7 +195,7 @@ jobs:
     # page, with notes from the commits and a ready-to-run zip (interface built, so no Node needed). That's what
     # ./benchtop update, deploy/update-server.sh and the admin's "newer version" notice look for.
     name: Publish a release (when the version changed on main)
-    needs: [backend, upgrades, frontend, browser, docker]
+    needs: [backend, upgrades, fuzzing, frontend, browser, docker]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -12,6 +12,7 @@ from .. import audit, chem, safety
 from ..db import engine
 from ..models import Entry, EntryKind, Experiment, Lot, LotTransaction, Material
 from ..security import DB, CurrentUser, Writer
+from ..patching import cleaned
 from ..services import read_experiment, get_or_404, user_brief
 
 router = APIRouter(prefix="/api", tags=["materials & inventory"])
@@ -173,7 +174,7 @@ class MaterialPatch(BaseModel):
 @router.patch("/materials/{mat_id}")
 def update_material(mat_id: int, body: MaterialPatch, user: Writer, session: DB):
     m = get_or_404(session, Material, mat_id)
-    changes = body.model_dump(exclude_unset=True)
+    changes = cleaned(m, body.model_dump(exclude_unset=True))
     for k, v in changes.items():
         setattr(m, k, v)
     if "smiles" in changes:
@@ -244,7 +245,7 @@ class LotPatch(BaseModel):
 @router.patch("/lots/{lot_id}")
 def update_lot(lot_id: int, body: LotPatch, user: Writer, session: DB):
     lot = get_or_404(session, Lot, lot_id)
-    changes = body.model_dump(exclude_unset=True)
+    changes = cleaned(lot, body.model_dump(exclude_unset=True))
     for k, v in changes.items():
         setattr(lot, k, v)
     session.add(lot)
@@ -267,7 +268,7 @@ def lot_transaction(lot_id: int, body: TxIn, user: Writer, session: DB):
     m = get_or_404(session, Material, lot.material_id)
     if body.unit not in _UNITS:
         raise HTTPException(400, "unknown unit")
-    if body.experiment_id:
+    if body.experiment_id is not None:  # 0 is an ID too (one that never exists), not "no experiment"
         read_experiment(session, user, body.experiment_id)
     if body.direction not in ("out", "in"):
         raise HTTPException(400, "direction must be 'out' or 'in'")
@@ -345,7 +346,10 @@ def register_product(body: RegisterProductIn, user: Writer, session: DB):
     exp = read_experiment(session, user, body.experiment_id)
     m = None
     if body.smiles:
-        ik = chem.properties(body.smiles)["inchikey"]
+        try:
+            ik = chem.properties(body.smiles)["inchikey"]
+        except chem.ChemError as exc:
+            raise HTTPException(422, f"Structure: {exc}")
         m = session.exec(select(Material).where(Material.inchikey == ik)).first()
     if m is None:
         m = Material(name=body.name, kind="product", smiles=body.smiles, created_by=user.id,
