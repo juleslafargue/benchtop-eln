@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { NavLink, Navigate, useLocation, useParams } from 'react-router-dom'
 import { useApp } from '../App'
 import type { NmrStatus } from '../components/Prediction'
 import { api, when, type AuditEvent, type Role, type User } from '../api'
@@ -265,66 +266,113 @@ function Backups() {
   )
 }
 
+/** Admin's tabs (0.26): each has its own address (/admin/backups…), so links from the dashboard and emails open it. */
+export const ADMIN_TABS = [
+  { key: 'users', label: 'Users' },
+  { key: 'backups', label: 'Backups' },
+  { key: 'instruments', label: 'Instruments' },
+  { key: 'email', label: 'Email' },
+  { key: 'signing', label: 'Signing' },
+  { key: 'integrations', label: 'Integrations' },
+  { key: 'audit', label: 'Audit trail' },
+] as const
+type TabKey = typeof ADMIN_TABS[number]['key']
+
+/** Which tabs have a problem to look at: backup, data-check or disk-space warnings; an instrument folder with an error. */
+function useProblems() {
+  const [bad, setBad] = useState<Partial<Record<TabKey, string>>>({})
+  const { pathname } = useLocation()
+  useEffect(() => {
+    let live = true
+    api.get<{ backups: string[]; instruments: string[] }>('/api/admin/problems').then(r => {
+      if (live) setBad(Object.fromEntries(Object.entries(r).filter(([, v]) => v.length).map(([k, v]) => [k, v.join(' ')])))
+    }).catch(() => {})
+    return () => { live = false }
+  }, [pathname])  // looked at again on each tab change, so a fixed problem's dot goes
+  return bad
+}
+
 export default function Admin() {
+  const { tab = 'users' } = useParams()
+  const problems = useProblems()
+  const known = ADMIN_TABS.some(t => t.key === tab)
+  if (!known) return <Navigate to="/admin" replace />
+  return (
+    <div className="stack" style={{ gap: 18 }}>
+      <div><h1 className="page-title">Admin</h1>
+        <p className="lede">People and their accounts, backups and checks of the data, instrument folders, email, signing, integrations, and the audit trail.</p></div>
+      <nav className="tabs admin-tabs" aria-label="Admin">
+        {ADMIN_TABS.map(t => (
+          <NavLink key={t.key} to={t.key === 'users' ? '/admin' : `/admin/${t.key}`} end aria-current={tab === t.key ? 'page' : undefined}
+            className={tab === t.key ? 'active' : ''}>
+            {t.label}{problems[t.key] && <span className="tab-dot" title={problems[t.key]} aria-label=" (needs attention)" />}
+          </NavLink>))}
+      </nav>
+      {tab === 'users' && <Users />}
+      {tab === 'backups' && <Backups />}
+      {tab === 'instruments' && <InstrumentsPanel />}
+      {tab === 'email' && <EmailSettingsPanel />}
+      {tab === 'signing' && <><WitnessSettingsPanel /><TimestampSettingsPanel /></>}
+      {tab === 'integrations' && <><Plugins /><Webhooks /><NmrData /></>}
+      {tab === 'audit' && <AuditTrail />}
+    </div>
+  )
+}
+
+function Users() {
   const { user: me, toast } = useApp()
   const [users, setUsers] = useState<User[]>([])
-  const [events, setEvents] = useState<AuditEvent[]>([])
-  const [chain, setChain] = useState<any>(null)
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<User | null>(null)
-  const load = () => { api.get<User[]>('/api/users').then(setUsers); api.get<AuditEvent[]>('/api/audit?limit=150').then(setEvents) }
+  const [resetting, setResetting] = useState<User | null>(null)
+  const load = () => { api.get<User[]>('/api/users').then(setUsers) }
   useEffect(load, [])
-
   const toggle = async (u: User) => { await api.patch(`/api/users/${u.id}`, { active: !u.active }); load() }
   const role = async (u: User, r: Role) => { await api.patch(`/api/users/${u.id}`, { role: r }); load() }
-  const [resetting, setResetting] = useState<User | null>(null)
   const signOut = async (u: User) => {
     try { const r = await api.post<{ ended: number }>(`/api/users/${u.id}/sign-out`); toast(`Signed ${u.username} out of ${r.ended} device${r.ended === 1 ? '' : 's'}`) }
     catch (e: any) { toast(e.message) }
   }
-
   return (
-    <div className="stack" style={{ gap: 26 }}>
-      <div><h1 className="page-title">Admin</h1><p className="lede">Accounts, backups, instruments, email, signing, plugins and webhooks, and a check that the audit trail hasn't been altered.</p></div>
-      <section className="stack" style={{ gap: 8 }}>
-        <div className="spread"><h2 style={{ fontSize: 17 }}>Users</h2><button className="btn sm" onClick={() => setAdding(true)}>Add user</button></div>
-        <div className="panel grid-wrap" style={{ border: 0 }}>
-          <table className="plain"><thead><tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th /></tr></thead>
-            <tbody>{users.map(u => (
-              <tr key={u.id}><td>{u.username}</td><td>{u.full_name}</td><td className="faint">{u.email}</td>
-                <td><select className="select" style={{ padding: '2px 6px' }} value={u.role} disabled={u.id === me.id} onChange={e => role(u, e.target.value as Role)} aria-label={`Role for ${u.username}`}>
-                  <option value="scientist">scientist</option><option value="viewer">viewer</option><option value="admin">admin</option></select></td>
-                <td>{u.active ? (u.must_change_password ? 'Active · must set password' : u.has_password === false ? 'Active · single sign-on' : 'Active') : 'Disabled'}</td>
-                <td style={{ whiteSpace: 'nowrap' }}><button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
-                  <button className="btn ghost sm" onClick={() => setResetting(u)}>Reset password</button>
-                  {u.id !== me.id && <button className="btn ghost sm" onClick={() => signOut(u)} title="End all of their sessions, e.g. a lost laptop">Sign out everywhere</button>}
-                  {u.id !== me.id && <button className="btn ghost sm" onClick={() => toggle(u)}>{u.active ? 'Disable' : 'Enable'}</button>}</td></tr>
-            ))}</tbody></table>
-        </div>
-      </section>
-      <EmailSettingsPanel />
-      <WitnessSettingsPanel />
-      <TimestampSettingsPanel />
-      <InstrumentsPanel />
-      <Plugins />
-      <Webhooks />
-      <NmrData />
-      <Backups />
-      <section className="stack" style={{ gap: 8 }}>
-        <div className="spread"><h2 style={{ fontSize: 17 }}>Audit trail</h2>
-          <button className="btn sm" onClick={async () => setChain(await api.get('/api/audit/verify'))}>Verify hash chain</button></div>
-        {chain && <p className={chain.ok ? 'notice' : 'error'} style={chain.ok ? { borderLeftColor: 'var(--witnessed)' } : undefined}>
-          {chain.ok ? `All ${chain.checked} events verified. Chain head ${chain.head.slice(0, 16)}…${chain.forks ? ` (${chain.forks} pair${chain.forks === 1 ? ' was' : 's were'} written at the same moment by an older version; both intact, not tampering.)` : ''}` : `Chain broken at event #${chain.broken_at} (${chain.reason}). Records from that point may have been altered.`}</p>}
-        <div className="panel panel-pad">
-          <ul className="timeline">{events.map(e => (
-            <li key={e.id}><span className="faint">{when(e.ts)}</span><span>{e.username}</span>
-              <span><span className="act">{e.action}</span> {e.object_type} {e.object_id ?? ''} <span className="hash">{JSON.stringify(e.details).slice(0, 120)}</span></span></li>
-          ))}</ul>
-        </div>
-      </section>
+    <section className="stack" style={{ gap: 8 }}>
+      <div className="spread"><h2 style={{ fontSize: 17 }}>Users</h2><button className="btn sm" onClick={() => setAdding(true)}>Add user</button></div>
+      <div className="panel grid-wrap" style={{ border: 0 }}>
+        <table className="plain"><thead><tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th /></tr></thead>
+          <tbody>{users.map(u => (
+            <tr key={u.id}><td>{u.username}</td><td>{u.full_name}</td><td className="faint">{u.email}</td>
+              <td><select className="select" style={{ padding: '2px 6px' }} value={u.role} disabled={u.id === me.id} onChange={e => role(u, e.target.value as Role)} aria-label={`Role for ${u.username}`}>
+                <option value="scientist">scientist</option><option value="viewer">viewer</option><option value="admin">admin</option></select></td>
+              <td>{u.active ? (u.must_change_password ? 'Active · must set password' : u.has_password === false ? 'Active · single sign-on' : 'Active') : 'Disabled'}</td>
+              <td style={{ whiteSpace: 'nowrap' }}><button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
+                <button className="btn ghost sm" onClick={() => setResetting(u)}>Reset password</button>
+                {u.id !== me.id && <button className="btn ghost sm" onClick={() => signOut(u)} title="End all of their sessions, e.g. a lost laptop">Sign out everywhere</button>}
+                {u.id !== me.id && <button className="btn ghost sm" onClick={() => toggle(u)}>{u.active ? 'Disable' : 'Enable'}</button>}</td></tr>
+          ))}</tbody></table>
+      </div>
       {editing && <EditUser u={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); toast('User updated') }} />}
       {resetting && <ResetPassword u={resetting} onClose={() => setResetting(null)} onDone={() => { setResetting(null); load(); toast(`Password reset; ${resetting.username} was signed out and will choose a new one`) }} />}
       {adding && <UserForm onClose={() => setAdding(false)} onSaved={() => { setAdding(false); load() }} />}
-    </div>
+    </section>
+  )
+}
+
+function AuditTrail() {
+  const [events, setEvents] = useState<AuditEvent[]>([])
+  const [chain, setChain] = useState<any>(null)
+  useEffect(() => { api.get<AuditEvent[]>('/api/audit?limit=150').then(setEvents) }, [])
+  return (
+    <section className="stack" style={{ gap: 8 }}>
+      <div className="spread"><h2 style={{ fontSize: 17 }}>Audit trail</h2>
+        <button className="btn sm" onClick={async () => setChain(await api.get('/api/audit/verify'))}>Verify hash chain</button></div>
+      <p className="faint" style={{ margin: 0 }}>Every change anyone makes, newest first (the latest 150 here). Each event is chained to the one before by its fingerprint, so an event changed or removed outside Benchtop breaks the chain: Verify hash chain checks all of them.</p>
+      {chain && <p className={chain.ok ? 'notice' : 'error'} style={chain.ok ? { borderLeftColor: 'var(--witnessed)' } : undefined}>
+        {chain.ok ? `All ${chain.checked} events verified. Chain head ${chain.head.slice(0, 16)}…${chain.forks ? ` (${chain.forks} pair${chain.forks === 1 ? ' was' : 's were'} written at the same moment by an older version; both intact, not tampering.)` : ''}` : `Chain broken at event #${chain.broken_at} (${chain.reason}). Records from that point may have been altered.`}</p>}
+      <div className="panel panel-pad">
+        <ul className="timeline">{events.map(e => (
+          <li key={e.id}><span className="faint">{when(e.ts)}</span><span>{e.username}</span>
+            <span><span className="act">{e.action}</span> {e.object_type} {e.object_id ?? ''} <span className="hash">{JSON.stringify(e.details).slice(0, 120)}</span></span></li>
+        ))}</ul>
+      </div>
+    </section>
   )
 }

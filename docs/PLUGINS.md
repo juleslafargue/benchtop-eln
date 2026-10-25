@@ -9,7 +9,7 @@ Plugins contain no code. Benchtop draws the form itself, checks every value agai
 
 ## Installing a plugin
 
-An admin opens **Admin → Plugins** and clicks **Add plugin file…**. Benchtop then:
+An admin opens **Admin → Integrations** (Plugins) and clicks **Add plugin file…**. Benchtop then:
 
 1. Shows what the file adds, or what's wrong with it.
 2. Copies the file into `<data folder>/plugins/` and switches it on.

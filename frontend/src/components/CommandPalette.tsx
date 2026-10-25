@@ -52,7 +52,9 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
     { key: 'p-inv', group: 'Go to', label: 'Inventory', run: go('/inventory') },
     { key: 'p-tpl', group: 'Go to', label: 'Templates', run: go('/templates') },
     { key: 'p-acc', group: 'Go to', label: 'Account settings', run: go('/account') },
-    ...(user.role === 'admin' ? [{ key: 'p-admin', group: 'Go to', label: 'Users, backups & audit', run: go('/admin') }] : []),
+    ...(user.role === 'admin' ? ([['', 'Users'], ['backups', 'Backups, data check & disk space'], ['instruments', 'Instruments'], ['email', 'Email'],
+      ['signing', 'Signing: witnessing & trusted timestamps'], ['integrations', 'Integrations: plugins, webhooks & NMR data'], ['audit', 'Audit trail']] as const)
+      .map(([k, label]) => ({ key: `p-admin-${k || 'users'}`, group: 'Go to', label: `Admin → ${label}`, run: go(k ? `/admin/${k}` : '/admin') })) : []),
     { key: 'a-out', group: 'Actions', label: 'Sign out', run: () => { onClose(); logout() } },
     ...notebooks.map(n => ({ key: `n${n.id}`, group: 'Notebooks', label: n.name, hint: `${n.experiment_count} experiments`, run: go(`/notebooks/${n.id}`) })),
     ...exps.map(e => ({ key: `e${e.id}`, group: 'Experiments', label: `${e.eid} ${e.title}`, hint: e.status, run: go(`/experiments/${e.id}`) })),

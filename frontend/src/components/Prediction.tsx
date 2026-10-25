@@ -219,7 +219,7 @@ export function PredictionPanel({ pred, assignment, nucleus, observedLabel, stat
           {status?.updating ? <p style={{ margin: 0, fontSize: 13 }}><b>Working:</b> {status.progress}</p>
             : user.role === 'admin' ? <div><button className="btn sm" onClick={onStartUpdate}>Download prediction data</button>
               {status?.last_error && <p className="error" style={{ margin: '6px 0 0', fontSize: 12.5 }}>Last attempt: {status.last_error}</p>}</div>
-              : <p className="faint" style={{ margin: 0, fontSize: 13 }}>Ask an administrator to download it from this panel or the Admin page, or run <code>./benchtop update-nmr-data</code>.</p>}
+              : <p className="faint" style={{ margin: 0, fontSize: 13 }}>Ask an administrator to download it from this panel or Admin → Integrations, or run <code>./benchtop update-nmr-data</code>.</p>}
         </> : <p className="faint" style={{ margin: 0, fontSize: 13 }}>{err}</p>}
       </div>
     )

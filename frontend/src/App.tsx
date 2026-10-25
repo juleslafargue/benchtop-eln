@@ -133,7 +133,7 @@ export default function App() {
           <Route path="/account" element={<Account />} />
           <Route path="/groups" element={<Groups />} />
           <Route path="/inbox" element={<Inbox />} />
-          <Route path="/admin" element={user.role === 'admin' ? <Admin /> : <Navigate to="/" />} />
+          <Route path="/admin/:tab?" element={user.role === 'admin' ? <Admin /> : <Navigate to="/" />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
         </ErrorBoundary>

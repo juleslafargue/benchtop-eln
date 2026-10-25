@@ -209,11 +209,11 @@ export default function Dashboard() {
         ) : <button className="btn" onClick={() => setEditing(true)}>Customise</button>)}
       </div>
       {(data?.system?.backup_warnings?.length ?? 0) > 0 && <div className="notice dash-warning" role="status">
-        <b>Backups:</b> {data!.system!.backup_warnings.join(' ')} <Link to="/admin">Open Admin → Backups</Link></div>}
+        <b>Backups:</b> {data!.system!.backup_warnings.join(' ')} <Link to="/admin/backups">Open Admin → Backups</Link></div>}
       {(data?.system?.check_warnings?.length ?? 0) > 0 && <div className="notice dash-warning" role="alert">
-        <b>Daily data check:</b> {data!.system!.check_warnings!.join(' ')} <Link to="/admin">Open Admin → Backups</Link></div>}
+        <b>Daily data check:</b> {data!.system!.check_warnings!.join(' ')} <Link to="/admin/backups">Open Admin → Backups</Link></div>}
       {(data?.system?.disk_warnings?.length ?? 0) > 0 && <div className="notice dash-warning" role="status">
-        <b>Disk space:</b> {data!.system!.disk_warnings!.join(' ')} <Link to="/admin">Open Admin → Backups</Link></div>}
+        <b>Disk space:</b> {data!.system!.disk_warnings!.join(' ')} <Link to="/admin/backups">Open Admin → Backups</Link></div>}
       {data?.system?.update && <UpdateNotice info={data.system.update} />}
       {(data?.lists.stale?.length ?? 0) > 0 && !quietDismissed && <div className="notice stale-note" role="status">
         <span><b>{data!.lists.stale.length} draft{data!.lists.stale.length === 1 ? '' : 's'}</b> untouched for {data!.stale_days ?? 14}+ days: {data!.lists.stale.slice(0, 3).map((e, i) =>

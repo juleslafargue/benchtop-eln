@@ -159,6 +159,13 @@ a.list-row:hover { background: var(--paper-2); }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--rule); margin: 18px 0 20px; }
 .tabs button { border: 0; background: none; padding: 8px 14px; cursor: pointer; color: var(--ink-2); font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .tabs button[aria-selected='true'] { color: var(--ink); border-bottom-color: var(--accent); }
+/* Admin's tabs (0.26) are links, each with its own address; on a narrow screen they wrap, so none is out of sight */
+.admin-tabs { margin: 0; flex-wrap: wrap; }
+.admin-tabs a { padding: 8px 12px; color: var(--ink-2); font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  text-decoration: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.admin-tabs a:hover { color: var(--ink); }
+.admin-tabs a.active { color: var(--ink); border-bottom-color: var(--accent); }
+.tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); flex: none; }
 .layout-2 { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 28px; align-items: start; }
 
 .entry { background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; scroll-margin-top: 16px; transition: box-shadow .4s, border-color .4s; }

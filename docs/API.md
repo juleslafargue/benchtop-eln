@@ -78,7 +78,7 @@ What tokens can and can't do:
 
 ## Webhooks: Benchtop calls other programs
 
-An admin adds webhooks under **Admin → Webhooks**. Benchtop then calls the address when one of the chosen events happens:
+An admin adds webhooks under **Admin → Integrations** (Webhooks). Benchtop then calls the address when one of the chosen events happens:
 
 | Event | When |
 |---|---|

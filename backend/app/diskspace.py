@@ -292,7 +292,7 @@ def email_if_low() -> int:
         admins = [u for u in s.exec(select(User).where(User.role == Role.admin)) if mailer.wants(u, "system")]
         for u in admins:
             mailer.queue_email(s, u.email, "disk_space", problems=[_warning(p) for p in new], full=full,
-                               link=mailer.base_url() + "/admin")
+                               link=mailer.base_url() + "/admin/backups")
         s.commit()
     if admins:
         _save(emailed={**{k: v for k, v in told.items() if k in now}, **{"+".join(p["holds"]): now["+".join(p["holds"])] for p in new}})

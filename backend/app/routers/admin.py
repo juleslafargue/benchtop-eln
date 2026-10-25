@@ -22,6 +22,17 @@ def list_backups(_: Admin):
             "disk": diskspace.usage()}
 
 
+@router.get("/problems")
+def problems(_: Admin, session: DB):
+    """What the red dots on Admin's tabs mark (0.26): the warnings the dashboard shows, by tab."""
+    from sqlmodel import select
+
+    from ..models import Instrument
+    from .dashboard import _backup_warnings, _check_warnings, _disk_warnings
+    return {"backups": _backup_warnings() + _check_warnings() + _disk_warnings(),
+            "instruments": [f"{i.name}: {i.last_error}" for i in session.exec(select(Instrument)) if i.last_error and i.enabled and not i.archived]}
+
+
 class CopyDirIn(BaseModel):
     path: str | None = None
 

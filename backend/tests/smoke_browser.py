@@ -94,13 +94,16 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
     pages = (["/", "/templates", "/materials", f"/materials/{mats[0]['id']}", "/inventory", "/search?q=suzuki", "/reactions",
               "/compounds", "/account", "/groups"] + [f"/notebooks/{n['id']}" for n in nbs]
              + [f"/experiments/{e['id']}" for e in exps] + [f"/bench/{exps[0]['id']}", "/inbox"])
+    # Admin's tabs (0.26), each at its own address
+    ADMIN = ["/admin"] + [f"/admin/{t}" for t in ("backups", "instruments", "email", "signing", "integrations", "audit")]
     problems: list[tuple[str, str, str, str]] = []
     print(f"Opening {len(pages)} pages on desktop, phone and dark mode…", flush=True)
     runs = [("desktop", "slaurent", {"width": 1400, "height": 900}, "light", pages),
             ("phone", "slaurent", {"width": 390, "height": 844}, "light", pages),
             ("dark", "slaurent", {"width": 1400, "height": 900}, "dark", pages[:12]),
-            ("admin", "hweiss", {"width": 1400, "height": 900}, "light", ["/admin", "/"]),
-            ("admin phone", "hweiss", {"width": 390, "height": 844}, "light", ["/admin", "/"])]  # 0.24: Admin was too wide
+            ("admin", "hweiss", {"width": 1400, "height": 900}, "light", ADMIN + ["/"]),
+            ("admin phone", "hweiss", {"width": 390, "height": 844}, "light", ADMIN + ["/"]),  # 0.24: Admin was too wide
+            ("admin dark", "hweiss", {"width": 1400, "height": 900}, "dark", ADMIN)]
     # every colour theme, light and dark, on a few busy pages (the phone run covers narrow screens)
     themed = ["/", pages[10 + len(nbs)] if len(pages) > 10 + len(nbs) else "/", "/account", "/reactions"]
     for palette in ("notebook", "steel", "litmus", "contrast"):

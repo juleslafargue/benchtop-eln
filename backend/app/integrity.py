@@ -221,7 +221,7 @@ def _email_if_new(summary: dict[str, Any]) -> None:
         with Session(engine) as s:
             admins = [u for u in s.exec(select(User).where(User.role == Role.admin)) if mailer.wants(u, "system")]
             for u in admins:
-                mailer.queue_email(s, u.email, "data_check", problems=found, link=mailer.base_url() + "/admin")
+                mailer.queue_email(s, u.email, "data_check", problems=found, link=mailer.base_url() + "/admin/backups")
             s.commit()
         if admins:
             _save_state(emailed=key)

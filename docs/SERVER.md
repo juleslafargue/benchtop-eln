@@ -9,7 +9,7 @@ works for you; you can move up later (back up, then restore the backup on the ne
 | **2. A lab Mac + Tailscale** | Group members anywhere | Free Tailscale accounts | 15 minutes |
 | **3. A server with HTTPS** | Anyone you give an account, anywhere | A small Linux server or VM, a domain name | An afternoon |
 
-Whatever you choose, everyone gets their **own account** (Admin → Add user, or single sign-on),
+Whatever you choose, everyone gets their **own account** (Admin → Users → Add user, or single sign-on),
 and you organise people into **groups** (Groups page). A notebook can then be open to everyone, to one
 group, or private; group leads see all of their group's notebooks. Signatures only mean something if
 accounts aren't shared.
