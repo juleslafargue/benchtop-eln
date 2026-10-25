@@ -808,6 +808,11 @@ def upload_attachment(exp_id: int, user: Writer, session: DB, file: UploadFile =
         sha, size = storage.save(file.file, limit=settings.max_upload_mb * 1024 * 1024)
     except ValueError:
         raise HTTPException(413, f"File larger than {settings.max_upload_mb} MB") from None
+    except OSError as exc:  # a full disk: said plainly, and nothing was stored (0.25)
+        from .. import diskspace
+        if not diskspace.is_disk_full(exc):
+            raise
+        raise HTTPException(507, diskspace.message(exc, file=True)) from None
     session.refresh(exp)
     require_editable(exp, user)
     a = Attachment(experiment_id=exp.id, filename=_clean_filename(file.filename),

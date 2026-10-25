@@ -68,6 +68,9 @@ class Settings:
         self.backup_interval_hours = float(os.environ.get("BENCHTOP_BACKUP_INTERVAL_HOURS", "24"))
         # the daily check of the live data (0.24): database, audit trail, signatures, timestamps, attached files; 0 = off
         self.check_interval_hours = float(os.environ.get("BENCHTOP_CHECK_INTERVAL_HOURS", "24"))
+        # free disk space (0.25): admins are warned below this many GB free; uploads that would leave less than 1 GB
+        # (or this, if smaller) are refused, to keep room for saving; 0 turns both off
+        self.disk_warn_gb = float(os.environ.get("BENCHTOP_DISK_WARN_GB", "5"))
         obs = os.environ.get("BENCHTOP_OBSIDIAN_DIR")
         self.obsidian_dir = Path(obs).expanduser().resolve() if obs else None  # hourly Markdown sync target
         self.port = int(os.environ.get("BENCHTOP_PORT", "8000"))

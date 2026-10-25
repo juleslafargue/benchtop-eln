@@ -1152,6 +1152,9 @@ textarea.exp-title-input { resize: none; overflow: hidden; display: block; line-
 .backup-box { padding: 14px 16px; display: grid; gap: 8px; align-content: start; }
 .backup-box h3 { margin: 0; font-size: 15px; }
 .backup-box p { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.disk-bar { height: 8px; border-radius: 4px; background: var(--rule); overflow: hidden; }
+.disk-bar span { display: block; height: 100%; background: var(--ink-3); }
+.disk-bar.low span { background: var(--danger); }
 .check-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13.5px; }
 .check-list li { overflow-wrap: anywhere; }
 .check-list li.ok > span:first-child { color: var(--witnessed); }

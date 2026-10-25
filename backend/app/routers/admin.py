@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from .. import audit, backup, integrity, mailer, sitesettings, timestamps
+from .. import audit, backup, diskspace, integrity, mailer, sitesettings, timestamps
 from ..config import settings
 from ..security import DB, Admin
 
@@ -18,7 +18,8 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 def list_backups(_: Admin):
     return {"directory": str(settings.backup_dir), "keep": settings.backup_keep,
             "interval_hours": settings.backup_interval_hours, "backups": backup.list_backups(),
-            **backup.health(), "suggestions": backup.suggested_copy_dirs(), "data_check": integrity.health()}
+            **backup.health(), "suggestions": backup.suggested_copy_dirs(), "data_check": integrity.health(),
+            "disk": diskspace.usage()}
 
 
 class CopyDirIn(BaseModel):

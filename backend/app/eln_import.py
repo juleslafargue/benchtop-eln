@@ -37,7 +37,7 @@ from urllib.parse import unquote
 
 from sqlmodel import Session, select
 
-from . import audit
+from . import audit, diskspace
 from .config import settings
 from .eln import RECORD_FILE, RECORD_FORMAT, scratch_dir
 from .models import (Attachment, Entry, EntryKind, EntryVersion, Experiment, ExperimentStatus, Notebook, User, utcnow)
@@ -454,6 +454,10 @@ def stage(src, filename: str, user: User) -> str:
     dst = d / f"{token}.eln"
     limit = settings.import_max_mb * 1024 * 1024
     n = 0
+    from .storage import _size
+    size = _size(src)
+    if size is not None and size <= limit:
+        diskspace.require_room(size, what="The .eln file")
     try:
         with open(dst, "wb") as out:
             for chunk in iter(lambda: src.read(1 << 20), b""):
@@ -521,6 +525,7 @@ def preview(session: Session, user: User, token: str) -> dict[str, Any]:
 def _store(crate: Crate, f: CrateFile) -> tuple[str, int]:
     """Copy one file out of the archive into the attachment store, without holding the database. Returns (sha256, size)."""
     from .instruments import _store as store_tmp
+    diskspace.require_room(f.info.file_size, what=f"“{f.name}”")
     tmp = scratch_dir() / f"import-{os.getpid()}-{secrets.token_hex(6)}.part"
     limit = settings.instrument_max_mb * 1024 * 1024
     n = 0
@@ -792,7 +797,7 @@ def _import_items(session: Session, user: User, path: Path, meta: dict[str, Any]
             except Exception as e:  # noqa: BLE001 - one bad record mustn't stop the others; say which and why
                 session.rollback()
                 msg = str(e) if isinstance(e, (ElnImportError, OSError)) else f"{type(e).__name__}: {e}"
-                if isinstance(e, OSError) and e.errno == 28:
+                if isinstance(e, OSError) and e.errno == 28 and not isinstance(e, diskspace.DiskFull):
                     msg = "the disk is full"
                 failed.append({"title": it.title, "error": msg[:300]})
         # a Benchtop follow-up whose original came in the same import is linked to it again

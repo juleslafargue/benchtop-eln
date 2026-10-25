@@ -21,7 +21,7 @@ interface DashData {
   stats: { this_month: number; last_month: number; witnessed_this_month: number; yields: YieldPoint[] }
   spectra: { id: number; filename: string; experiment_id: number; eid: string; title: string; created_at: string }[]
   stale_days?: number
-  system?: { backup_warnings: string[]; check_warnings?: string[]; update?: UpdateInfo | null }
+  system?: { backup_warnings: string[]; check_warnings?: string[]; disk_warnings?: string[]; update?: UpdateInfo | null }
   inventory: { low: InvRow[]; expiring: (InvRow & { expires_at: string; expired: boolean })[]; safety_changes?: { material_id: number | null; material: string; changed_at: string; change: { added: string[]; removed: string[] } | null }[]; low_fraction: number; expiry_days: number }
 }
 interface UpdateInfo { current: string; available: { version: string; name: string; url: string }; versions_behind: number; command: string; where: string }
@@ -212,6 +212,8 @@ export default function Dashboard() {
         <b>Backups:</b> {data!.system!.backup_warnings.join(' ')} <Link to="/admin">Open Admin → Backups</Link></div>}
       {(data?.system?.check_warnings?.length ?? 0) > 0 && <div className="notice dash-warning" role="alert">
         <b>Daily data check:</b> {data!.system!.check_warnings!.join(' ')} <Link to="/admin">Open Admin → Backups</Link></div>}
+      {(data?.system?.disk_warnings?.length ?? 0) > 0 && <div className="notice dash-warning" role="status">
+        <b>Disk space:</b> {data!.system!.disk_warnings!.join(' ')} <Link to="/admin">Open Admin → Backups</Link></div>}
       {data?.system?.update && <UpdateNotice info={data.system.update} />}
       {(data?.lists.stale?.length ?? 0) > 0 && !quietDismissed && <div className="notice stale-note" role="status">
         <span><b>{data!.lists.stale.length} draft{data!.lists.stale.length === 1 ? '' : 's'}</b> untouched for {data!.stale_days ?? 14}+ days: {data!.lists.stale.slice(0, 3).map((e, i) =>

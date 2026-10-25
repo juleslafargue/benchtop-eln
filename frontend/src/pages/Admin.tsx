@@ -77,6 +77,11 @@ interface BackupInfo {
   last_copy: { ok: boolean; at: string; name: string; folder: string; error?: string } | null
   last_check: BackupTest | null; suggestions: { label: string; path: string }[]
   data_check?: DataCheck
+  disk?: DiskSpace
+}
+interface DiskSpace {
+  places: { path: string; holds: string[]; label: string; free: number; total: number; warn_below: number }[]
+  database: number; attached: number; backups: number; warn_gb: number; reserve: number; warnings: string[]
 }
 interface DataCheck {
   enabled: boolean; available: boolean; interval_hours: number; full_check_gb: number; note: string | null; warnings: string[]
@@ -114,6 +119,27 @@ function DataCheckBox({ dc, busy, onCheck, onPutBack }: { dc: DataCheck; busy: '
   )
 }
 
+function DiskSpaceBox({ d }: { d: DiskSpace }) {
+  return (
+    <div className="panel backup-box">
+      <h3>Disk space</h3>
+      {d.places.map(p => {
+        const low = d.warn_gb > 0 && p.free < p.warn_below
+        const used = p.total > 0 ? Math.min(100, Math.max(0, 100 - (p.free / p.total) * 100)) : 0
+        return <div key={p.path} className="stack" style={{ gap: 4 }}>
+          <p><b>{p.label}</b>: <span className={low ? 'error' : ''}>{fmtBytes(p.free)} free</span> <span className="faint">of {fmtBytes(p.total)}</span></p>
+          <div className={`disk-bar${low ? ' low' : ''}`} role="img" aria-label={`${Math.round(used)}% full`}><span style={{ width: `${used}%` }} /></div>
+        </div>
+      })}
+      {d.warnings.map(w => <p key={w}>{w}</p>)}
+      <p className="faint">Benchtop's own share: database {fmtBytes(d.database)}, attached files {fmtBytes(d.attached)}, backups {d.backups ? fmtBytes(d.backups) : 'none yet'}.</p>
+      <p className="faint">{d.warn_gb > 0
+        ? <>You're warned here and on the dashboard below {d.warn_gb} GB free. Uploads and instrument files that would leave less than {fmtBytes(d.reserve)} are refused, to keep room for saving.</>
+        : <>Warnings are turned off on this server (BENCHTOP_DISK_WARN_GB=0).</>}</p>
+    </div>
+  )
+}
+
 function NmrData() {
   const [st, setSt] = useState<NmrStatus | null>(null)
   const [err, setErr] = useState('')
@@ -144,7 +170,7 @@ function NmrData() {
 }
 
 function fmtBytes(n: number) {
-  return n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${(n / 1e6).toFixed(1)} MB`
+  return n >= 100e9 ? `${Math.round(n / 1e9)} GB` : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} kB`
 }
 
 function Backups() {
@@ -225,6 +251,7 @@ function Backups() {
             <ul className="check-list">{lc.checks.map(c => <li key={c.name} className={c.ok ? 'ok' : 'bad'}><span aria-hidden>{c.ok ? '✓' : '✗'}</span> <b>{c.name}</b> <span className="faint">{c.detail}</span></li>)}</ul>
           </> : <p className="faint">Not tested yet.</p>}
         </div>
+        {info.disk && <DiskSpaceBox d={info.disk} />}
         {info.data_check && <DataCheckBox dc={info.data_check} busy={busy === 'check' || busy === 'putback' ? busy : ''} onCheck={checkNow} onPutBack={putBack} />}
       </div>}
 

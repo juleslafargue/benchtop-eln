@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import OperationalError as SAOperationalError
 from sqlmodel import Session, select
 
 from . import __version__, backup
@@ -62,6 +63,12 @@ async def _housekeeping_loop() -> None:
                 (log.info if tested["ok"] else log.warning)("Backup test of %s: %s", tested["name"], "passed" if tested["ok"] else "PROBLEMS")
         except Exception:
             log.exception("Backup test failed to run")
+        try:
+            from . import diskspace
+            for w in await asyncio.to_thread(diskspace.warnings):  # in the log too, for servers nobody looks at
+                log.warning("Disk space: %s", w)
+        except Exception:
+            log.exception("Disk space check failed")
         try:
             from . import integrity
             await asyncio.to_thread(integrity.maybe_run)  # once a day; it logs and records what it finds
@@ -146,6 +153,22 @@ CSP = "; ".join([
 async def _too_big(request, exc):  # e.g. /api/experiments/99999999999999999999
     from fastapi.responses import JSONResponse
     return JSONResponse({"detail": "Number too large"}, status_code=404 if request.method == "GET" else 422)
+
+
+def _disk_full(request, exc):
+    """A full disk (0.25): a plain message, not "Internal Server Error". Anything else is the usual server error."""
+    from fastapi.responses import JSONResponse
+
+    from . import diskspace
+    if not diskspace.is_disk_full(exc):
+        raise exc
+    log.error("Disk full: %s %s: %s", request.method, request.url.path, exc)
+    receiving = request.method == "POST" and request.url.path.endswith(("/attachments", "/eln/preview"))  # a file
+    return JSONResponse({"detail": diskspace.message(exc, file=receiving)}, status_code=507)
+
+
+app.add_exception_handler(OSError, _disk_full)
+app.add_exception_handler(SAOperationalError, _disk_full)
 
 
 @app.middleware("http")

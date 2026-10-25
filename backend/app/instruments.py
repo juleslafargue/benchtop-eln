@@ -198,6 +198,8 @@ def _tmp_name() -> Path:
 
 
 def _copy(src: Path, name: str) -> dict[str, Any]:
+    from . import diskspace
+    diskspace.require_room(src.stat().st_size)  # left in the folder, and tried again, while the disk is nearly full
     tmp = _tmp_name()
     try:
         with open(src, "rb") as fi, open(tmp, "wb") as fo:
@@ -209,6 +211,8 @@ def _copy(src: Path, name: str) -> dict[str, Any]:
 
 
 def _zip(files: list[tuple[Path, str]], name: str, compress: bool) -> dict[str, Any]:
+    from . import diskspace
+    diskspace.require_room(sum(f.stat().st_size for f, _ in files))
     tmp = _tmp_name()
     try:
         # raw vendor data is stored as it is: it barely compresses, and gigabytes would take minutes
@@ -598,6 +602,10 @@ def arrival_problem(problems: list[tuple[str, BaseException]]) -> str:
         return ""
     rel, exc = problems[0]
     more = f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""
+    from .diskspace import DiskFull, reserve_bytes, fmt
+    if isinstance(exc, DiskFull):
+        return (f"The disk Benchtop keeps its data on is nearly full, so new instrument files aren't copied in: Benchtop "
+                f"keeps the last {fmt(reserve_bytes())} for saving. Free some space; Benchtop tries again every minute.")
     if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
         return ("The disk Benchtop keeps its data on is full, so new instrument files can't be copied in. Free some "
                 "space; Benchtop tries again every minute.")

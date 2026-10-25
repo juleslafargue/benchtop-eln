@@ -83,8 +83,23 @@ def put(tmp: Path) -> tuple[str, int]:
     return sha, size
 
 
+def _size(src: BinaryIO) -> int | None:
+    try:
+        here = src.tell()
+        end = src.seek(0, os.SEEK_END)
+        src.seek(here)
+        return end - here
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
 def save(src: BinaryIO, limit: int | None = None) -> tuple[str, int]:
-    """Store what a file object holds (an upload). Raises ValueError if it's bigger than `limit` bytes."""
+    """Store what a file object holds (an upload). Raises ValueError if it's bigger than `limit` bytes, and
+    diskspace.DiskFull, before writing anything, if it would leave too little free space for saving (0.25)."""
+    from . import diskspace
+    size = _size(src)
+    if size is not None and (limit is None or size <= limit):
+        diskspace.require_room(size)
     tmp = temp_path()
     n = 0
     try:

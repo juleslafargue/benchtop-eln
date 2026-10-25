@@ -131,9 +131,37 @@ def _note_failure(exc: BaseException | None) -> None:
         pass
 
 
+def _require_room(need: int, folder: Path, what: str) -> None:
+    """A backup (or its copy) that wouldn't fit is refused before it starts (0.25): before, it filled the disk and then
+    failed, and while the disk was full nobody could save."""
+    from . import diskspace
+    reserve = diskspace.reserve_bytes()
+    free = diskspace.free_bytes(folder)
+    if reserve <= 0 or free is None or free - need >= reserve:
+        return
+    raise BackupError(f"there isn't room for {what} on the disk with {folder}: it needs about {diskspace.fmt(need)}, "
+                      f"{diskspace.fmt(free)} is free, and Benchtop keeps the last {diskspace.fmt(reserve)} for saving. "
+                      "Free some space on that disk (or choose a backup folder on a bigger disk). Nothing was written.")
+
+
+def _new_files_bytes(store: Path) -> int:
+    """Attached files the shared folder doesn't have yet: what the next backup adds to it."""
+    n = 0
+    for b in settings.attachments_dir.rglob("*"):
+        if _SHA.fullmatch(b.name) and not (store / b.name[:2] / b.name).exists():
+            try:
+                n += b.stat().st_size
+            except OSError:
+                pass
+    return n
+
+
 def _create_backup(reason: str) -> dict[str, Any]:
     db = _sqlite_path()
     settings.backup_dir.mkdir(parents=True, exist_ok=True)
+    from .diskspace import database_bytes
+    # the snapshot and the zip each take up to the database's size, while the new attached files are copied
+    _require_room(2 * database_bytes() + _new_files_bytes(settings.backup_dir / FILES), settings.backup_dir, "a backup")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     final = settings.backup_dir / f"{PREFIX}{stamp}.zip"
     unique = f"{stamp}-{os.getpid()}-{threading.get_ident()}"  # also safe beside a ./benchtop backup in another process
@@ -407,6 +435,9 @@ def copy_to_second_place(src: Path) -> dict[str, Any] | None:
     try:
         if not d.is_dir():
             raise BackupError(f"{d} isn't there. If it's on an external drive, plug it in; the next backup will be copied.")
+        need = src.stat().st_size + sum(size for sha, size in needed_files(read_manifest(src)).items()
+                                        if not (d / FILES / sha[:2] / sha).exists())
+        _require_room(need, d, "the second copy")
         new_files = 0
         for sha in needed_files(read_manifest(src)):
             here = src.parent / FILES / sha[:2] / sha
@@ -427,7 +458,10 @@ def copy_to_second_place(src: Path) -> dict[str, Any] | None:
         _collect_garbage(d, copy_backups())
         res = {"ok": True, "at": now, "name": src.name, "folder": str(d), "new_files": new_files}
     except (OSError, KeyError, ValueError, zipfile.BadZipFile, BackupError) as exc:
-        res = {"ok": False, "at": now, "name": src.name, "folder": str(d), "error": str(exc)}
+        import errno
+        full = isinstance(exc, OSError) and exc.errno == errno.ENOSPC
+        res = {"ok": False, "at": now, "name": src.name, "folder": str(d),
+               "error": f"the disk with {d} is full. Free some space there, or choose another folder." if full else str(exc)}
     _save_state(last_copy=res)
     return res
 

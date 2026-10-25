@@ -83,8 +83,10 @@ def import_preview(user: Writer, session: DB, file: UploadFile = File(...)):
     except OSError as e:
         if "token" in locals():
             eln_import.discard(token, user)
-        raise HTTPException(507 if e.errno == 28 else 500,
-                            "The disk is full, so the file couldn't be received" if e.errno == 28 else f"Couldn't read the file: {e}") from None
+        from .. import diskspace
+        if diskspace.is_disk_full(e):
+            raise HTTPException(507, diskspace.message(e, file=True)) from None
+        raise HTTPException(500, f"Couldn't read the file: {e}") from None
 
 
 class ImportIn(BaseModel):

@@ -130,6 +130,7 @@ def dashboard(user: CurrentUser, session: DB):
         # admins see backup problems where they'll notice them
         "system": {"backup_warnings": _backup_warnings() if user.role == Role.admin else [],
                    "check_warnings": _check_warnings() if user.role == Role.admin else [],
+                   "disk_warnings": _disk_warnings() if user.role == Role.admin else [],
                    "update": _update() if user.role == Role.admin else None},
         "inventory": {"low": low[:10], "expiring": expiring[:10], "safety_changes": safety_changes[:10], "low_fraction": LOW_STOCK_FRACTION, "expiry_days": EXPIRY_DAYS},
     }
@@ -151,6 +152,15 @@ def _check_warnings() -> list[str]:
     try:
         return integrity.health()["warnings"]
     except Exception:  # noqa: BLE001 - a dashboard must load whatever is in the saved result
+        return []
+
+
+def _disk_warnings() -> list[str]:
+    """A disk Benchtop uses running low on space (0.25)."""
+    from .. import diskspace
+    try:
+        return diskspace.warnings()
+    except Exception:  # noqa: BLE001 - a dashboard must load whatever the disks say
         return []
 
 

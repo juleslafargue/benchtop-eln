@@ -197,6 +197,14 @@ files are re-read byte for byte every day while they total up to 20 GB; above th
 daily and a seventh of them are re-read each day, so each is re-read once a week. On a Postgres server the daily
 check doesn't run, and Admin says so.
 
+**Disk space.** A full disk makes saving, uploads and backups fail, so admins are warned early: on the dashboard and
+in **Admin → Backups** when the disk with Benchtop's data (or the one with the backups, or their second copy) has less
+than 5 GB free, with what to do (`BENCHTOP_DISK_WARN_GB` sets the amount; `0` turns it off). Benchtop also keeps the
+last 1 GB for saving what people type: an upload, an instrument file or an import that would leave less is refused
+with a plain message (an instrument file waits in its folder and comes in once there's room), and so is a backup that
+wouldn't fit. On a Mac, Finder can show more space "available" than Benchtop does, as it also counts space macOS can
+free by itself; Benchtop counts what's free now.
+
 When you move or copy backups, take the zip **and** the `benchtop-files` folder beside it. Backups made
 before 0.15 hold their files inside the zip and still restore as before.
 
@@ -452,6 +460,7 @@ push). When releasing a version, add its backup: `python3 tests/make_upgrade_fix
 | `BENCHTOP_BACKUP_INTERVAL_HOURS` | `24` | `0` turns automatic backups off, including the one before a database upgrade |
 | `BENCHTOP_BACKUP_COPY_DIR` | (set in Admin → Backups) | Second folder every backup is copied to |
 | `BENCHTOP_CHECK_INTERVAL_HOURS` | `24` | How often the data check runs (database, audit trail, signatures, files); `0` turns it off |
+| `BENCHTOP_DISK_WARN_GB` | `5` | Admins are warned below this much free disk space; uploads that would leave less than 1 GB (or this, if smaller) are refused; `0` turns both off |
 | `BENCHTOP_SMTP_HOST`, `_PORT`, `_SECURITY`, `_USER`, `_PASSWORD`, `_FROM` | (set in Admin → Email) | Email server; when set here, the app shows them as fixed |
 | `BENCHTOP_TIMESTAMPS` | `on` | `off` turns trusted timestamps off |
 | `BENCHTOP_TSA_URL` | `http://timestamp.digicert.com` | RFC 3161 timestamp service |
@@ -494,6 +503,7 @@ backend/   FastAPI + SQLModel + RDKit
   app/doi.py        DOIs for References sections: tidying what's pasted, lookup at doi.org, citation parts
   app/check.py      health check: database, audit trail, signed records, files (./benchtop check)
   app/integrity.py  the daily check of the live data, its warnings and email, putting files back from backups
+  app/diskspace.py  free disk space: the admins' warnings, and the last 1 GB kept for saving
   app/migrations.py numbered database upgrade steps
   app/writeup.py    SI-style experimental paragraph composer
   app/export_md.py  Markdown/Obsidian export and vault sync (also a CLI)
