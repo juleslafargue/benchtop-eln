@@ -180,6 +180,10 @@ a.list-row:hover { background: var(--paper-2); }
 .save-state { font-size: 12px; color: var(--ink-3); min-width: 64px; text-align: right; }
 .save-state.dirty { color: var(--signed); }
 .save-state.err { color: var(--danger); }
+/* unsaved changes this browser kept (0.27): put them back, or discard them */
+.draft-offer { margin: 10px 16px 0; padding: 10px 12px; border: 1px solid var(--signed); border-left-width: 3px; border-radius: 8px;
+  background: var(--paper-2); display: grid; gap: 8px; font-size: 14px; }
+.draft-offer p { margin: 0; overflow-wrap: anywhere; }
 /* ---- add section: toolbar button, between-sections inserter, end tile, menu */
 .tabs { align-items: center; }
 .tabs-end { margin-left: auto; padding-bottom: 4px; }

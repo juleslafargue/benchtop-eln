@@ -14,6 +14,19 @@ import ScreenEntry from './ScreenEntry'
 import CustomEntry from './CustomEntry'
 import ReferencesEntry from './ReferencesEntry'
 import { useCollapsed } from '../collapse'
+import { useApp } from '../App'
+import { browserStore, clearDraft, draftSituation, draftText, loadDraft, saveDraft, sweepDrafts, tabId, type Draft } from '../drafts'
+
+// unsaved typing is kept in this browser until the server has it (0.27, drafts.ts)
+const STORE = typeof window === 'undefined' ? null : browserStore()
+const TAB = typeof window === 'undefined' ? 'tab' : tabId()
+sweepDrafts(STORE)
+let channel: BroadcastChannel | null | undefined
+/** Tabs of this browser ask each other "is anyone still editing this section?" before offering a kept copy. */
+function drafts(): BroadcastChannel | null {
+  if (channel === undefined) { try { channel = new BroadcastChannel('benchtop-drafts') } catch { channel = null } }
+  return channel
+}
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error'
 const KIND_LABEL = { text: 'Text', reaction: 'Reaction & stoichiometry', table: 'Data table', file: 'Files', purification: 'Work-up & purification', characterization: 'Characterisation', safety: 'Safety & risk assessment', screen: 'Screening grid', references: 'References', custom: 'Plugin section' }
@@ -47,6 +60,13 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
   const edits = useRef(0)
   const latest = useRef({ content, title })
   latest.current = { content, title }
+  const { user } = useApp()
+  const unsaved = useRef(false)
+  unsaved.current = state !== 'saved'
+  const [offer, setOffer] = useState<Draft | null>(null)
+  const offerRef = useRef<Draft | null>(null)
+  offerRef.current = offer
+  const [copied, setCopied] = useState(false)
 
   const save = useCallback(async () => {
     const mark = edits.current
@@ -60,6 +80,7 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
       if (edits.current === mark) {
         setContent(r.content) // adopt server-normalised content (sanitised HTML, recomputed stoichiometry)
         setState('saved')
+        if (!offerRef.current) clearDraft(STORE, user.id, entry.id)  // the server has it: the kept copy isn't needed
         if (entry.kind === 'reaction') window.dispatchEvent(new CustomEvent('benchtop:reaction-saved', { detail: { experimentId: entry.experiment_id } }))
       } else setState('dirty')
       setError('')
@@ -67,7 +88,7 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
       setState('error')
       setError(e.message)
     }
-  }, [entry.id])
+  }, [entry.id, user.id])
 
   useEffect(() => {
     if (state !== 'dirty') return
@@ -84,9 +105,69 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
 
   const change = (c: any) => { edits.current++; setContent(c); setState('dirty') }
 
+  // keep a copy of what the server hasn't confirmed yet (not while a kept copy is waiting to be put back or discarded)
+  const keep = useCallback(() => {
+    if (!unsaved.current || readOnly) return
+    saveDraft(STORE, user.id, { entryId: entry.id, experimentId, baseVersion: versionRef.current, title: latest.current.title,
+      content: latest.current.content, at: Date.now(), tab: TAB })
+  }, [entry.id, experimentId, user.id, readOnly])
+  useEffect(() => {
+    if (state === 'saved' || offer) return
+    const t = setTimeout(keep, 300)
+    return () => clearTimeout(t)
+  }, [state, content, title, offer, keep])
+  useEffect(() => {  // the tab closing, or going to the background (a phone may never come back to it)
+    if (offer) return
+    const now = () => keep()
+    const hidden = () => { if (document.visibilityState === 'hidden') keep() }
+    window.addEventListener('pagehide', now)
+    document.addEventListener('visibilitychange', hidden)
+    return () => { window.removeEventListener('pagehide', now); document.removeEventListener('visibilitychange', hidden) }
+  }, [offer, keep])
+
+  // a copy kept from before (a reload, a closed tab, a crash): offer it, unless another open tab is still editing it
+  useEffect(() => {
+    const d = loadDraft(STORE, user.id, entry.id)
+    if (!d) return
+    if (d.title === entry.title && JSON.stringify(d.content) === JSON.stringify(entry.content)) {
+      clearDraft(STORE, user.id, entry.id)  // the save did reach the server (the tab closed before it heard back)
+      return
+    }
+    if (d.tab === TAB) { setOffer(d); return }
+    const ch = drafts()
+    let mine = false
+    const heard = (e: MessageEvent) => { if (e.data?.editing === entry.id && e.data?.user === user.id) mine = true }
+    ch?.addEventListener('message', heard)
+    ch?.postMessage({ ask: entry.id, user: user.id })
+    const t = setTimeout(() => { ch?.removeEventListener('message', heard); if (!mine) setOffer(loadDraft(STORE, user.id, entry.id)) }, 400)
+    return () => { clearTimeout(t); ch?.removeEventListener('message', heard) }
+  }, [entry.id, user.id])
+  useEffect(() => {  // answer another tab that asks about this section while it has unsaved changes here
+    const ch = drafts()
+    if (!ch) return
+    const answer = (e: MessageEvent) => { if (e.data?.ask === entry.id && e.data?.user === user.id && unsaved.current) ch.postMessage({ editing: entry.id, user: user.id }) }
+    ch.addEventListener('message', answer)
+    return () => ch.removeEventListener('message', answer)
+  }, [entry.id, user.id])
+
+  const putBack = () => {
+    if (!offer) return
+    edits.current++
+    setTitle(offer.title)
+    setContent(offer.content)
+    setOffer(null)
+    setState('dirty')  // saved a moment later, on top of the section as it is now (an earlier version stays in History)
+  }
+  const discard = () => { clearDraft(STORE, user.id, entry.id); setOffer(null) }
+  const copy = async () => {
+    if (!offer) return
+    try { await navigator.clipboard.writeText(draftText(offer)); setCopied(true) } catch { setCopied(false) }
+  }
+
   // no "are you sure?": the page offers Undo for a few seconds, and the section stays in the history anyway
   const remove = async () => {
     await api.del(`/api/entries/${entry.id}`)
+    clearDraft(STORE, user.id, entry.id)
     onDeleted()
   }
 
@@ -133,6 +214,7 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
           <button className="btn ghost sm" onClick={remove} aria-label="Remove section">Remove</button>
         </>}
       </header>
+      {offer && <DraftOffer d={offer} kind={entry.kind} situation={draftSituation(offer, version, readOnly)} copied={copied} onPutBack={putBack} onDiscard={discard} onCopy={copy} />}
       {state === 'error' && <p className="error" style={{ padding: '6px 16px 0' }}>{error} {error.includes('reload') && <button className="btn sm" onClick={() => location.reload()}>Reload</button>}</p>}
       {collapsed && <button className="entry-peek" onClick={() => setCollapsed(false)} title="Show this section">
         <span>{safePeek(entry.kind, content) || 'Hidden'}</span>{state === 'dirty' || state === 'saving' ? <span className="faint"> · saving…</span> : null}</button>}
@@ -152,6 +234,29 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
       </div>
       {showVersions && <VersionsDialog entryId={entry.id} kind={entry.kind} onClose={() => setShowVersions(false)} />}
     </section>
+  )
+}
+
+/** "Unsaved changes from 14:32 were kept in this browser": put them back, or discard them. */
+function DraftOffer({ d, kind, situation, copied, onPutBack, onDiscard, onCopy }: {
+  d: Draft; kind: string; situation: 'readonly' | 'changed' | 'same'; copied: boolean; onPutBack: () => void; onDiscard: () => void; onCopy: () => void
+}) {
+  const at = new Date(d.at)
+  const today = at.toDateString() === new Date().toDateString()
+  const when = today ? at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : at.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  const what = safePeek(kind, d.content)
+  return (
+    <div className="draft-offer" role="alert">
+      <p><b>Changes from {today ? `today at ${when}` : when} weren't saved</b>, but this browser kept them{what ? <>: <span className="faint">“{what}”</span></> : '.'}</p>
+      {situation === 'changed' && <p className="faint">This section was changed since then (here or by someone else). Putting yours back replaces that version; it stays in History.</p>}
+      {situation === 'readonly' && <p className="faint">This record can't be edited any more (it was signed, or you can only view it), so they can't go back in. Copy them to use elsewhere, for example in a follow-up.</p>}
+      <div className="row" style={{ gap: 6 }}>
+        {situation !== 'readonly' && <button className="btn primary sm" onClick={onPutBack}>Put them back</button>}
+        {situation === 'readonly' && <button className="btn primary sm" onClick={onCopy}>{copied ? 'Copied' : 'Copy them'}</button>}
+        <button className="btn ghost sm" onClick={onDiscard}>Discard</button>
+      </div>
+    </div>
   )
 }
 

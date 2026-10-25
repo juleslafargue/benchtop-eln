@@ -164,8 +164,104 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
                 if over > 2:
                     note("too wide", f"page is {over}px wider than the screen")
             ctx.close()
+        problems += unsaved_typing(browser, tok["slaurent"])
         browser.close()
     return problems
+
+
+def unsaved_typing(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """0.27: typing the server never got is kept in the browser and offered back when the record opens again.
+    The server is "down" for saves (they're blocked), as when Benchtop stops or the Wi-Fi goes."""
+    print("Unsaved typing: closing the tab while the server is down, a second tab, a record signed since…", flush=True)
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+
+    def bad(what: str) -> None:
+        found.append(("unsaved typing", "", "draft", what))
+
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Unsaved typing check"}).json()
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Kept in the browser", "notebook_id": nb["id"]}).json()
+    httpx.post(f"{B}/api/experiments/{exp['id']}/entries", headers=H,
+               json={"kind": "text", "title": "Kept notes", "content": {"html": "<p>Started.</p>"}})
+    entry = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["title"] == "Kept notes")
+    box = f"#entry-{entry['id']} .ProseMirror"
+    url = f"{B}/experiments/{exp['id']}"
+    key = f"benchtop.draft.{httpx.get(B + '/api/auth/me', headers=H).json()['id']}.{entry['id']}"
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    down = lambda route: route.abort("internetdisconnected")  # noqa: E731
+
+    def open_record():
+        pg = ctx.new_page()
+        pg.goto(url)
+        pg.wait_for_selector(box)
+        return pg
+
+    def type_unsaved(pg, text: str) -> None:
+        pg.route("**/api/entries/**", down)
+        pg.click(box)
+        pg.keyboard.press("End")
+        pg.keyboard.type(text)
+        pg.wait_for_selector(f"#entry-{entry['id']} .save-state.err", timeout=15000)  # "Not saved"
+        pg.wait_for_timeout(600)
+
+    def saved_html() -> str:
+        e = httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()
+        return next(x for x in e["entries"] if x["id"] == entry["id"])["content"]["html"]
+
+    try:
+        # 1. the tab is closed while the server is down; opened again later, the changes are offered and put back
+        a = open_record()
+        type_unsaved(a, " Colour change at 40 °C.")
+        if not a.evaluate(f"localStorage.getItem('{key}')"):
+            bad("nothing was kept in the browser while the section was unsaved")
+        a.close(run_before_unload=False)
+        b = open_record()
+        try:
+            b.wait_for_selector(f"#entry-{entry['id']} .draft-offer", timeout=5000)
+        except Exception:  # noqa: BLE001
+            bad("reopened, the record didn't offer the unsaved changes")
+        else:
+            if "Colour change" not in b.inner_text(f"#entry-{entry['id']} .draft-offer"):
+                bad("the offer doesn't show what was typed")
+            b.click("text=Put them back")
+            state = f"document.querySelector('#entry-{entry['id']} .save-state').textContent"
+            b.wait_for_function(f"/^v\\d+$/.test({state})", timeout=15000)
+            if "Colour change at 40" not in saved_html():
+                bad("put back, but the server doesn't have it")
+            if b.evaluate(f"localStorage.getItem('{key}')"):
+                bad("the kept copy stayed after the server had it")
+        b.close()
+
+        # 2. another tab of the same record doesn't offer changes a tab that's still open is holding
+        a = open_record()
+        type_unsaved(a, " Filtered.")
+        b = open_record()
+        b.wait_for_timeout(1500)
+        if b.query_selector(".draft-offer"):
+            bad("a second tab offered changes the first, still open, tab was holding")
+        b.close()
+        a.close(run_before_unload=False)
+
+        # 3. signed since: the changes can't go back in; they can be copied, or discarded
+        r = httpx.post(f"{B}/api/experiments/{exp['id']}/sign", headers=H, json={"password": PW})
+        if r.status_code != 200:
+            bad(f"couldn't sign the test record: {r.text[:100]}")
+        c = open_record()
+        try:
+            c.wait_for_selector(".draft-offer", timeout=5000)
+        except Exception:  # noqa: BLE001
+            bad("a record signed since didn't mention the kept changes")
+        else:
+            if c.query_selector("text=Put them back") or not c.query_selector("text=Copy them"):
+                bad("a signed record offered to put the changes back, or not to copy them")
+            c.click("text=Discard")
+            if c.query_selector(".draft-offer") or c.evaluate(f"localStorage.getItem('{key}')"):
+                bad("Discard left the offer or the kept copy")
+        c.close()
+    finally:
+        ctx.close()
+    return found
 
 
 if __name__ == "__main__":

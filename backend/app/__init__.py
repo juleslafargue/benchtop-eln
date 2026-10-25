@@ -8,4 +8,4 @@ if sys.version_info < (3, 11):
         "&& pip install -r requirements.txt"
     )
 
-__version__ = "0.26.0"
+__version__ = "0.27.0"
