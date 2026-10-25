@@ -129,7 +129,8 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
   useEffect(() => {
     const d = loadDraft(STORE, user.id, entry.id)
     if (!d) return
-    if (d.title === entry.title && JSON.stringify(d.content) === JSON.stringify(entry.content)) {
+    const server = { ...d, title: entry.title, content: entry.content }
+    if (d.title === entry.title && (JSON.stringify(d.content) === JSON.stringify(entry.content) || draftText(d) === draftText(server))) {
       clearDraft(STORE, user.id, entry.id)  // the save did reach the server (the tab closed before it heard back)
       return
     }
