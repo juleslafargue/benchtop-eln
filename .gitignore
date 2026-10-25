@@ -15,3 +15,5 @@ backend/.venv/
 frontend/*.tsbuildinfo
 /.benchtop-previous/
 /deploy/.previous-version
+.schemathesis/
+schemathesis-report/
