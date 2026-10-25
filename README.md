@@ -407,6 +407,7 @@ uvicorn app.main:app --reload            # http://localhost:8000/docs for the Op
 pytest -q
 python tests/smoke_browser.py            # opens every page in a browser (needs: playwright install chromium, built frontend)
 python tests/fuzz_api.py                 # thousands of odd requests to every endpoint; none may cause a server error
+python tests/crash_test.py               # kills Benchtop mid-save, mid-backup, mid-upgrade and mid-restore; nothing may be lost
 
 # Web app (Node 20+)
 cd frontend
@@ -418,7 +419,8 @@ To serve the built app from the API (what the Docker image does):
 `npm run build`, then start uvicorn with `BENCHTOP_STATIC_DIR=../frontend/dist`.
 
 **Automatic tests on GitHub.** `.github/workflows/tests.yml` runs on every push: the server tests, upgrades
-from every past version, API fuzzing (thousands of odd requests to every endpoint), a type-check and build of the app, and a browser pass over every page of the demo lab
+from every past version, API fuzzing (thousands of odd requests to every endpoint), pull-the-plug tests (Benchtop killed
+mid-save, mid-backup, mid-upgrade and mid-restore, then started again), a type-check and build of the app, and a browser pass over every page of the demo lab
 on desktop, phone and dark mode (also on the oldest demo lab, upgraded). Results are in the repository's *Actions* tab. The workflow's source is
 `deploy/github-tests.yml`; `./benchtop` keeps the copy in `.github/` up to date.
 

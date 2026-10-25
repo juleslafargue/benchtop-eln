@@ -246,8 +246,8 @@ async def check_plugin(user: Admin, file: UploadFile = File(...)):
 
 
 @router.post("/plugins", status_code=201)
-async def install_plugin(user: Admin, session: DB, file: UploadFile = File(...)):
-    raw = await file.read(200_001)
+def install_plugin(user: Admin, session: DB, file: UploadFile = File(...)):
+    raw = file.file.read(200_001)
     if len(raw) > 200_000:
         raise HTTPException(413, "Plugin files are small text files; this one is too big")
     try:

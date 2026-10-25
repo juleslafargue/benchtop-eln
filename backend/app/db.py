@@ -80,10 +80,18 @@ def backup_before_upgrade() -> dict | None:
     return made
 
 
+def finish_interrupted_restore() -> None:
+    from . import backup
+
+    if settings.database_url.startswith("sqlite:///") and (aside := backup.finish_interrupted_restore()):
+        log.warning("Finished restoring a backup that was cut off part-way. The data from before it is in %s", aside)
+
+
 def init_db() -> None:
     from . import migrations, models  # noqa: F401  (register tables)
 
     check_not_moved_from_postgres()  # before anything creates an empty database file
+    finish_interrupted_restore()  # a restore cut off part-way: finish it before anything opens the database
     migrations.check_not_too_new(engine)  # before touching anything: an older Benchtop mustn't alter newer data
     backup_before_upgrade()  # before the tables, columns and steps below change anything
     SQLModel.metadata.create_all(engine)
@@ -91,14 +99,15 @@ def init_db() -> None:
     migrations.upgrade(engine)
 
 
-def add_missing_columns() -> list[str]:
+def add_missing_columns(eng=None) -> list[str]:
     """Minimal forward migration: add columns that newer versions define but an older
     database lacks. New columns are always nullable, so this is safe on existing rows."""
     from sqlalchemy import inspect, text
 
+    eng = eng or engine
     added = []
-    insp = inspect(engine)
-    with engine.begin() as conn:
+    insp = inspect(eng)
+    with eng.begin() as conn:
         for table in SQLModel.metadata.sorted_tables:
             if not insp.has_table(table.name):
                 continue
@@ -106,7 +115,7 @@ def add_missing_columns() -> list[str]:
             for col in table.columns:
                 if col.name in have:
                     continue
-                coltype = col.type.compile(dialect=engine.dialect)
+                coltype = col.type.compile(dialect=eng.dialect)
                 conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}'))
                 added.append(f"{table.name}.{col.name}")
     return added

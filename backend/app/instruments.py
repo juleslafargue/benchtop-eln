@@ -38,7 +38,7 @@ from typing import Any, Iterator, Optional
 from sqlalchemy import update
 from sqlmodel import Session, select
 
-from . import audit
+from . import audit, storage
 from .config import settings
 from .models import (
     Attachment, Entry, EntryKind, EntryVersion, Experiment, ExperimentStatus, Instrument, InstrumentFile,
@@ -181,29 +181,16 @@ def _procpar(text: str, names: tuple[str, ...]) -> list[str]:
 # ====================================================================== storing what arrived
 
 def _incoming() -> Path:
-    d = settings.data_dir / ".incoming"  # outside the attachments folder, so a backup never picks up half a file
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return storage.incoming()  # outside the attachments folder, so a backup never picks up half a file
 
 
 def blob_path(sha: str) -> Path:
-    return settings.attachments_dir / sha[:2] / sha
+    return storage.blob_path(sha)
 
 
 def _store(tmp: Path) -> tuple[str, int]:
     """Move a finished temporary file into the content-addressed attachment store."""
-    h = hashlib.sha256()
-    with open(tmp, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    sha, size = h.hexdigest(), tmp.stat().st_size
-    dst = blob_path(sha)
-    if dst.exists():
-        tmp.unlink()
-    else:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(tmp, dst)
-    return sha, size
+    return storage.put(tmp)
 
 
 def _tmp_name() -> Path:

@@ -6,6 +6,35 @@ import secrets
 from pathlib import Path
 
 
+def _secret_key(path: Path) -> str:
+    """The key that signs sign-ins, made on the first start. Written in full before it gets its name: before 0.24.2,
+    Benchtop stopped at the wrong moment of its very first start left an empty key, so sign-ins could be forged. A key
+    that short is replaced (everyone signs in again)."""
+    try:
+        key = path.read_text().strip()
+    except FileNotFoundError:
+        key = ""
+    if len(key) >= 32:
+        return key
+    tmp = path.with_name(f".secret_key.{os.getpid()}.tmp")
+    with open(tmp, "w") as f:
+        f.write(secrets.token_hex(32))
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, 0o600)
+    if path.exists():
+        os.replace(tmp, path)
+    else:
+        try:
+            os.link(tmp, path)  # never over a key another process made at the same moment: theirs is used
+        except FileExistsError:
+            pass
+        except OSError:  # file systems without hard links
+            os.replace(tmp, path)
+        tmp.unlink(missing_ok=True)
+    return path.read_text().strip()
+
+
 class Settings:
     def __init__(self) -> None:
         self.data_dir = Path(os.environ.get("BENCHTOP_DATA_DIR", "./data")).resolve()
@@ -19,9 +48,7 @@ class Settings:
             self.secret_key = env_secret
         else:
             self.data_dir.mkdir(parents=True, exist_ok=True)
-            if not secret_file.exists():
-                secret_file.write_text(secrets.token_hex(32))
-            self.secret_key = secret_file.read_text().strip()
+            self.secret_key = _secret_key(secret_file)
         self.token_ttl_hours = int(os.environ.get("BENCHTOP_TOKEN_TTL_HOURS", "12"))
         self.admin_username = os.environ.get("BENCHTOP_ADMIN_USER", "admin")
         self.admin_password = os.environ.get("BENCHTOP_ADMIN_PASSWORD", "admin")

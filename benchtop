@@ -157,8 +157,11 @@ install_zip() {
   say "Updating Benchtop $OLDV -> $NEWV"
   backup_first
   save_previous zip "$NEWV"
-  # program files only: your data, settings, the Python environment and Git's files are never touched
+  # program files only: your data, settings, the Python environment and Git's files are never touched.
+  # The note says the files are being swapped; if this is cut off part-way, Benchtop won't start on the mix.
+  : > "$PREV/updating"
   py -m app.install mirror "$new" "$ROOT"
+  rm -f "$PREV/updating"
   chmod +x "$ROOT/benchtop" "$ROOT/Benchtop.command" 2>/dev/null || true
   rm -rf "$TMP"; trap - EXIT
   exec "$ROOT/benchtop" _finish-update   # the new version's launcher finishes (it knows what the new version needs)
@@ -238,6 +241,15 @@ remove_old_login_item() {
 }
 
 cmd="${1:-start}"
+# an update from a zip cut off while it swapped the program files (Terminal closed, the Mac turned off): the files are
+# a mix of two versions, so nothing runs until rollback puts the old version back (0.24.2)
+if [ -f "$PREV/updating" ] && [ -f "$PREV/info" ]; then
+  case "$cmd" in
+    rollback|status|help|-h|--help) ;;
+    *) . "$PREV/info"
+       fail "The update from Benchtop $OLD_VERSION to $NEW_VERSION was cut off part-way, so Benchtop's program files are a mix of the two. Your data is safe. To go back to $OLD_VERSION, run: ./benchtop rollback   (then ./benchtop update tries the update again)" ;;
+  esac
+fi
 case "$cmd" in
   start)
     remove_old_login_item

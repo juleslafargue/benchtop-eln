@@ -91,6 +91,25 @@ jobs:
         working-directory: backend
         run: python tests/fuzz_api.py
 
+  crashes:
+    # Benchtop killed without warning (as a power cut would) while people save, sign and attach files, while it backs
+    # up, while it upgrades an old version's data and while it restores, then started again: nothing saved may be
+    # lost or left half-done, and ./benchtop check must pass. A new random seed each run (printed, to repeat it).
+    name: Pull-the-plug tests (killed mid-save, then restarted)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: pip install -r backend/requirements-dev.txt
+      - name: Kill Benchtop at random moments
+        working-directory: backend
+        run: python tests/crash_test.py
+
   frontend:
     name: Build the app
     runs-on: ubuntu-latest
@@ -195,7 +214,7 @@ jobs:
     # page, with notes from the commits and a ready-to-run zip (interface built, so no Node needed). That's what
     # ./benchtop update, deploy/update-server.sh and the admin's "newer version" notice look for.
     name: Publish a release (when the version changed on main)
-    needs: [backend, upgrades, fuzzing, frontend, browser, docker]
+    needs: [backend, upgrades, fuzzing, crashes, frontend, browser, docker]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -98,7 +98,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
-from .. import audit, chem, doi, mailer, nmrpredict, plugins, timestamps, witness
+from .. import audit, chem, doi, mailer, nmrpredict, plugins, storage, timestamps, witness
 from ..config import settings
 from ..models import (
     Attachment, Entry, EntryKind, EntryVersion, Experiment, ExperimentStatus, Notebook, Role,
@@ -799,20 +799,20 @@ def _blob_path(sha: str):
 
 
 @router.post("/experiments/{exp_id}/attachments", status_code=201)
-async def upload_attachment(exp_id: int, user: Writer, session: DB, file: UploadFile = File(...)):
+def upload_attachment(exp_id: int, user: Writer, session: DB, file: UploadFile = File(...)):
+    # A plain function, run on a worker thread, not `async`: before 0.24.2 this held the database's write lock while
+    # waiting for the file, and a second upload at the same moment then froze the whole server for 30 s.
     exp = read_experiment(session, user, exp_id)
+    require_editable(exp, user, claim=False)  # check first; the record is taken only once the file is stored
+    try:  # content-addressed, deduplicated; complete or not there at all (app/storage.py)
+        sha, size = storage.save(file.file, limit=settings.max_upload_mb * 1024 * 1024)
+    except ValueError:
+        raise HTTPException(413, f"File larger than {settings.max_upload_mb} MB") from None
+    session.refresh(exp)
     require_editable(exp, user)
-    data = await file.read()
-    if len(data) > settings.max_upload_mb * 1024 * 1024:
-        raise HTTPException(413, f"File larger than {settings.max_upload_mb} MB")
-    sha = hashlib.sha256(data).hexdigest()
-    path = _blob_path(sha)
-    if not path.exists():  # content-addressed, deduplicated, write-once
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
     a = Attachment(experiment_id=exp.id, filename=_clean_filename(file.filename),
                    content_type=file.content_type or "application/octet-stream",
-                   size=len(data), sha256=sha, uploaded_by=user.id)
+                   size=size, sha256=sha, uploaded_by=user.id)
     session.add(a)
     session.flush()
     audit.record(session, user, "upload", "attachment", a.id, experiment=exp.eid,

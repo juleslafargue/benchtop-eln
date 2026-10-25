@@ -20,7 +20,9 @@ def get_or_404(session: Session, model, obj_id: int):
     return obj
 
 
-def require_editable(exp: Experiment, user: User) -> None:
+def require_editable(exp: Experiment, user: User, claim: bool = True) -> None:
+    """The record may be edited by this person; with `claim`, also take it for this edit (see _claim_open).
+    claim=False only checks, without holding the database: for work done before the edit (storing an upload)."""
     if exp.status != ExperimentStatus.open:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -33,7 +35,8 @@ def require_editable(exp: Experiment, user: User) -> None:
         sess = object_session(exp)
         if sess is None or not access_for(sess, user).can_edit(exp):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the experiment owner, or someone it was shared with for editing, can edit it")
-    _claim_open(exp)
+    if claim:
+        _claim_open(exp)
 
 
 def _claim_open(exp: Experiment) -> None:

@@ -527,10 +527,12 @@ def prune(keep: int | None = None) -> None:
 
 
 def _clear_leftovers() -> None:
-    """Pieces an interrupted backup or restore leaves behind (Benchtop stopped, the Mac turned off): a database
+    """Pieces an interrupted backup, restore or upload leaves behind (Benchtop stopped, the Mac turned off): a database
     snapshot can be as big as the database, so they're removed once they're a day old."""
     cutoff = time.time() - 86400
-    spots = [(settings.backup_dir, (".snapshot-*", f".{PREFIX}*.part")), (settings.data_dir, (".restore-*",))]
+    spots = [(settings.backup_dir, (".snapshot-*", f".{PREFIX}*.part")), (settings.data_dir / ".incoming", ("*.part",))]
+    if not (settings.data_dir / JOURNAL).exists():  # a restore still to be finished needs its staged files
+        spots.append((settings.data_dir, (".restore-*",)))
     for folder, patterns in spots:
         for pat in patterns:
             for p in folder.glob(pat) if folder.is_dir() else []:
@@ -550,11 +552,15 @@ def restore(zip_path: str, allow_missing: bool = False) -> Path:
 def _restore(zip_path: str, allow_missing: bool = False) -> tuple[Path, list[str]]:
     """Everything is unpacked and checked into a staging folder first; only then is the current data
     moved aside and the backup's put in its place. Returns (where the old data went, problems)."""
+    finish_interrupted_restore()  # an earlier restore that was cut off comes first
     zp = Path(zip_path).expanduser().resolve()
     if not zp.exists():
         raise BackupError(f"{zp} not found")
     problems: list[str] = []
-    stage = settings.data_dir / f".restore-{datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}-{threading.get_ident()}"
+    token = f"{datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}-{threading.get_ident()}"
+    stage = settings.data_dir / f".restore-{token}"
+    db = _sqlite_path()
+    new_db = db.with_name(f".restore-{token}.db")  # beside the database, so putting it in place is one rename
     try:
         with zipfile.ZipFile(zp) as z:
             names = z.namelist()
@@ -587,6 +593,8 @@ def _restore(zip_path: str, allow_missing: bool = False) -> tuple[Path, list[str
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with z.open(n) as fi, open(target, "wb") as fo:
                         shutil.copyfileobj(fi, fo, 1 << 20)
+                        fo.flush()
+                        os.fsync(fo.fileno())
             damaged = 0
             for sha in needed_files(manifest):
                 if sha in missing:
@@ -605,35 +613,101 @@ def _restore(zip_path: str, allow_missing: bool = False) -> tuple[Path, list[str
                 (stage / "plugins").mkdir()
                 for n in plug_names:
                     (stage / "plugins" / Path(n).name).write_bytes(z.read(n))
-        # everything is ready: move the current data aside and put the backup's in place
-        db = _sqlite_path()
-        from .db import engine
-
-        engine.dispose()  # release pooled connections to the file being replaced
+        with open(new_db, "wb") as f:
+            f.write(db_bytes)
+            f.flush()
+            os.fsync(f.fileno())
+        # everything is ready. From here on, a restore cut off part-way (Benchtop killed, the Mac turned off) is
+        # finished the next time Benchtop starts, so the data is never left half old, half restored (0.24.2)
         aside = settings.data_dir / f"pre-restore-{datetime.now():%Y%m%d-%H%M%S}"
         n = 1
         while aside.exists():  # two restores within the same second
             n += 1
             aside = aside.with_name(f"{aside.name.split('~')[0]}~{n}")
-        aside.mkdir(parents=True)
-        for p in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
-            if p.exists():
-                shutil.move(str(p), aside / p.name)
-        if settings.attachments_dir.exists():
-            shutil.move(str(settings.attachments_dir), aside / "attachments")
-        shutil.move(str(stage / "attachments"), settings.attachments_dir)
-        db.write_bytes(db_bytes)
-        from . import integrity
-        integrity.forget()  # the last data check was about the data just moved aside
-        if (stage / "plugins").is_dir():
-            plug = settings.data_dir / "plugins"
-            if plug.exists():
-                shutil.move(str(plug), aside / "plugins")
-            shutil.move(str(stage / "plugins"), plug)
-        engine.dispose()
+        _write_journal({"stage": str(stage), "new_db": str(new_db), "db": str(db), "aside": str(aside), "from": str(zp)})
+        _finish_restore()
         return aside, problems
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        if not (settings.data_dir / JOURNAL).exists():
+            shutil.rmtree(stage, ignore_errors=True)
+            new_db.unlink(missing_ok=True)
+
+
+JOURNAL = "restore-in-progress.json"
+
+
+def _write_journal(info: dict[str, str]) -> None:
+    j = settings.data_dir / JOURNAL
+    tmp = j.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        f.write(json.dumps(info, indent=1))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, j)
+    _sync_dir(settings.data_dir)
+
+
+def _sync_dir(d: Path) -> None:
+    try:
+        fd = os.open(d, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _set_aside(p: Path, target: Path) -> None:
+    """Move something out of the way, never over something already set aside (which is kept as well)."""
+    n = 1
+    while os.path.lexists(target):
+        n += 1
+        target = target.with_name(f"{target.name.split('~')[0]}~{n}")
+    shutil.move(str(p), target)
+
+
+def finish_interrupted_restore() -> Path | None:
+    """A restore cut off part-way is finished: called first thing when Benchtop starts, and before a restore.
+    Returns where the data from before it went (None if there was nothing to finish)."""
+    if not (settings.data_dir / JOURNAL).exists():
+        return None
+    return _finish_restore()
+
+
+def _finish_restore() -> Path:
+    """Put the staged backup in place. Each step is a rename, and each is skipped once done, so this can be cut off
+    and run again any number of times: the data ends up as the backup's, and the data from before is set aside."""
+    from . import integrity
+    from .db import engine
+
+    j = settings.data_dir / JOURNAL
+    try:
+        info = json.loads(j.read_text())
+    except ValueError as exc:
+        raise BackupError(f"{j} is damaged ({exc}), so the restore it describes can't be finished. Nothing more was "
+                          f"changed; the data from before the restore is in a pre-restore-… folder in {settings.data_dir}.") from None
+    stage, new_db, db, aside = (Path(info[k]) for k in ("stage", "new_db", "db", "aside"))
+    engine.dispose()  # release pooled connections to the file being replaced
+    aside.mkdir(parents=True, exist_ok=True)
+    for name, live in (("attachments", settings.attachments_dir), ("plugins", settings.data_dir / "plugins")):
+        if (stage / name).exists():  # not yet in place, so what's there now is the data from before
+            if os.path.lexists(live):
+                _set_aside(live, aside / name)
+            os.replace(stage / name, live)
+    if new_db.exists():
+        for p in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
+            if p.exists():
+                _set_aside(p, aside / p.name)
+        os.replace(new_db, db)
+        _sync_dir(db.parent)
+    integrity.forget()  # the last data check was about the data just moved aside
+    shutil.rmtree(stage, ignore_errors=True)
+    j.unlink()
+    engine.dispose()
+    return aside
 
 
 def maybe_backup() -> dict[str, Any] | None:

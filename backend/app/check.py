@@ -166,6 +166,36 @@ def check_live(rehash: Callable[[str], bool] | None = None) -> dict[str, Any]:
         return check_files(snap, settings.attachments_dir, rehash)
 
 
+def _bring_up_to_date(db: Path) -> int | None:
+    """A backup from an older version (such as the one made just before an upgrade, which keeps the old version on
+    purpose) is upgraded, in its temporary copy only, as restoring and starting Benchtop would. Before 0.24.2 its check
+    failed with an error instead, because today's checks read it with today's tables. Returns its version if older."""
+    from sqlmodel import SQLModel
+
+    from . import migrations, models  # noqa: F401  (register tables)
+    from .db import add_missing_columns
+
+    con = sqlite3.connect(db)
+    try:
+        if con.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            return None  # a damaged file isn't upgraded: the checks report it as it is
+    except sqlite3.DatabaseError:
+        return None
+    finally:
+        con.close()
+    eng = create_engine(f"sqlite:///{db}")
+    try:
+        have = migrations.current_version(eng)
+        if have >= migrations.SCHEMA_VERSION:
+            return None
+        SQLModel.metadata.create_all(eng)
+        add_missing_columns(eng)
+        migrations.upgrade(eng)
+        return have
+    finally:
+        eng.dispose()
+
+
 def check_backup(zip_path: Path) -> dict[str, Any]:
     """Unpack a backup to a temporary folder and check it as if it had been restored."""
     from .backup import FILES, missing_files, needed_files
@@ -198,6 +228,14 @@ def check_backup(zip_path: Path) -> dict[str, Any]:
                       else "the database inside doesn't match its checksum")
         if not db_ok:
             return {"ok": False, "checks": [first], "counts": {}}
+        try:
+            older = _bring_up_to_date(root / "benchtop.db")
+        except Exception as exc:  # noqa: BLE001 - reported as the result, like any other problem found
+            return {"ok": False, "counts": {}, "checks": [first, _item(
+                "Database version", False, f"made by an older Benchtop, and it couldn't be brought up to date: {exc}")]}
+        if older is not None:
+            first["detail"] += (f" (database version {older}; checked as it would be after restoring, brought up to date "
+                                "the way Benchtop does when it starts)")
         # newer backups keep attached files once, in the shared folder beside the zip: check them there
         store = zip_path.parent / FILES
         if needed_files(manifest):
@@ -228,6 +266,12 @@ def _main(argv: list[str]) -> int:
         print(f"Checking backup {p.name}…")
         res = check_backup(p)
     else:
+        from .backup import JOURNAL
+        from .config import settings
+        if (settings.data_dir / JOURNAL).exists():
+            print("A restore was cut off part-way, so the data is between the old and the restored. Start Benchtop "
+                  "(./benchtop), which finishes the restore first, then run this check again.")
+            return 1
         print("Checking your Benchtop data…")
         res = check_live()
     print(report(res))
