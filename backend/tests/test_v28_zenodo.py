@@ -533,6 +533,46 @@ def test_zenodo_errors_are_read_in_both_shapes():
     assert zenodo._messages(r) == "Something odd."
 
 
+@pytest.mark.parametrize("module", ["integrity", "backup"])
+def test_two_saves_of_the_check_state_at_once_both_work(module, monkeypatch):
+    """Found by the API fuzzer while testing 0.28: two data checks at once (Admin's "Check now" and "Put back from
+    backups" clicked together, or one while the daily check runs) shared one temporary file, so the second save failed
+    with "No such file or directory" and the page got a server error. The same went for the backups' own state file.
+    Here the first save pauses between writing its temporary file and moving it into place, while a second one runs."""
+    import importlib
+    import threading
+    from pathlib import Path
+    mod = importlib.import_module(f"app.{module}")
+    first_waiting, second_done = threading.Event(), threading.Event()
+    real_replace = Path.replace
+
+    def replace(self, target):
+        if threading.current_thread().name == "first":
+            first_waiting.set()
+            second_done.wait(timeout=1)  # long enough for the second save to finish, if nothing holds it back
+        return real_replace(self, target)
+    monkeypatch.setattr(Path, "replace", replace)
+    errors: list[BaseException] = []
+
+    def save(name: str, value: int) -> None:
+        try:
+            mod._save_state(fuzz_race=value)
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+        finally:
+            if name == "second":
+                second_done.set()
+    first = threading.Thread(target=save, args=("first", 1), name="first")
+    first.start()
+    assert first_waiting.wait(timeout=5)
+    second = threading.Thread(target=save, args=("second", 2), name="second")
+    second.start()
+    first.join(timeout=10)
+    second.join(timeout=10)
+    assert errors == []
+    assert mod.load_state()["fuzz_race"] in (1, 2)
+
+
 def test_the_token_only_goes_to_its_own_zenodo_site(fz):
     c = zenodo.Client(SANDBOX, GOOD)
     with pytest.raises(zenodo.ZenodoError, match="another address"):

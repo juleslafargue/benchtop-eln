@@ -20,7 +20,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -46,11 +48,17 @@ def load_state() -> dict[str, Any]:
         return {}
 
 
+_state_lock = threading.Lock()
+
+
 def _save_state(**changes: Any) -> dict[str, Any]:
-    st = {**load_state(), **changes}
-    tmp = _path().with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, indent=2))
-    tmp.replace(_path())
+    """One save at a time, each through its own temporary file. Before 0.28 two checks at once ("Check now" while the
+    daily check ran) shared one temporary file, and the second save failed with a server error."""
+    with _state_lock:
+        st = {**load_state(), **changes}
+        tmp = _path().with_name(f"{STATE}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(st, indent=2))
+        tmp.replace(_path())
     return st
 
 

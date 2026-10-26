@@ -347,11 +347,17 @@ def load_state() -> dict[str, Any]:
         return {}
 
 
+_state_lock = threading.Lock()
+
+
 def _save_state(**changes: Any) -> dict[str, Any]:
-    st = {**load_state(), **changes}
-    tmp = _state_path().with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, indent=2))
-    tmp.replace(_state_path())
+    """One save at a time, each through its own temporary file (before 0.28, two at once shared one, and the second
+    failed: a backup test while a backup was being made, say)."""
+    with _state_lock:
+        st = {**load_state(), **changes}
+        tmp = _state_path().with_name(f"{_state_path().name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(st, indent=2))
+        tmp.replace(_state_path())
     return st
 
 

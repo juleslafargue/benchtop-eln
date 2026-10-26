@@ -1572,5 +1572,21 @@
    "imported .eln: a signed record (locked) and an eLabFTW export",
    "References section"
   ]
+ },
+ "v0.28.0": {
+  "commit": "9892509",
+  "made": "2026-10-26",
+  "lab": "demo_lab",
+  "extras": [
+   "signed and witnessed record",
+   "2 trusted timestamps",
+   "API token",
+   "webhook (inactive)",
+   "sample codes",
+   "instrument folder: a file attached, one in the Inbox",
+   "imported .eln: a signed record (locked) and an eLabFTW export",
+   "References section",
+   "the signed record published on Zenodo (a fake sandbox), and its author's Zenodo token"
+  ]
  }
 }
