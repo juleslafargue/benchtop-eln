@@ -15,7 +15,7 @@ interface Publication extends PublicationInfo {
 }
 interface Status extends Site { why_not: string; connected: boolean; token_site: string | null; publication: Publication | null }
 interface Preview extends Status {
-  details: PublishDetails; licences: Record<string, string>; references: string[]
+  details: PublishDetails; licences: Record<string, string>; references: string[]; name_note?: string
   files: { name: string; what: string; contains?: string[]; attached?: { filename: string; size: number }[]; size?: number; comments?: number }[]
 }
 
@@ -158,6 +158,7 @@ function PrepareDialog({ exp, onClose, onDone }: { exp: Experiment; onClose: () 
         <section className="stack" style={{ gap: 8 }}>
           <h3>Authors</h3>
           <p className="help" style={{ margin: 0 }}>In the order they should be cited, family name first (as Zenodo lists them). An ORCID iD links the dataset to the person's ORCID record.</p>
+          {pv?.name_note && <p className="notice" style={{ margin: 0 }}>{pv.name_note}</p>}
           {d.creators.map((c, i) => (
             <div key={i} className="creator-row">
               <input className="input" aria-label={`Author ${i + 1}: name`} placeholder="Family name, Given names" value={c.name} onChange={e => setCreator(i, 'name', e.target.value)} />
@@ -235,7 +236,7 @@ function PublishConfirm({ exp, pub, onClose, onDone }: { exp: Experiment; pub: P
     </>}>
       <div className="stack" style={{ gap: 12 }}>
         <p className="notice warn" style={{ margin: 0 }}>Once published, the files and the DOI <b className="mono">{pub.doi}</b> are <b>permanent and public</b>.
-          Zenodo keeps them for good: nobody can delete them or change the files, you included. (On Zenodo you can add a corrected new version later; this one stays.)</p>
+          Zenodo keeps them for good: nobody, not even you, can delete them or change the files. (On Zenodo you can add a corrected new version later; this one stays.)</p>
         {pub.sandbox && <p className="faint" style={{ margin: 0 }}>This is the Zenodo sandbox, for trying things out, so here it's only a rehearsal.</p>}
         <dl className="kv">
           <dt>Title</dt><dd>{d.title}</dd>

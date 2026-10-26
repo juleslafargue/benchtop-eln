@@ -23,6 +23,18 @@ PW = "lab-bench-pw-2026"
 SANDBOX = "https://sandbox.zenodo.org"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def full_names(client, admin, users):
+    """The shared test accounts are named "Alice" and "Bob", which the preview (rightly) doesn't take for a name to cite;
+    here they get full ones, put back afterwards."""
+    ids = {u["username"]: u["id"] for u in client.get("/api/users", headers=admin).json()}
+    for u, name in (("alice", "Alice Martin"), ("bob", "Bob Chen")):
+        client.patch(f"/api/users/{ids[u]}", headers=admin, json={"full_name": name})
+    yield
+    for u, name in (("alice", "Alice"), ("bob", "Bob")):
+        client.patch(f"/api/users/{ids[u]}", headers=admin, json={"full_name": name})
+
+
 @pytest.fixture()
 def fz(client, admin):
     """A fake sandbox.zenodo.org, chosen in Admin → Integrations; the real one is never reached."""
@@ -578,3 +590,32 @@ def test_the_token_only_goes_to_its_own_zenodo_site(fz):
     with pytest.raises(zenodo.ZenodoError, match="another address"):
         c.upload("https://evil.example/api/files/abc", "x.pdf", b"%PDF-", "0" * 32)
     assert not fz.calls
+
+
+def test_a_username_is_never_published_as_the_author(client, users, admin, notebook, fz):
+    """Regression (found in the first real test on Zenodo's sandbox, before merging): an account whose name was its
+    username ("admin123") was prefilled, and published, as the dataset's author."""
+    a = users["alice"]
+    connect(client, a)
+    exp = signed_record(client, a, notebook, title="Named properly")
+    me = client.get("/api/auth/me", headers=a).json()
+    client.patch(f"/api/users/{me['id']}", headers=admin, json={"full_name": "alice"})
+    try:
+        pv = client.get(f"/api/experiments/{exp['id']}/zenodo/preview", headers=a).json()
+        assert pv["details"]["creators"][0]["name"] == "", "a username isn't offered as the name to cite"
+        assert "“alice”, which doesn't look like a full name" in pv["name_note"]
+        r = prepare(client, a, exp, creators=[{"name": "alice", "affiliation": "", "orcid": ""}])
+        assert r.status_code == 422 and "is a username, not a name" in r.json()["detail"]
+        assert prepare(client, a, exp, creators=[{"name": "Martin, Alice", "affiliation": "", "orcid": ""}]).status_code == 200
+    finally:
+        client.patch(f"/api/users/{me['id']}", headers=admin, json={"full_name": "Alice Martin"})
+    pv = client.get(f"/api/experiments/{exp['id']}/zenodo/preview", headers=a).json()
+    assert pv["name_note"] == ""
+
+
+def test_a_full_name_is_offered_family_name_first(client, users, notebook, fz):
+    a = users["alice"]
+    connect(client, a)
+    exp = signed_record(client, a, notebook, title="Named from the account")
+    pv = client.get(f"/api/experiments/{exp['id']}/zenodo/preview", headers=a).json()
+    assert pv["details"]["creators"][0]["name"] == "Martin, Alice" and pv["name_note"] == ""

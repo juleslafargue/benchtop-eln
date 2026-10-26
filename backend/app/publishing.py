@@ -176,6 +176,24 @@ def family_first(name: str) -> str:
     return f"{family}, {given}"
 
 
+def real_name(user: User) -> str:
+    """The account's name if it reads as a person's name ("Jules Lafargue", "Lafargue, Jules"); "" for a username or a
+    single word. Found in the first real test on Zenodo's sandbox: an account named "admin123" was about to be published
+    as the dataset's author, so the preview now leaves the box empty and asks for a name instead."""
+    n = " ".join((user.full_name or "").split())
+    if not n or n.lower() == (user.username or "").lower() or (" " not in n and "," not in n):
+        return ""
+    return n
+
+
+def name_note(user: User) -> str:
+    if real_name(user):
+        return ""
+    shown = " ".join((user.full_name or "").split()) or user.username
+    return (f"Your name on this Benchtop is “{shown}”, which doesn't look like a full name. Type it below as it should be "
+            "cited (family name first), and change it in Account, so new PDFs and signatures show it too.")
+
+
 def _plain(h: str) -> str:
     h = re.sub(r"<(br|/p|/h\d|/li|/tr|/div)\b[^>]*>", "\n", h or "", flags=re.I)
     t = html.unescape(re.sub(r"<[^>]+>", "", h))
@@ -248,7 +266,7 @@ def default_details(session: Session, user: User, exp: Experiment) -> dict[str, 
     opening = (exp.description or "").strip() or _opening_text(entries)
     description = "\n\n".join(p for p in (opening, _signed_line(session, exp), FILES_LINE) if p)
     return {"title": exp.title, "description": description,
-            "creators": [{"name": family_first(owner.full_name or owner.username), "affiliation": _last_affiliation(session, user),
+            "creators": [{"name": family_first(real_name(owner)), "affiliation": _last_affiliation(session, user),
                           "orcid": owner.orcid or ""}],
             "keywords": [t for t in (exp.tags or []) if t][:30], "licence": "cc-by-4.0", "access": "open", "embargo_date": "",
             "include_comments": False}
@@ -420,7 +438,8 @@ def preview(session: Session, user: User, exp: Experiment, include_comments: boo
     if include_comments is not None:
         details = {**details, "include_comments": include_comments}
     entries = live_entries(session, exp.id)
-    return {**status(session, user, exp), "details": details, "licences": LICENCES,
+    owner = session.get(User, exp.owner_id)
+    return {**status(session, user, exp), "details": details, "licences": LICENCES, "name_note": name_note(owner) if owner else "",
             "files": files_preview(session, exp, bool(details.get("include_comments"))), "references": references(entries)}
 
 
@@ -478,6 +497,10 @@ def prepare(session: Session, user: User, exp: Experiment, raw: Any) -> dict[str
     from .routers.experiments import pdf_bytes
     _require(user, exp)
     details = clean_details(raw)
+    for c in details["creators"]:  # a username is never a dataset's author (an account named "admin123", 0.28 sandbox test)
+        if user.username and c["name"].lower() == user.username.lower():
+            raise PublishError(422, f"“{c['name']}” is a username, not a name: type the author's name as it should be cited, "
+                                    "family name first (for example “Curie, Marie”).")
     url = server()
     p = current(session, exp)
     if p and _status(p) == "published":
