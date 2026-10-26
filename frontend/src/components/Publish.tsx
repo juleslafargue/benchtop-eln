@@ -268,6 +268,9 @@ export function ZenodoAccount() {
   const [replacing, setReplacing] = useState(false)
   const load = () => api.get<Account>('/api/auth/zenodo').then(setA).catch(() => {})
   useEffect(() => { load() }, [])
+  useEffect(() => {  // arriving from the publish dialog's link (/account#zenodo)
+    if (a && location.hash === '#zenodo') requestAnimationFrame(() => document.getElementById('zenodo')?.scrollIntoView({ block: 'center' }))
+  }, [!!a]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!a) return <div className="panel"><div className="section faint">Loading…</div></div>
   const save = async () => {
     setBusy(true); setErr('')

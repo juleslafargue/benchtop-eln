@@ -423,12 +423,16 @@ def test_the_details_are_checked(client, users, notebook, fz):
     connect(client, a)
     assert prepare(client, a, exp, title="  ").status_code == 422
     assert prepare(client, a, exp, creators=[]).status_code == 422
+    assert prepare(client, a, exp, creators=12).status_code == 422  # odd input is refused plainly, never a server error
+    assert prepare(client, a, exp, keywords=7, include_comments="no").status_code == 200
+    client.delete(f"/api/experiments/{exp['id']}/zenodo", headers=a)
+    fz.calls.clear()
     r = prepare(client, a, exp, creators=[{"name": "Ruiz, Mateo", "orcid": "0000-0002-1825-0098"}])
     assert r.status_code == 422 and r.json()["detail"].startswith("Ruiz, Mateo: That ORCID iD has a typo")
     assert prepare(client, a, exp, licence="all-rights-reserved").status_code == 422
     past = (date.today() - timedelta(days=1)).isoformat()
     assert prepare(client, a, exp, access="embargoed", embargo_date=past).status_code == 422
-    assert fz.calls == [("GET", "/api/deposit/depositions")]  # the details are checked before anything is sent
+    assert fz.calls == []  # the details are checked before anything is sent
     later = (date.today() + timedelta(days=200)).isoformat()
     pub = prepare(client, a, exp, access="embargoed", embargo_date=later).json()
     md = fz.deps[pub["deposition_id"]]["metadata"]
@@ -453,6 +457,9 @@ def test_admin_chooses_the_site_and_can_turn_it_off(client, users, admin, notebo
     r = prepare(client, a, exp)
     assert r.status_code == 409 and "turned off" in r.json()["detail"]
     assert client.get(f"/api/experiments/{exp['id']}/zenodo", headers=a).json()["unavailable"]
+    calls = len(fz.calls)
+    r = connect(client, users["bob"])  # turned off: not even a token is checked with Zenodo
+    assert r.status_code == 409 and "turned off" in r.json()["detail"] and len(fz.calls) == calls
     actions = [e.action for e in Session(engine).exec(select(AuditEvent).where(AuditEvent.action == "settings_zenodo"))]
     assert actions
 

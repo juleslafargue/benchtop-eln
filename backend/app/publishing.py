@@ -90,8 +90,8 @@ def account_out(session: Session, user: User) -> dict[str, Any]:
 
 def connect(session: Session, user: User, token: str) -> dict[str, Any]:
     """Keep someone's token, once Zenodo has accepted it."""
-    if settings.demo:
-        raise PublishError(409, "This is the demo lab: it never connects to Zenodo.")
+    if (msg := unavailable()):  # the demo lab, or turned off: nothing is sent to Zenodo, not even to check a token
+        raise PublishError(409, msg)
     token = (token or "").strip()
     if not 20 <= len(token) <= 300 or re.search(r"\s", token):
         raise PublishError(422, "That doesn't look like a Zenodo token. Copy the whole token from Zenodo (Applications → "
@@ -294,7 +294,8 @@ def clean_details(raw: Any) -> dict[str, Any]:
     if not description:
         raise PublishError(422, "Zenodo needs a description: a few sentences on what the record is")
     creators = []
-    for c in raw.get("creators") or []:
+    listed = raw.get("creators")
+    for c in listed if isinstance(listed, list) else []:
         if not isinstance(c, dict):
             continue
         name = " ".join(str(c.get("name") or "").split())[:200]

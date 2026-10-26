@@ -41,7 +41,8 @@ SKIP = "|".join([
 ])
 OFFLINE = {"BENCHTOP_PUBCHEM": "off", "BENCHTOP_DOI": "off", "BENCHTOP_NMR_AUTO_UPDATE": "off", "BENCHTOP_BACKUP_INTERVAL_HOURS": "0",
            "BENCHTOP_UPDATE_CHECK": "off", "BENCHTOP_TIMESTAMPS": "off", "BENCHTOP_INSTRUMENT_SCAN_SECONDS": "0",
-           "BENCHTOP_CHECK_INTERVAL_HOURS": "0"}
+           "BENCHTOP_CHECK_INTERVAL_HOURS": "0",
+           "BENCHTOP_ZENODO": "off"}  # publishing (0.28) is refused plainly, and nothing is sent to Zenodo
 
 
 def free_port() -> int:
