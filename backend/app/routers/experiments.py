@@ -98,7 +98,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
-from .. import audit, chem, doi, mailer, nmrpredict, plugins, storage, timestamps, witness
+from .. import audit, chem, doi, mailer, nmrpredict, plugins, publishing, storage, timestamps, witness
 from ..config import settings
 from ..models import (
     Attachment, Entry, EntryKind, EntryVersion, Experiment, ExperimentStatus, Notebook, Role,
@@ -389,6 +389,7 @@ def get_experiment(exp_id: int, user: CurrentUser, session: DB):
         "signatures": signatures_out(session, exp.id),
         "witness_request": witness.summary(session, exp),
         "origin": exp.origin,  # imported from another ELN (0.20): shown as a banner
+        "publication": publishing.summary(session, exp),  # its DOI, once published on Zenodo (0.28)
         **_access_info(session, user, exp),
         **_links_and_samples(session, user, exp),
     }
@@ -1346,7 +1347,8 @@ def export_experiment(exp_id: int, user: CurrentUser, session: DB, format: str =
     return HTMLResponse(report_html(session, exp))
 
 
-def _pdf_response(session, exp: Experiment) -> Response:
+def pdf_bytes(session, exp: Experiment) -> bytes:
+    """The record as an A4 PDF (Download PDF; also what is published on Zenodo)."""
     import io
     try:
         from xhtml2pdf import pisa
@@ -1359,9 +1361,13 @@ def _pdf_response(session, exp: Experiment) -> Response:
         raise HTTPException(422, "This record's formatting is too complex for a PDF; the printable report (Print) still works") from None
     if res.err:
         raise HTTPException(500, "Couldn't make the PDF; the printable report (Print) still works")
+    return out.getvalue()
+
+
+def _pdf_response(session, exp: Experiment) -> Response:
     from ..export_md import safe_name
     name = f"{exp.eid} {safe_name(exp.title)}.pdf".encode("latin-1", "replace").decode("latin-1")
-    return Response(out.getvalue(), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    return Response(pdf_bytes(session, exp), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 def report_html(session, exp: Experiment, pdf: bool = False) -> str:

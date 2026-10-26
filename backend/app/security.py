@@ -215,9 +215,10 @@ def current_user(
 
 # ---------------------------------------------------------------- personal access tokens
 TOKEN_PREFIX = "bt_"
-# Things a script never does with a token: sign, witness or void records; change passwords, sessions,
-# tokens or other accounts; administration. Those always need a person signed in.
-_TOKEN_BLOCKED = re.compile(r"^/api/(auth/|users|admin|webhooks|plugins/(?!sections|readers)|setup)|/(sign|witness|reject|withdraw|void)$")
+# Things a script never does with a token: sign, witness or void records; publish them on Zenodo; change passwords,
+# sessions, tokens or other accounts; administration. Those always need a person signed in.
+_TOKEN_BLOCKED = re.compile(r"^/api/(auth/|users|admin|webhooks|plugins/(?!sections|readers)|setup)|/(sign|witness|reject|withdraw|void)$"
+                            r"|/zenodo(/[a-z]+)?$")  # publishing on Zenodo (0.28) is public and permanent: a person does it
 
 
 def hash_api_token(raw: str) -> str:

@@ -1,4 +1,4 @@
-"""Settings an admin changes in the app (email server, trusted timestamps, witness reminders).
+"""Settings an admin changes in the app (email server, trusted timestamps, witness reminders, publishing to Zenodo).
 
 Kept in <data>/site-settings.json, next to the database, so they're in backups' data folder but not in the
 database itself. Secrets (the email password) are encrypted with the server's secret key. Environment
@@ -23,6 +23,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
               "from_address": "", "from_name": "Benchtop", "base_url": ""},
     "timestamps": {"enabled": True, "tsa_url": "http://timestamp.digicert.com"},
     "witness": {"remind_after_days": 3, "overdue_after_days": 7},
+    # publishing signed records on Zenodo (0.28): which Zenodo site (sandbox.zenodo.org to try it out), and a community
+    "zenodo": {"enabled": True, "url": "https://zenodo.org", "community": ""},
 }
 # environment variables that override a setting (the app shows them as fixed)
 ENV = {
@@ -31,6 +33,8 @@ ENV = {
     ("email", "password"): "BENCHTOP_SMTP_PASSWORD", ("email", "from_address"): "BENCHTOP_SMTP_FROM",
     ("email", "base_url"): "BENCHTOP_PUBLIC_URL",
     ("timestamps", "enabled"): "BENCHTOP_TIMESTAMPS", ("timestamps", "tsa_url"): "BENCHTOP_TSA_URL",
+    ("zenodo", "enabled"): "BENCHTOP_ZENODO", ("zenodo", "url"): "BENCHTOP_ZENODO_URL",
+    ("zenodo", "community"): "BENCHTOP_ZENODO_COMMUNITY",
 }
 
 
@@ -57,6 +61,16 @@ def _decrypt(v: str) -> str:
         return _fernet().decrypt(v[4:].encode()).decode()
     except Exception:  # noqa: BLE001 - secret key changed: the password has to be entered again
         return ""
+
+
+def encrypt(v: str) -> str:
+    """A secret kept elsewhere (someone's Zenodo token), encrypted the same way as the email password."""
+    return _encrypt(v)
+
+
+def decrypt(v: str) -> str:
+    """"" when it can't be read (the server's secret key changed): it has to be entered again."""
+    return _decrypt(v)
 
 
 def _load() -> dict[str, Any]:

@@ -490,3 +490,39 @@ class SampleCode(SQLModel, table=True):
     experiment_id: int = Field(foreign_key="experiment.id", index=True)
     created_at: NaiveDatetime = Field(default_factory=utcnow)
     retired_at: Optional[NaiveDatetime] = None  # taken off its experiment; the number is never handed out again
+
+
+class ZenodoAccount(SQLModel, table=True):
+    """Someone's Zenodo personal access token (0.28), encrypted with the server's secret key and never sent back to
+    the browser. A token belongs to one Zenodo site: zenodo.org and sandbox.zenodo.org have separate accounts."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True, unique=True)
+    server: str  # https://zenodo.org or https://sandbox.zenodo.org
+    token: str  # "enc:…" (sitesettings.encrypt)
+    hint: str = ""  # the token's last 4 characters, so people can tell which one it is
+    connected_at: NaiveDatetime = Field(default_factory=utcnow)
+    checked_at: Optional[NaiveDatetime] = None  # when Zenodo last accepted it
+
+
+class Publication(SQLModel, table=True):
+    """A signed record sent to a data repository (0.28: Zenodo), and the DOI it got. Kept apart from the record:
+    nothing here is part of what a signature covers, so publishing never changes a signed record."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    experiment_id: int = Field(foreign_key="experiment.id", index=True)
+    target: str = "zenodo"
+    server: str = ""  # the Zenodo site it went to
+    user_id: int = Field(foreign_key="user.id")  # whose Zenodo account it is in
+    status: str = Field(default="working", index=True)  # working | draft | failed | published | discarded
+    deposition_id: Optional[int] = None
+    bucket_url: str = ""
+    draft_url: str = ""  # the draft on Zenodo's website (only its owner can open it before it's published)
+    doi: str = ""  # reserved when the draft is made; registered when it's published
+    url: str = ""  # the public record, once published
+    details: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSON, nullable=True))  # the metadata sent
+    files: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))  # [{name, what, size, md5, sha256}]
+    content_hash: str = ""  # the record's content fingerprint when its files were made
+    signature_id: Optional[int] = None  # the newest author or witness signature when its files were made
+    error: str = Field(default="", sa_column=Column(Text))
+    created_at: NaiveDatetime = Field(default_factory=utcnow)
+    updated_at: NaiveDatetime = Field(default_factory=utcnow)
+    published_at: Optional[NaiveDatetime] = None

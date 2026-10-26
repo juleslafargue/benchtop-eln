@@ -268,7 +268,7 @@ def _record(session: Session, exp: Experiment, entries, atts: list[Attachment], 
 
 
 def _experiment(session: Session, crate: _Crate, exp: Experiment, folders: _Unique,
-                folder_of: dict[int, str]) -> str:
+                folder_of: dict[int, str], with_comments: bool = True) -> str:
     from . import timestamps
     from .models import Signature, SignatureTimestamp
     from .routers.experiments import report_html
@@ -306,7 +306,7 @@ def _experiment(session: Session, crate: _Crate, exp: Experiment, folders: _Uniq
     parts += chem_parts
 
     comments = list(session.exec(select(Comment).where(Comment.experiment_id == exp.id, Comment.deleted == False)  # noqa: E712
-                                 .order_by(Comment.id)))
+                                 .order_by(Comment.id))) if with_comments else []
     comment_refs = []
     for c in comments:
         cid = f"#{base}-comment-{c.id}"
@@ -429,8 +429,9 @@ def _preview(title: str, exps: list[Experiment], folder_of: dict[int, str]) -> b
 
 
 def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, name: str,
-           description: str = "") -> dict[str, Any]:
-    """Write a .eln file with these experiments to `out`. The caller has checked the user may read each of them."""
+           description: str = "", with_comments: bool = True) -> dict[str, Any]:
+    """Write a .eln file with these experiments to `out`. The caller has checked the user may read each of them.
+    with_comments=False leaves the discussion out (publishing on Zenodo, unless the author chooses to include it)."""
     exps = list(exps)
     root = _safe(name, 120)
     folders = _Unique()
@@ -447,7 +448,7 @@ def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, 
                    "description": "Open-source electronic lab notebook for chemistry"})
         crate.add({"@id": f"{SOFTWARE}/releases/tag/v{__version__}", "@type": "SoftwareApplication",
                    "name": "Benchtop ELN", "version": __version__, "url": SOFTWARE})
-        parts = [_ref(_experiment(session, crate, e, folders, folder_of)) for e in exps]
+        parts = [_ref(_experiment(session, crate, e, folders, folder_of, with_comments)) for e in exps]
         crate.add({"@id": "#export", "@type": "CreateAction", "name": "Export from Benchtop", "endTime": now,
                    "agent": _ref(crate.person(session, user.id)), "instrument": _ref(f"{SOFTWARE}/releases/tag/v{__version__}"),
                    "result": _ref("./")})
