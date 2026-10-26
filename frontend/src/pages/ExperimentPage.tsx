@@ -15,6 +15,7 @@ import ScaleDialog from '../components/ScaleDialog'
 import FollowUpDialog from '../components/FollowUpDialog'
 import { useBackTarget } from '../components/BackButton'
 import { parseSpectrumBuffer, techniqueFor } from '../spectra'
+import { DoiLine, PublishPanel } from '../components/Publish'
 import type { Attachment, Entry, User, UserBrief } from '../api'
 
 const STATUS_WORD = { open: 'Draft', signed: 'Signed', witnessed: 'Witnessed', voided: 'Voided', locked: 'Locked' }
@@ -208,6 +209,10 @@ function AuditTab({ expId }: { expId: number }) {
     if (e.object_type === 'attachment') return `uploaded ${d.filename}`
     if (e.action.startsWith('sign:')) return `${e.action.slice(5)} signature${d.comment ? ` — “${d.comment}”` : ''}`
     if (e.action === 'update') return `changed ${Object.keys(d.after || {}).join(', ')}`
+    if (e.action === 'zenodo_prepare') return `prepared a draft on ${d.site}${d.doi ? ` (DOI ${d.doi} reserved)` : ''}`
+    if (e.action === 'zenodo_prepare_failed') return `draft on ${d.site} not finished: ${d.error || ''}`
+    if (e.action === 'zenodo_publish') return `published on ${d.site} as DOI ${d.doi}`
+    if (e.action === 'zenodo_discard') return `discarded the draft on ${d.site}`
     return e.action
   }
   return (
@@ -430,6 +435,7 @@ export default function ExperimentPage() {
             <span>Author: {displayName(exp.owner)}</span>
             <span>Created {when(exp.created_at)}</span>
             <span>Modified {when(exp.updated_at)}</span>
+            <DoiLine pub={exp.publication} />
           </div>
           {(exp.follows || !!exp.follow_ups?.length) && <div className="follow-links">
             {exp.follows && ('hidden' in exp.follows
@@ -517,6 +523,7 @@ export default function ExperimentPage() {
                 {verify.intact ? 'Content matches the latest signature.' : 'Content does not match the signature. The record may have been altered outside the app.'}
                 <span className="hash" style={{ display: 'block' }}>{verify.content_hash}</span></p>}
             </div>}
+            {!exp.is_template && <PublishPanel exp={exp} onChange={load} />}
             {!exp.is_template && <div className="stack bench-tools" style={{ gap: 6 }}>
               <h3>At the bench</h3>
               {editable && <button className="btn sm" onClick={() => setBench('log')} title="Shortcut: L">Log a note <kbd>L</kbd></button>}

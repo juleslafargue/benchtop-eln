@@ -4,7 +4,8 @@ Domain overview (mirrors the publicly documented concepts of commercial chemistr
 
     Notebook ─┬─ Experiment ─┬─ Entry (text | reaction | table | file)  ── EntryVersion (full history)
               │              ├─ Attachment (content-addressed, sha256)
-              │              └─ Signature (author / witness, bound to a content hash)
+              │              ├─ Signature (author / witness, bound to a content hash)
+              │              └─ Publication (on Zenodo, with its DOI; not part of what a signature covers)
     Material ─┴─ Lot (container) ── LotTransaction (usage ledger, optionally linked to an experiment)
     AuditEvent: append-only, SHA-256 hash-chained log of every mutation.
 """

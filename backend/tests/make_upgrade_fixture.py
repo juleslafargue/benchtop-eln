@@ -12,7 +12,8 @@ What it does:
   2. extras, through that version's own API, for the features it has: a record signed and witnessed (with trusted
      timestamps from a test timestamp service, from 0.14.1), an instrument folder with a file attached and one waiting
      in the Inbox (0.16), sample codes (0.17), a signed record exported and imported back as a locked record, plus an
-     eLabFTW export (0.20), a References section (0.21), an API token and a webhook (0.10)
+     eLabFTW export (0.20), a References section (0.21), an API token and a webhook (0.10), the signed record published
+     on a fake Zenodo sandbox (tests/fake_zenodo.py), with its author's Zenodo token (0.28)
   3. a backup with that version's own `python -m app.backup create`
   4. into tests/upgrades/: the backup zip as vX.Y.Z.zip, without the attached files; those go once into
      tests/upgrades/files/ (most are the same from one version to the next), and fixtures.json notes where it came
@@ -256,6 +257,17 @@ def extras(instrument_dir: Path) -> list[str]:
                  "journal": "Organometallics", "year": "2010", "volume": "29", "issue": "9", "pages": "2176-2179"},
                 {"citation": "Smith, J. Lab notebook p. 12 (typed in by hand)."}]}}), "references")
             done.append("References section")
+
+        if (Path("app") / "publishing.py").exists():  # 0.28: the signed record published on (a fake) Zenodo's sandbox
+            from app import zenodo
+            from fake_zenodo import GOOD, FakeZenodo
+            zenodo.set_transport(FakeZenodo(zenodo.SANDBOX).transport())
+            ok(c.put("/api/admin/zenodo", headers=admin, json={"site": "sandbox"}), "Zenodo site")
+            ok(c.put("/api/auth/zenodo", headers=a, json={"token": GOOD}), "Zenodo token")
+            d = ok(c.get(f"/api/experiments/{exp['id']}/zenodo/preview", headers=a), "publish preview")["details"]
+            ok(c.post(f"/api/experiments/{exp['id']}/zenodo/prepare", headers=a, json=d), "prepare on Zenodo")
+            ok(c.post(f"/api/experiments/{exp['id']}/zenodo/publish", headers=a, json={"confirm": True}), "publish on Zenodo")
+            done.append("the signed record published on Zenodo (a fake sandbox), and its author's Zenodo token")
     return done
 
 

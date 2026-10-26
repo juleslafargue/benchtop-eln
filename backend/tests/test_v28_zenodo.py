@@ -104,7 +104,8 @@ def test_prepare_then_publish_gives_a_doi_on_the_record(client, users, notebook,
                               {"name": "Bob, B."}]
     assert md["keywords"] == ["suzuki", "cross-coupling"]
     assert md["related_identifiers"] == [{"identifier": "10.1021/om100106e", "relation": "references", "scheme": "doi"}]
-    assert "4-methoxybiphenyl" in md["description"] and "witnessed by Bob" in md["description"]
+    bob = client.get("/api/auth/me", headers=b).json()["full_name"]
+    assert "4-methoxybiphenyl" in md["description"] and f"witnessed by {bob}" in md["description"]
     assert exp_hash(client, a, exp) in md["notes"]
 
     # the PDF and the .eln, every attached file inside with its SHA-256, the discussion left out
@@ -171,8 +172,9 @@ def test_the_preview_shows_everything_that_becomes_public(client, users, noteboo
     d = p["details"]
     assert d["title"] == "Preview check" and d["licence"] == "cc-by-4.0" and d["access"] == "open"
     assert d["description"].startswith("To make 4-methoxybiphenyl by Suzuki coupling & compare bases.")
-    assert "signed by Alice on" in d["description"] and "witnessed" not in d["description"]
-    assert d["creators"][0]["name"] == "Alice" and d["keywords"] == ["suzuki", "cross-coupling"]
+    alice = client.get("/api/auth/me", headers=a).json()["full_name"]  # other tests may have renamed her
+    assert f"signed by {alice} on" in d["description"] and "witnessed" not in d["description"]
+    assert d["creators"][0]["name"] == publishing.family_first(alice) and d["keywords"] == ["suzuki", "cross-coupling"]
     assert d["include_comments"] is False
     assert p["references"] == ["10.1021/om100106e"]
     pdf, eln = p["files"]
@@ -269,6 +271,11 @@ def test_files_changed_on_zenodos_website_are_not_published(client, users, noteb
     connect(client, a)
     pub = prepare(client, a, exp).json()
     fz.content[pub["deposition_id"]]["extra.txt"] = b"added on the website"
+    r = publish(client, a, exp)
+    assert r.status_code == 409 and "different files" in r.json()["detail"] and not fz.published()
+    del fz.content[pub["deposition_id"]]["extra.txt"]
+    pdf = next(n for n in fz.content[pub["deposition_id"]] if n.endswith(".pdf"))
+    fz.content[pub["deposition_id"]][pdf] = b"%PDF- another file under the same name"
     r = publish(client, a, exp)
     assert r.status_code == 409 and "different files" in r.json()["detail"] and not fz.published()
 

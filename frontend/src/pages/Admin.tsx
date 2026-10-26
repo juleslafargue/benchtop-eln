@@ -5,6 +5,7 @@ import type { NmrStatus } from '../components/Prediction'
 import { api, when, type AuditEvent, type Role, type User } from '../api'
 import Modal from '../components/Modal'
 import { Plugins, Webhooks } from '../components/Integrations'
+import { ZenodoSettingsPanel } from '../components/Publish'
 import { EmailSettingsPanel, TimestampSettingsPanel, WitnessSettingsPanel } from '../components/AdminSigning'
 import InstrumentsPanel from '../components/AdminInstruments'
 import PasswordField from '../components/PasswordField'
@@ -313,7 +314,7 @@ export default function Admin() {
       {tab === 'instruments' && <InstrumentsPanel />}
       {tab === 'email' && <EmailSettingsPanel />}
       {tab === 'signing' && <><WitnessSettingsPanel /><TimestampSettingsPanel /></>}
-      {tab === 'integrations' && <><Plugins /><Webhooks /><NmrData /></>}
+      {tab === 'integrations' && <><Plugins /><Webhooks /><ZenodoSettingsPanel /><NmrData /></>}
       {tab === 'audit' && <AuditTrail />}
     </div>
   )

@@ -73,7 +73,7 @@ What tokens can and can't do:
 
 - A token acts as **you**. It sees what you can see, and everything it does is recorded in the audit trail under your name.
 - **Read only** tokens can only read.
-- Tokens can **never** sign, witness, return, withdraw or void records. They also can't manage tokens, passwords, sessions, users, webhooks or plugins. Those actions always need a person signed in.
+- Tokens can **never** sign, witness, return, withdraw or void records, or publish them on Zenodo. They also can't manage tokens, passwords, sessions, users, webhooks or plugins. Those actions always need a person signed in.
 - Only a SHA-256 hash of each token is stored. Revoke a token on the same page and it stops working straight away. Disabling an account stops all of its tokens.
 
 ## Webhooks: Benchtop calls other programs

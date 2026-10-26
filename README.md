@@ -76,6 +76,7 @@ and kept out of the integrals:
 | **Write-up drafts** | *Draft write-up* composes an SI-style experimental paragraph from the reaction table, conditions, work-up and characterisation (amounts with sensible significant figures, mol% for catalysts, yield). It never guesses: anything missing is listed instead. Copy as rich text or add it as a section. |
 | **Obsidian export** | Every experiment as a Markdown note with Dataview-ready front matter (status, product, yield, temperature, time…), the scheme as SVG, tables and attachments. `./benchtop export-obsidian <folder>` or set `BENCHTOP_OBSIDIAN_DIR` to sync hourly; an index note includes a ready-made Dataview table. |
 | **Moving records in and out (.eln)** | Export one experiment, a notebook, or everything you can open as a **.eln** file, the shared format of electronic lab notebooks (the [ELN Consortium](https://github.com/TheELNConsortium/TheELNFileFormat)'s RO-Crate format, which eLabFTW, RSpace, Kadi4Mat, SampleDB, Chemotion and others read and write). Each record carries its printable report, every file with its SHA-256, structures as MOL/RXN files, comments, signatures with their timestamp proofs, and Benchtop's full record for a lossless move to another Benchtop. **Import** shows what's inside first (experiments, authors, files, which were signed), then brings in what you tick: write-ups, extra fields, steps, comments and files, each file checked against the fingerprint the other system recorded. Records signed or locked there arrive read-only; nothing is ever turned into a Benchtop signature. |
+| **Publishing on Zenodo** | Publish a signed record on [Zenodo](https://zenodo.org) as an open dataset with a DOI, for a thesis, a paper's supporting information or a funder's data rules: its PDF and its .eln export (every attached file, with its SHA-256), with the title, authors and ORCID iDs, keywords, licence (CC BY or CC0, open or under an embargo) and the DOIs it cites, all shown in a preview first. Two steps: a draft on Zenodo you can look at and discard, then publishing, which can't be undone. The record's page shows the DOI; the signed record itself never changes. Each person publishes from their own Zenodo account, and can try it on Zenodo's sandbox first. See [Publishing on Zenodo](#publishing-on-zenodo). |
 | **Have we done this before?** | Under every reaction table, the most similar reactions anyone in the lab has already run (that you're allowed to see), as you draw it, even before there's a product. Reactions are compared by starting materials and products, by the transformation itself (which structural features appear and disappear) and by reagents and solvents, and labelled *same reaction*, *same transformation on a different substrate*, *same product* or *similar starting materials*. Each shows the scheme, who ran it and when, the conditions, the yield and the observations; *Use these conditions* copies the reagents, catalysts, solvents (as equivalents, so they scale) and conditions into your table. |
 | **Reactions overview** | Every reaction across notebooks in one table: scheme, scale, reagents, conditions, yield, purification, data recorded. Filter by text, substructure, yield and temperature; sort; download CSV. |
 | **Safety data (GHS)** | Hazard classifications come from PubChem's public API, which gathers them from the EU CLP harmonised classification (Annex VI), the ECHA C&L Inventory (with the share of notifiers behind each statement), Japan's NITE, Safe Work Australia and HSDB. Benchtop uses the most authoritative source for each chemical (harmonised, then the largest ECHA aggregate) and still lists anything other sources add. Every record shows its source and when it was fetched. Data older than 30 days is re-checked automatically while Benchtop runs. If a classification changes (say a new H350), the change goes into the audit log and onto your dashboard until someone marks it reviewed. Offline, the last data is kept and its age shown. Special hazards (pyrophoric, water-reactive, peroxide former, oxidiser, CMR, acid-gas, explosive) are flagged from the official codes. Supplier SDSs still take precedence. |
@@ -384,7 +385,8 @@ format (RO-Crate 1.2, ELN format 1.2+20260923), checked on every change by the c
 every file included. Good for the end of a degree, a thesis appendix, or a data repository such as Zenodo (which
 accepts RO-Crates). Each record has `report.html`, which reads in any browser, so the export is useful even with no
 lab notebook at all. A notebook's page has *Export (.eln)* for just that notebook, and each experiment has
-*Download .eln*.
+*Download .eln*. To put one signed record on Zenodo with a DOI, Benchtop can do it for you: see
+[Publishing on Zenodo](#publishing-on-zenodo).
 
 **Bringing records in.** In the other system, export in its **.eln** format (eLabFTW, RSpace, Kadi4Mat and others
 offer it among their export options), then open a Benchtop notebook and choose *Import .eln…*. Benchtop shows what's in the file before
@@ -404,6 +406,41 @@ imported. Tick what you want and choose the notebook.
 - Imports are recorded in the audit trail, as are exports.
 - Folder and file names in an export unzip on any computer: shortened to fit (Chinese, Japanese and emoji names
   included) with the file extension kept, and never a name Windows reserves such as `CON` or `NUL`.
+
+## Publishing on Zenodo
+
+[Zenodo](https://zenodo.org) is CERN's free, open repository for research data. Publishing a signed record there gives
+it a DOI that a thesis, a paper's supporting information or a funder's data plan can cite, and keeps it public for good.
+
+**What goes public.** Two files: the record's PDF (every section, the signatures and the content fingerprint) and its
+.eln export (every section, every attached file with its SHA-256, structures, and the signatures with their
+trusted-timestamp proofs, which other lab notebooks and programs can read). The discussion is left out unless the
+author ticks it. With them go the details from the preview: title, description, authors (with ORCID iDs and
+affiliations), keywords from the tags, the licence (CC BY 4.0 or CC0 1.0), open access or an embargo until a date, and
+the DOIs in the References sections, listed as references. Nothing else leaves Benchtop.
+
+**Two steps.** Only signed or witnessed records can be published, and only by their author.
+
+1. *Publish on Zenodo…* on the record's page shows the preview: the details above, which you can change, and the
+   files that will become public. *Prepare on Zenodo* makes a draft there with a reserved DOI and uploads the files.
+   Nothing is public yet: look at the draft on Zenodo, change the details, or *Discard draft*.
+2. *Publish…* asks you to confirm, because it can't be undone: the files and the DOI become permanent and public. The
+   record's page then shows the DOI, and the audit trail has each step.
+
+Publishing never changes the record. What was sent, and the DOI it got, are kept beside it, so the record verifies
+against its signatures exactly as before. A record witnessed after its draft was made has to be prepared again, so
+that what's published carries both signatures. If an upload stops part-way (the connection drops), the draft stays
+unpublished on Zenodo: prepare it again to retry, or discard it.
+
+**Your Zenodo account.** Each person publishes from their own Zenodo account. On Zenodo, open *Applications →
+Personal access tokens → New token*, tick **deposit:write** and **deposit:actions**, and paste the token into
+*Account → Zenodo*. Benchtop checks it with Zenodo, keeps it on the server encrypted (like the email password), never
+shows it again and only ever sends it to Zenodo. API tokens can't publish.
+
+**Trying it out first.** In *Admin → Integrations → Publishing on Zenodo*, choose *sandbox.zenodo.org*: Zenodo's test
+site, with its own accounts and tokens (make an account there too) and DOIs that don't work outside it. Switch to
+zenodo.org when you're ready. The same place sets a Zenodo community for the lab's records, or turns publishing off.
+The demo lab never publishes anything.
 
 ## Development
 
@@ -472,6 +509,9 @@ push). When releasing a version, add its backup: `python3 tests/make_upgrade_fix
 | `BENCHTOP_OBSIDIAN_DIR` | unset | Vault folder to sync Markdown notes into every hour |
 | `BENCHTOP_PUBCHEM` | `on` | `off` stops all PubChem lookups (works fully offline with whatever was fetched before) |
 | `BENCHTOP_DOI` | `on` | `off` stops DOI lookups at doi.org for References sections (references can still be typed in) |
+| `BENCHTOP_ZENODO` | `on` (set in Admin → Integrations) | `off` turns publishing on Zenodo off |
+| `BENCHTOP_ZENODO_URL` | `https://zenodo.org` (set in Admin → Integrations) | `https://sandbox.zenodo.org` publishes on Zenodo's test site instead |
+| `BENCHTOP_ZENODO_COMMUNITY` | (set in Admin → Integrations) | A Zenodo community every published record is submitted to, e.g. `ruiz-lab` |
 | `BENCHTOP_SAFETY_REFRESH_DAYS` | `30` | Safety data older than this is re-checked by the hourly housekeeping |
 | `BENCHTOP_NMR_AUTO_UPDATE` | `on` | `off` stops the monthly check for a newer NMRShiftDB2 export (the bundled table is still used) |
 | `BENCHTOP_UPDATE_CHECK` | `on` | `off` stops the daily look at GitHub for a newer Benchtop (`./benchtop update` still works when you run it) |
@@ -496,9 +536,10 @@ frontend/  React 18 + TypeScript + Vite
   spectra.ts        JCAMP-DX / CSV / Bruker reader, peak picking, integration, auto-analysis
   fid.ts            raw FID processing: apodisation, FFT, group delay, auto-phase, baseline
   drafts.ts         unsaved typing kept in the browser until the server has it, and offered back
+  publish.ts        the publish dialog's checks (components/Publish.tsx: the preview, the two steps, the token)
 backend/   FastAPI + SQLModel + RDKit
   app/models.py     Notebook, Experiment, Entry, EntryVersion, Attachment, Signature,
-                    Material, Lot, LotTransaction, AuditEvent, User
+                    Material, Lot, LotTransaction, AuditEvent, User, Publication
   app/chem.py       structure parsing, depiction, reaction → rows, stoichiometry engine, search
   app/audit.py      hash-chained audit log + verifier
   app/backup.py     snapshot/zip backups, files kept once beside them, second copy, weekly test, restore (also a CLI)
@@ -519,9 +560,11 @@ backend/   FastAPI + SQLModel + RDKit
   app/install.py    swaps program files for update/upgrade/rollback, never touching data or your own files
   app/eln.py        .eln export (RO-Crate 1.2, ELN Consortium format): reports, files, structures, signatures
   app/eln_import.py .eln import: safe reading, preview, mapping other ELNs' records, fingerprint checks
+  app/publishing.py publishing signed records on Zenodo: the preview, prepare, publish, discard, people's tokens
+  app/zenodo.py     every call to Zenodo's deposit API, and its errors in plain words
   app/routers/      auth, sso, experiments (+signing, export), groups (+sharing), comments (+notifications),
                     materials, chemistry, search, reactions (+similar), admin, instruments (+Inbox, follow-ups),
-                    samples
+                    samples, publishing
   tests/            API tests incl. signature tamper detection and audit-chain tamper detection
 ```
 
@@ -554,7 +597,9 @@ Tokens, webhooks (Slack, Teams, or signed JSON for your own code) and examples i
 - **Admin-set passwords are temporary**: accounts an admin creates, or whose password an admin resets, must choose their own password at the next sign-in.
 - **First-run safety**: until setup is done, the built-in admin/admin login can't be used, and setup can only be completed from the computer Benchtop runs on, so nobody else on a shared network can claim the admin account.
 - **Phone hand-off**: the QR code carries a random one-time code that works once, for 5 minutes, and opens a separate session you can end from Account settings; API tokens can't create one.
-- **API tokens and webhooks**: tokens are stored only as SHA-256 hashes, can be read-only and expire, and can never sign records or change accounts or settings; webhook requests are signed (HMAC-SHA256) and carry identifiers, never record content. Plugin files contain no code and are checked before they load.
+- **Zenodo tokens** are kept on the server, encrypted with its secret key, never sent back to the browser, and only
+  ever sent to the Zenodo site they belong to (Benchtop refuses an upload address on any other).
+- **API tokens and webhooks**: tokens are stored only as SHA-256 hashes, can be read-only and expire, and can never sign or publish records or change accounts or settings; webhook requests are signed (HMAC-SHA256) and carry identifiers, never record content. Plugin files contain no code and are checked before they load.
 - **Instrument folders** are only ever read. Links (symlinks) inside them are never followed, so someone who can
   write to an instrument share can't make Benchtop copy a file from elsewhere on the computer. Inbox items follow
   the sharing rules, and once a file is attached it is only reachable by people who can read that record.

@@ -51,6 +51,30 @@ def main(argv: list[str]) -> int:
         print("Building the demo lab…", flush=True)
         subprocess.run([sys.executable, "-m", "app.demo_lab"], cwd=BACKEND, env=env, check=True, stdout=subprocess.DEVNULL)
     log_path = data / "server.log"
+    problems = serve(env, log_path, lambda: sweep(sync_playwright))
+    if problems is None:
+        return 2
+    # 0.28: publishing on Zenodo. The demo lab never publishes, so the same data is opened again by an ordinary
+    # Benchtop, pointed at a fake Zenodo (tests/fake_zenodo.py) running here
+    sys.path.insert(0, str(BACKEND / "tests"))
+    from fake_zenodo import FakeZenodo
+    fake = FakeZenodo(f"http://127.0.0.1:{PORT + 2}")
+    fake_server = fake.serve(PORT + 2)
+    plain = {k: v for k, v in env.items() if k != "BENCHTOP_DEMO"} | {"BENCHTOP_ZENODO_URL": fake.base}
+    try:
+        more = serve(plain, data / "server-publishing.log", lambda: publishing(sync_playwright, fake))
+    finally:
+        fake_server.shutdown()
+    problems += more if more is not None else [("publishing", "", "server", "Benchtop didn't start for the publishing check")]
+    for p in problems:
+        print("✗", " | ".join(p))
+    print("Browser smoke test:", "passed" if not problems else f"{len(problems)} problem(s)")
+    return 1 if problems else 0
+
+
+def serve(env: dict, log_path: Path, run) -> list[tuple[str, str, str, str]] | None:
+    """Start Benchtop with this environment, run the checks, stop it; any traceback in its log is a problem too.
+    None: it didn't start."""
     log_file = open(log_path, "w")  # a file, not a pipe: an unread pipe fills up and stalls the server
     server = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(PORT)], cwd=BACKEND, env=env,
                               stdout=log_file, stderr=subprocess.STDOUT, text=True)
@@ -64,8 +88,8 @@ def main(argv: list[str]) -> int:
             time.sleep(0.5)
         else:
             print("Server didn't start:\n" + log_path.read_text())
-            return 2
-        problems = sweep(sync_playwright)
+            return None
+        problems = run()
     finally:
         server.terminate()
         try:
@@ -76,12 +100,9 @@ def main(argv: list[str]) -> int:
     out = log_path.read_text()
     tracebacks = out.count("Traceback (most recent call last)") if out else 0
     if tracebacks:
-        problems.append(("server", "", "traceback", f"{tracebacks} error(s) in the server log"))
+        problems.append(("server", log_path.name, "traceback", f"{tracebacks} error(s) in the server log"))
         print(out[-4000:])
-    for p in problems:
-        print("✗", " | ".join(p))
-    print("Browser smoke test:", "passed" if not problems else f"{len(problems)} problem(s)")
-    return 1 if problems else 0
+    return problems
 
 
 def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
@@ -165,6 +186,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
                     note("too wide", f"page is {over}px wider than the screen")
             ctx.close()
         problems += unsaved_typing(browser, tok["slaurent"])
+        problems += demo_never_publishes(browser, tok["slaurent"])
         browser.close()
     return problems
 
@@ -261,6 +283,127 @@ def unsaved_typing(browser, token: str) -> list[tuple[str, str, str, str]]:
         c.close()
     finally:
         ctx.close()
+    return found
+
+
+def publishing(sync_playwright, fake) -> list[tuple[str, str, str, str]]:
+    """0.28: an author connects a Zenodo token, looks at the preview, prepares a draft and publishes it; the record's page
+    shows the DOI, and the record still matches its signatures. On a phone, the preview fits the screen."""
+    print("Publishing on Zenodo: a token, the preview, a draft, publishing it (on a fake Zenodo)…", flush=True)
+    from fake_zenodo import GOOD
+    found: list[tuple[str, str, str, str]] = []
+
+    def bad(what: str) -> None:
+        found.append(("publishing", "", "zenodo", what))
+
+    author = None
+    for u in ("dcho", "pnair", "slaurent", "kwatanabe", "mruiz"):  # someone with witnessed records
+        r = httpx.post(B + "/api/auth/login", json={"username": u, "password": PW})
+        if r.status_code != 200:
+            continue
+        H = {"Authorization": "Bearer " + r.json()["token"]}
+        me = httpx.get(B + "/api/auth/me", headers=H).json()
+        mine = [e for e in httpx.get(B + "/api/experiments?limit=1000", headers=H).json()
+                if e["owner"]["id"] == me["id"] and e["status"] == "witnessed"]
+        if len(mine) >= 2:
+            author = (r.json()["token"], H, mine)
+            break
+    if author is None:
+        bad("the demo lab has nobody with two witnessed records to publish")
+        return found
+    token, H, mine = author
+    exp, other = mine[0], mine[1]
+    before = httpx.get(f"{B}/api/experiments/{exp['id']}/verify", headers=H).json()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        for label, viewport in (("desktop", {"width": 1400, "height": 900}), ("phone", {"width": 390, "height": 844})):
+            phone = viewport["width"] < 600
+            ctx = browser.new_context(viewport=viewport, is_mobile=phone, has_touch=phone)
+            ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+            pg = ctx.new_page()
+            where = {"path": ""}
+
+            def note(kind: str, text: str, label=label) -> None:
+                if not any(i in text for i in IGNORE):
+                    found.append((f"publishing {label}", where["path"], kind, text[:200]))
+            pg.on("console", lambda m: m.type == "error" and note("console error", m.text))
+            pg.on("pageerror", lambda e: note("page error", str(e)))
+            pg.on("response", lambda r: "/api/" in r.url and (r.status >= 500 or r.status in (401, 403, 404, 422))
+                  and note(f"HTTP {r.status}", r.url.replace(B, "")))
+
+            def too_wide() -> None:
+                over = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                if over > 2:
+                    note("too wide", f"page is {over}px wider than the screen")
+            try:
+                if not phone:
+                    where["path"] = "/account"
+                    pg.goto(B + "/account")
+                    pg.fill("input[aria-label='Zenodo personal access token']", GOOD)
+                    pg.click("#zenodo button:has-text('Connect')")
+                    pg.wait_for_selector("#zenodo >> text=Connected to", timeout=15000)
+                target = other if phone else exp
+                where["path"] = f"/experiments/{target['id']}"
+                pg.goto(B + where["path"])
+                pg.click(".publish-panel >> text=Publish on Zenodo…")
+                pg.wait_for_selector("dialog.modal >> text=Files that become public", timeout=15000)
+                pg.wait_for_timeout(300)
+                too_wide()
+                if phone:
+                    ctx.close()
+                    continue
+                pg.click("dialog.modal >> text=Add an author")
+                pg.fill("input[aria-label='Author 2: name']", "Ruiz, Maria")
+                pg.click("dialog.modal button:has-text('Prepare on Zenodo')")
+                pg.wait_for_selector(".publish-panel button:has-text('Publish…')", timeout=60000)  # the draft is there
+                drafts = [d for d in fake.deps.values() if not d["submitted"]]
+                if len(drafts) != 1 or len(fake.content[drafts[0]["id"]]) != 2 or fake.published():
+                    bad("preparing didn't leave one unpublished draft holding the PDF and the .eln")
+                elif [c["name"] for c in drafts[0]["metadata"]["creators"]][1:] != ["Ruiz, Maria"]:
+                    bad("the co-author added in the preview didn't reach Zenodo")
+                pg.click(".publish-panel button:has-text('Publish…')")
+                pg.wait_for_selector("dialog.modal >> text=This can't be undone")
+                if not pg.is_disabled("dialog.modal button:has-text('Publish for good')"):
+                    bad("Publish could be clicked before confirming it can't be undone")
+                pg.check("dialog.modal input[type=checkbox]")
+                pg.click("dialog.modal button:has-text('Publish for good')")
+                pg.wait_for_selector(".publish-panel .published-box", timeout=30000)
+                doi = pg.inner_text(".doi-line") if pg.query_selector(".doi-line") else ""
+                if len(fake.published()) != 1 or fake.published()[0]["doi"] not in doi:
+                    bad(f"after publishing, the record's page doesn't show the DOI Zenodo registered ({doi!r})")
+                after = httpx.get(f"{B}/api/experiments/{exp['id']}/verify", headers=H).json()
+                if not after["intact"] or after["content_hash"] != before["content_hash"]:
+                    bad("publishing changed what the signatures cover")
+                pg.click("role=tab[name='Audit trail']")
+                pg.wait_for_selector("text=published on", timeout=10000)
+            except Exception as e:  # noqa: BLE001 - a step that didn't work is a problem to report, not a crash
+                bad(f"{label}: {str(e).splitlines()[0][:160]}")
+            ctx.close()
+        browser.close()
+    return found
+
+
+def demo_never_publishes(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """0.28: in the demo lab the preview opens (to see what would go), but nothing can be sent to Zenodo."""
+    H = {"Authorization": "Bearer " + token}
+    me = httpx.get(B + "/api/auth/me", headers=H).json()
+    mine = [e for e in httpx.get(B + "/api/experiments?limit=1000", headers=H).json()
+            if e["owner"]["id"] == me["id"] and e["status"] in ("signed", "witnessed")]
+    if not mine:
+        return [("demo publishing", "", "zenodo", "no signed record to try")]
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    found = []
+    try:
+        pg.goto(f"{B}/experiments/{mine[0]['id']}")
+        pg.click(".publish-panel >> text=Publish on Zenodo…")
+        pg.wait_for_selector("dialog.modal >> text=demo lab", timeout=15000)
+        if not pg.is_disabled("dialog.modal button:has-text('Prepare on Zenodo')"):
+            found.append(("demo publishing", "", "zenodo", "the demo lab offered to send a record to Zenodo"))
+    except Exception as e:  # noqa: BLE001
+        found.append(("demo publishing", "", "zenodo", str(e).splitlines()[0][:160]))
+    ctx.close()
     return found
 
 

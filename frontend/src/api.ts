@@ -1,4 +1,5 @@
 // Thin typed client for the Benchtop REST API.
+import type { PublicationInfo } from './publish'
 
 export type Role = 'admin' | 'scientist' | 'viewer'
 export type Status = 'open' | 'signed' | 'witnessed' | 'voided' | 'locked'
@@ -57,6 +58,7 @@ export interface Experiment extends ExperimentSummary {
   follows?: LinkedExperiment | { hidden: true } | null; follow_ups?: LinkedExperiment[]
   samples?: SampleCode[]
   origin?: ElnOrigin | null
+  publication?: PublicationInfo | null  // on Zenodo (0.28): a draft, or the DOI once published
 }
 /** Where an imported record came from (0.20), shown as a banner on it. */
 export interface ElnOrigin {

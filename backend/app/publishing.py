@@ -607,10 +607,12 @@ def publish(session: Session, user: User, exp: Experiment, confirm: bool) -> dic
         if _is_published(dep):
             _mark_published(session, user, exp, p, dep)
             return out(session, p)
-        theirs = sorted((str(f.get("filename") or f.get("key") or ""), str(f.get("checksum") or "").removeprefix("md5:"))
-                        for f in dep.get("files") or [])
-        ours = sorted((f["name"], f["md5"]) for f in p.files or [])
-        if theirs and theirs != ours:
+        theirs: dict[str, str] = {}  # name → MD5, as far as Zenodo's answer says
+        for f in dep.get("files") or []:
+            if isinstance(f, dict) and (name := str(f.get("filename") or f.get("key") or "")):
+                theirs[name] = str(f.get("checksum") or "").removeprefix("md5:").lower()
+        ours = {f["name"]: f["md5"] for f in p.files or []}
+        if theirs and (set(theirs) != set(ours) or any(theirs[n] and theirs[n] != ours[n] for n in ours)):
             raise PublishError(409, "The draft on Zenodo has different files from the ones Benchtop sent (they were changed "
                                     "on Zenodo's website). Prepare it again, or discard it.")
         try:

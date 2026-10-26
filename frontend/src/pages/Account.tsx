@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { THEMES } from '../themeList'
 import { applyPalette } from '../theme'
 import { ApiTokens } from '../components/Integrations'
+import { ZenodoAccount } from '../components/Publish'
 import { useApp } from '../App'
 import { ago, api, downloadAuthed, when, type Preferences, type User } from '../api'
 import { initials } from '../components/Layout'
@@ -109,6 +110,12 @@ export default function Account() {
 
         <div><h2>Where you're signed in</h2><p className="help">Each browser you've signed in with. Sign out any you don't recognise, or that you can't get to any more (a lab computer, a lost laptop). Changing your password signs out all the others automatically.</p></div>
         <Sessions />
+
+        {user.role !== 'viewer' && <>
+          <div><h2>Zenodo</h2><p className="help">To publish your signed records as open datasets with a DOI (each record's page has <i>Publish on Zenodo</i>).
+            Benchtop uses your own Zenodo account, through a personal access token.</p></div>
+          <ZenodoAccount />
+        </>}
 
         <div><h2>API tokens</h2><p className="help">For scripts and other programs (an instrument PC, a data pipeline) that need to read or add to your notebooks. A token acts as you, but can never sign records or change settings.</p></div>
         <ApiTokens />
