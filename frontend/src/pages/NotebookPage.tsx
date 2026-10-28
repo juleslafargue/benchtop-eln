@@ -59,7 +59,9 @@ export default function NotebookPage() {
           </button>
         ))}
       </div>
-      <div className="panel"><ExperimentList items={items} showNotebook={false} empty="No experiments here yet." /></div>
+      <div className="panel"><ExperimentList items={items} showNotebook={false}
+        empty={filter ? `No ${filter} experiments in this notebook.`
+          : canWrite && !nb.archived ? 'No experiments here yet. Press N or click New experiment to start one.' : 'No experiments here yet.'} /></div>
       {more && <div style={{ textAlign: 'center' }}><button className="btn" onClick={() => load(items.length)}>Show older experiments</button></div>}
       {creating && <NewExperimentDialog notebookId={nb.id} onClose={() => setCreating(false)} />}
       {importing && <ImportElnDialog notebookId={nb.id} onClose={() => setImporting(false)} onDone={() => { refreshNotebooks(); load(0) }} />}

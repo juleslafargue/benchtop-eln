@@ -5,7 +5,7 @@ export type Role = 'admin' | 'scientist' | 'viewer'
 export type Status = 'open' | 'signed' | 'witnessed' | 'voided' | 'locked'
 export type EntryKind = 'text' | 'reaction' | 'table' | 'file' | 'purification' | 'characterization' | 'safety' | 'screen' | 'references' | 'custom'
 
-export interface Preferences { theme?: 'system' | 'light' | 'dark'; palette?: string; email_notify?: { witness?: boolean; results?: boolean; system?: boolean }; default_notebook_id?: number | null; spectrum_expanded?: boolean; pinned?: number[]; nav?: string[]; nav_hidden?: string[]; dashboard?: { widgets: unknown[] } }
+export interface Preferences { theme?: 'system' | 'light' | 'dark'; palette?: string; email_notify?: { witness?: boolean; results?: boolean; system?: boolean }; default_notebook_id?: number | null; spectrum_expanded?: boolean; guide_dismissed?: boolean; pinned?: number[]; nav?: string[]; nav_hidden?: string[]; dashboard?: { widgets: unknown[] } }
 export interface User { id: number; username: string; full_name: string; email: string; role: Role; active: boolean; preferences: Preferences; has_password?: boolean; must_change_password?: boolean; sample_prefix?: string | null; orcid?: string | null }
 export interface UserBrief { id: number; username: string; full_name: string }
 export type Visibility = 'everyone' | 'group' | 'private'

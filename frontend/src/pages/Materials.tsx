@@ -108,7 +108,8 @@ export default function Materials() {
               </Link>
             </li>
           ))}
-          {!items.length && <li className="empty">No materials match. {canWrite && 'Register one to start building your inventory.'}</li>}
+          {!items.length && <li className="empty">{q.trim() || kind ? 'No materials match.'
+            : <>No materials registered yet.{canWrite && ' Click Register material to add your first reagent or solvent.'}</>}</li>}
         </ul>
       </div>
       {creating && <MaterialForm onClose={() => { setCreating(false); setParams({}) }} onSaved={m => nav(`/materials/${m.id}`)} />}

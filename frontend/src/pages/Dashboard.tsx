@@ -108,6 +108,14 @@ export default function Dashboard() {
   useEffect(() => { api.get<DashData>('/api/dashboard').then(setData).catch(e => toast(e.message)) }, [toast])
   useEffect(() => { const f = () => setNarrow(window.innerWidth < 760); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f) }, [])
 
+  // "New to Benchtop?": shown until the person dismisses it, then never again, on any computer (saved to the account)
+  const [welcomeGone, setWelcomeGone] = useState(false)
+  const showWelcome = !user.preferences?.guide_dismissed && !welcomeGone
+  const dismissWelcome = async () => {
+    setWelcomeGone(true)
+    try { setUser(await api.patch<User>('/api/auth/me', { preferences: { guide_dismissed: true } })) } catch (e: any) { toast(e.message) }
+  }
+
   const persist = useCallback(async (ws: Widget[]) => {
     try { setUser(await api.patch<User>('/api/auth/me', { preferences: { dashboard: { widgets: ws } } })) } catch (e: any) { toast(e.message) }
   }, [setUser, toast])
@@ -221,8 +229,12 @@ export default function Dashboard() {
           {data!.lists.stale.length > 3 && ` and ${data!.lists.stale.length - 3} more`}. Finish and sign them, or void the ones that went nowhere.</span>
         <button className="btn ghost sm" onClick={() => { setQuietDismissed(true); try { sessionStorage.setItem('benchtop.quiet-dismissed', '1') } catch { /* ok */ } }}>Not now</button>
       </div>}
+      {showWelcome && <div className="notice welcome-note" role="status">
+        <span><b>New to Benchtop?</b> Read <Link to="/guide">Getting started</Link> (5 minutes). It's always in the menu, above your name.</span>
+        <button className="btn ghost sm" onClick={dismissWelcome}>Dismiss</button>
+      </div>}
       {user.has_password === false && <p className="notice" style={{ margin: 0 }}>
-        {sessionStorage.getItem('benchtop.welcome') ? 'Welcome to Benchtop! ' : ''}You sign in with single sign-on. To sign records you'll also need a signing password: <Link to="/account">set one in Account settings</Link>.</p>}
+        {!showWelcome && sessionStorage.getItem('benchtop.welcome') ? 'Welcome to Benchtop! ' : ''}You sign in with single sign-on. To sign records you'll also need a signing password: <Link to="/account">set one in Account settings</Link>.</p>}
       {editing && <p className="notice" style={{ margin: 0 }}>Drag a widget by its title to move it, drag the bottom-right corner to resize it, and use Remove or Add widget to change what's shown. Click Done to save.</p>}
       {narrow ? (
         <div className="stack dash-stack" style={{ gap: 12 }}>{[...widgets].sort((a, b) => a.y - b.y || a.x - b.x).map(card)}</div>

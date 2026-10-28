@@ -115,6 +115,10 @@ def _clean_prefs(p: dict[str, Any]) -> dict[str, Any]:
         if k == "email_notify":  # which emails this person gets
             out[k] = {t: bool(v[t]) for t in ("witness", "results", "system") if isinstance(v, dict) and t in v}
             continue
+        if k == "guide_dismissed":  # the dashboard's "New to Benchtop?" card was put away: it stays away on every computer
+            if isinstance(v, bool):
+                out[k] = v
+            continue
         if k in ("nav", "nav_hidden"):  # sidebar order and hidden items, as known keys
             out[k] = list(dict.fromkeys(i for i in v if i in NAV_KEYS)) if isinstance(v, list) else []
             continue

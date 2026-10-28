@@ -23,6 +23,7 @@ import Groups from './pages/Groups'
 import Inbox from './pages/Inbox'
 import PasswordDialog from './components/PasswordDialog'
 import BenchPage from './pages/BenchPage'
+import Guide from './pages/Guide'
 import { Shortcuts } from './components/Shortcuts'
 
 export interface ToastAction { label: string; run: () => void }
@@ -133,6 +134,7 @@ export default function App() {
           <Route path="/account" element={<Account />} />
           <Route path="/groups" element={<Groups />} />
           <Route path="/inbox" element={<Inbox />} />
+          <Route path="/guide" element={<Guide />} />
           <Route path="/admin/:tab?" element={user.role === 'admin' ? <Admin /> : <Navigate to="/" />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

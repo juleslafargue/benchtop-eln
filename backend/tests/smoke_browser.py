@@ -112,7 +112,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
     mats = httpx.get(B + "/api/materials", headers=H).json()
     mats = mats["items"] if isinstance(mats, dict) else mats
     nbs = httpx.get(B + "/api/notebooks", headers=H).json()
-    pages = (["/", "/templates", "/materials", f"/materials/{mats[0]['id']}", "/inventory", "/search?q=suzuki", "/reactions",
+    pages = (["/", "/guide", "/templates", "/materials", f"/materials/{mats[0]['id']}", "/inventory", "/search?q=suzuki", "/reactions",
               "/compounds", "/account", "/groups"] + [f"/notebooks/{n['id']}" for n in nbs]
              + [f"/experiments/{e['id']}" for e in exps] + [f"/bench/{exps[0]['id']}", "/inbox"])
     # Admin's tabs (0.26), each at its own address
@@ -126,7 +126,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
             ("admin phone", "hweiss", {"width": 390, "height": 844}, "light", ADMIN + ["/"]),  # 0.24: Admin was too wide
             ("admin dark", "hweiss", {"width": 1400, "height": 900}, "dark", ADMIN)]
     # every colour theme, light and dark, on a few busy pages (the phone run covers narrow screens)
-    themed = ["/", pages[10 + len(nbs)] if len(pages) > 10 + len(nbs) else "/", "/account", "/reactions"]
+    themed = ["/", f"/experiments/{exps[0]['id']}" if exps else "/", "/account", "/reactions"]
     for palette in ("notebook", "steel", "litmus", "contrast"):
         for scheme in ("light", "dark"):
             runs.append((f"theme {palette} {scheme}", "slaurent", {"width": 1300, "height": 850}, scheme, themed, palette))
@@ -187,6 +187,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
             ctx.close()
         problems += unsaved_typing(browser, tok["slaurent"])
         problems += demo_never_publishes(browser, tok["slaurent"])
+        problems += getting_started(browser, tok["hweiss"])
         browser.close()
     return problems
 
@@ -380,6 +381,74 @@ def publishing(sync_playwright, fake) -> list[tuple[str, str, str, str]]:
                 bad(f"{label}: {str(e).splitlines()[0][:160]}")
             ctx.close()
         browser.close()
+    return found
+
+
+def getting_started(browser, admin_token: str) -> list[tuple[str, str, str, str]]:
+    """Someone signing in for the first time sees "New to Benchtop?" on the dashboard; it opens the guide, whose contents
+    jump to each part, and once dismissed it stays away (it's saved to their account, so on every computer)."""
+    print("Getting started: a brand-new account, the welcome card, the guide, dismissing the card…", flush=True)
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": "/"}
+
+    def bad(kind: str, what: str) -> None:
+        if not any(i in what for i in IGNORE):
+            found.append(("getting started", where["path"], kind, what[:200]))
+    password = "quartz-flask-ember-91"
+    r = httpx.post(B + "/api/users", headers={"Authorization": "Bearer " + admin_token},
+                   json={"username": "newcomer", "password": password, "full_name": "Nadia Newcomer", "role": "scientist", "must_change": False})
+    if r.status_code != 201:
+        return [("getting started", "", "account", f"couldn't make a new account: {r.text[:120]}")]
+    token = httpx.post(B + "/api/auth/login", json={"username": "newcomer", "password": password}).json()["token"]
+    H = {"Authorization": "Bearer " + token}
+    for label, viewport in (("phone", {"width": 390, "height": 844}), ("desktop", {"width": 1300, "height": 900})):
+        phone = viewport["width"] < 600
+        ctx = browser.new_context(viewport=viewport, is_mobile=phone, has_touch=phone)
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+        pg = ctx.new_page()
+        pg.on("console", lambda m: m.type == "error" and bad("console error", m.text))
+        pg.on("pageerror", lambda e: bad("page error", str(e)))
+        pg.on("response", lambda r: "/api/" in r.url and (r.status >= 500 or r.status in (401, 403, 404, 422))
+              and bad(f"HTTP {r.status}", r.url.replace(B, "")))
+        try:
+            where["path"] = "/"
+            pg.goto(B + "/")
+            pg.wait_for_selector(".welcome-note >> text=New to Benchtop?", timeout=15000)
+            pg.click(".welcome-note >> text=Getting started")
+            pg.wait_for_selector("h1:has-text('Getting started')", timeout=10000)
+            where["path"] = "/guide"
+            if not pg.url.endswith("/guide"):
+                bad("guide", f"the card's link went to {pg.url}")
+            if pg.locator(".guide-sec h2").count() < 10:
+                bad("guide", "the guide has fewer than 10 parts")
+            pg.click(".guide-toc >> text=Signing and witnessing")
+            pg.wait_for_timeout(300)
+            top = pg.evaluate("document.getElementById('signing').getBoundingClientRect().top")
+            if not 0 <= top < 120:
+                bad("guide", f"the contents didn't go to Signing and witnessing (it's {top:.0f}px down)")
+            over = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+            if over > 2:
+                bad("too wide", f"page is {over}px wider than the screen")
+            if label == "phone":  # on the phone: the card and the guide fit; dismissing is checked on the desktop
+                ctx.close()
+                continue
+            where["path"] = "/"
+            pg.goto(B + "/")
+            pg.click(".welcome-note >> text=Dismiss")
+            pg.wait_for_selector(".welcome-note", state="detached", timeout=5000)
+            pg.wait_for_timeout(500)
+            pg.reload()
+            pg.wait_for_selector(".page-title", timeout=15000)
+            pg.wait_for_timeout(500)
+            if pg.query_selector(".welcome-note"):
+                bad("welcome card", "dismissed, it came back when the page was opened again")
+            if httpx.get(B + "/api/auth/me", headers=H).json()["preferences"].get("guide_dismissed") is not True:
+                bad("welcome card", "dismissing it wasn't saved to the account")
+            if not pg.query_selector(".side-foot a[href='/guide']"):
+                bad("guide", "the sidebar has no link to Getting started")
+        except Exception as e:  # noqa: BLE001 - a step that didn't work is a problem to report, not a crash
+            bad("guide", f"{label}: {str(e).splitlines()[0][:160]}")
+        ctx.close()
     return found
 
 

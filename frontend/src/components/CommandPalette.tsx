@@ -52,6 +52,9 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
     { key: 'p-inv', group: 'Go to', label: 'Inventory', run: go('/inventory') },
     { key: 'p-tpl', group: 'Go to', label: 'Templates', run: go('/templates') },
     { key: 'p-acc', group: 'Go to', label: 'Account settings', run: go('/account') },
+    { key: 'p-inbox', group: 'Go to', label: 'Inbox', hint: 'instrument files', run: go('/inbox') },
+    { key: 'p-groups', group: 'Go to', label: 'Groups', run: go('/groups') },
+    { key: 'p-guide', group: 'Go to', label: 'Getting started guide', hint: 'help', run: go('/guide') },
     ...(user.role === 'admin' ? ([['', 'Users'], ['backups', 'Backups, data check & disk space'], ['instruments', 'Instruments'], ['email', 'Email'],
       ['signing', 'Signing: witnessing & trusted timestamps'], ['integrations', 'Integrations: plugins, webhooks & NMR data'], ['audit', 'Audit trail']] as const)
       .map(([k, label]) => ({ key: `p-admin-${k || 'users'}`, group: 'Go to', label: `Admin → ${label}`, run: go(k ? `/admin/${k}` : '/admin') })) : []),

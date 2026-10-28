@@ -43,6 +43,9 @@ export default function Layout({ children }: { children: ReactNode }) {
   const loc = useLocation()
   const [nbHidden, setNbHidden] = useCollapsed('side.notebooks')
   useEffect(() => setOpen(false), [loc.pathname])
+  // N on a notebook's page starts the experiment in that notebook
+  const hereNb = (() => { const m = /^\/notebooks\/(\d+)/.exec(loc.pathname); const id = m ? Number(m[1]) : NaN
+    return notebooks.some(n => n.id === id && !n.archived) ? id : undefined })()
 
   return (
     <BackProvider>
@@ -71,10 +74,11 @@ export default function Layout({ children }: { children: ReactNode }) {
                 <span className="count">{nb.experiment_count}</span>
               </NavLink>
             ))}
-            {notebooks.length === 0 && <p className="faint" style={{ padding: '0 8px' }}>No notebooks yet.</p>}
+            {notebooks.length === 0 && <p className="faint" style={{ padding: '0 8px' }}>No notebooks yet.{canWrite && ' Click + New to make one.'}</p>}
           </div>
         </div>
         <div className="side-foot">
+          <NavLink to="/guide" className="guide-link"><span className="q" aria-hidden>?</span>Getting started</NavLink>
           <NavLink to="/account" className="account-link">
             <span className="avatar" aria-hidden>{initials(user.full_name || user.username)}</span>
             <span><span style={{ display: 'block', color: 'var(--ink)', fontWeight: 500 }}>{displayName(user)}</span><span className="faint">Account settings</span></span>
@@ -87,7 +91,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         <div className="page"><BackButton />{children}</div>
       </main>
       {creating && <NewNotebookDialog onClose={() => setCreating(false)} />}
-      {newExp && <NewExperimentDialog onClose={() => setNewExp(false)} />}
+      {newExp && <NewExperimentDialog notebookId={hereNb} onClose={() => setNewExp(false)} />}
       {palette && <CommandPalette onClose={() => setPalette(false)} onNewExperiment={() => setNewExp(true)} onNewNotebook={() => setCreating(true)} />}
     </div>
     </BackProvider>

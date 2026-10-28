@@ -111,7 +111,8 @@ export default function Reactions() {
                   <div className="faint">{r.characterised.join(', ')}</div></td>
               </tr>
             ))}
-            {rows && !sorted.length && <tr><td colSpan={7} className="empty">No reactions match these filters.</td></tr>}
+            {rows && !sorted.length && <tr><td colSpan={7} className="empty">{params
+              ? 'No reactions match these filters.' : 'No reactions yet. Draw one in an experiment’s Reaction section and it appears here.'}</td></tr>}
           </tbody>
         </table>
       </div>

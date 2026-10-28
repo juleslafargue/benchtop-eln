@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import Modal from './Modal'
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
@@ -12,7 +13,7 @@ const GROUPS: [string, [string, string][]][] = [
     [`${M} ${isMac ? '⇧' : 'Shift'} > / <`, 'Larger or smaller text'],
     ['[ ] then space', 'Start a checklist'], ['EXP-00025', 'Typed anywhere: becomes a link with a preview'], [`${M} V`, 'Paste a picture (screenshot, photo)'],
     ['Click a picture', 'Place it, size it, or wrap text around it; drag a corner to resize'], ['Double-click a picture', 'See it full size']]],
-  ['In the spectrum viewer', [['Z / I', 'Zoom or integrate mode'], ['F', 'Fit to the window'], ['Double-click', 'Reset the zoom']]],
+  ['In the spectrum viewer', [['Z / I / R', 'Zoom, integrate or reference mode'], ['F', 'Fit to the window'], ['Double-click', 'Reset the zoom']]],
 ]
 
 /** "?" anywhere (when not typing) shows every keyboard shortcut. */
@@ -38,6 +39,7 @@ export function Shortcuts() {
           <dl>{items.map(([k, v]) => <div key={k}><dt>{k.split(' / ').map((p, i) => <span key={i}>{i > 0 && ' / '}<kbd>{p}</kbd></span>)}</dt><dd>{v}</dd></div>)}</dl>
         </section>)}
       </div>
+      <p className="faint shortcuts-guide">New to Benchtop? <Link to="/guide" onClick={() => setOpen(false)}>Getting started</Link> explains the everyday tasks in five minutes.</p>
     </Modal>
   )
 }
