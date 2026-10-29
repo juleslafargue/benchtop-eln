@@ -236,7 +236,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
         <div className="grid-wrap">
           <table className="grid rxn-grid">
             <thead><tr>
-              <th><span className="vh">Structure</span></th><th>Name</th><th>MW</th><th title="Limiting reagent">Lim.</th><th>Equiv</th><th>mmol</th>
+              <th><span className="vh">Structure</span></th><th className="name-h">Name</th><th>MW</th><th title="Limiting reagent">Lim.</th><th>Equiv</th><th>mmol</th>
               <th>Mass (mg)</th><th>Vol (mL)</th><th title="Density">ρ (g/mL)</th><th title="Concentration of a solution">Conc (M)</th><th>Purity %</th><th><span className="vh">Remove</span></th>
             </tr></thead>
             <tbody>
@@ -273,7 +273,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
         <div className="grid-wrap">
           <table className="grid rxn-grid">
             <thead><tr>
-              <th><span className="vh">Structure</span></th><th>Product</th><th>MW</th><th>Equiv</th><th title="Theoretical amount">Theor. mmol</th><th title="Theoretical mass">Theor. mass (mg)</th>
+              <th><span className="vh">Structure</span></th><th className="name-h">Product</th><th>MW</th><th>Equiv</th><th title="Theoretical amount">Theor. mmol</th><th title="Theoretical mass">Theor. mass (mg)</th>
               <th>Isolated (mg)</th><th>Purity %</th><th>Yield</th><th><span className="vh">Register or remove</span></th>
             </tr></thead>
             <tbody>

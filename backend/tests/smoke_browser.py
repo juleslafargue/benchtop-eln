@@ -738,15 +738,17 @@ def first_time_review(browser, token: str) -> list[tuple[str, str, str, str]]:
         bad("error", str(e).splitlines()[0][:160])
     ctx.close()
 
-    # the reaction table fits beside the sidebar: Yield (and every column) without scrolling sideways, numbers not cut
-    for width in (1280, 1400, 1920):
+    # the reaction table fits beside the sidebar: Yield (and every column) without scrolling sideways, numbers not cut;
+    # in the default theme and in High contrast, whose typeface is wider
+    for palette, width in [(p, w) for p in ("benchtop", "contrast") for w in (1280, 1400, 1920)]:
+        httpx.patch(B + "/api/auth/me", headers=H, json={"preferences": {"palette": palette}})
         ctx = browser.new_context(viewport={"width": width, "height": 900})
         ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
         pg = ctx.new_page()
         for eid in ("EXP-00033", "EXP-00018", "EXP-00015"):
             if eid not in exps:
                 continue
-            where["path"] = f"/experiments/{exps[eid]['id']} at {width} px"
+            where["path"] = f"/experiments/{exps[eid]['id']} at {width} px ({palette})"
             try:
                 pg.goto(f"{B}/experiments/{exps[eid]['id']}")
                 pg.wait_for_selector("table.grid td.yield", timeout=15000)
@@ -759,9 +761,17 @@ def first_time_review(browser, token: str) -> list[tuple[str, str, str, str]]:
                     return why })""")
                 if out:
                     bad("reaction table", "; ".join(out[:3]))
+                if width >= 1400 and eid == "EXP-00033" and palette == "benchtop":
+                    # the names get the table's spare width (0.29.0 at first cut "Sodium L-asc…" to give numbers room)
+                    # at 1400 px these two whole; at 1920 every name, the azide solution's and the triazole's too
+                    cut = pg.evaluate(f"""() => [...document.querySelectorAll('table.grid input.text')]
+                        .filter(i => ({width} >= 1920 || ['Sodium L-ascorbate', 'Phenylacetylene'].includes(i.value)) && i.scrollWidth > i.clientWidth + 1).map(i => i.value)""")
+                    if cut:
+                        bad("reaction table", f"names cut off: {', '.join(cut)}")
             except Exception as e:  # noqa: BLE001
                 bad("reaction table", str(e).splitlines()[0][:160])
         ctx.close()
+    httpx.patch(B + "/api/auth/me", headers=H, json={"preferences": {"palette": "benchtop"}})
     return found
 
 

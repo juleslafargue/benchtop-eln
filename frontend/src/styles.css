@@ -1426,12 +1426,20 @@ th:has(> .vh), td:has(> .vh) { position: relative; }
 @media (max-width: 700px) { .mat-overview { grid-template-columns: minmax(0, 1fr); gap: 14px; } .mat-overview .kv { grid-template-columns: 96px minmax(0, 1fr); } }
 table.rxn-grid { font-size: 13px; }
 table.rxn-grid th { white-space: normal; padding: 6px 4px; vertical-align: bottom; line-height: 1.2; }
-table.rxn-grid th:first-child, table.rxn-grid td:first-child { padding-left: 6px; }
-table.rxn-grid td { padding: 2px 2px; }
+table.rxn-grid th:first-child, table.rxn-grid td:first-child { padding-left: 4px; }
+table.rxn-grid td { padding: 2px 1px; }
+table.rxn-grid .name-cell a { font-size: 11.5px; }
 table.rxn-grid input, table.rxn-grid select { min-width: 52px; padding: 4px 3px; font-variant-numeric: tabular-nums; }
 table.rxn-grid input.lim-dot { min-width: 0; width: 14px; }
 table.rxn-grid td.calc { padding-right: 5px; font-variant-numeric: tabular-nums; }
-table.rxn-grid .struct-cell { width: 66px; }
+/* every column but the name is as narrow as its contents allow; the name takes whatever room is left */
+table.rxn-grid th, table.rxn-grid td { width: 1px; }
+table.rxn-grid th.name-h, table.rxn-grid td.name-cell, table.rxn-grid tr.group td { width: auto; }
+/* wide enough for five significant figures ("19.977", "2447.3"); the High contrast theme's typeface is wider */
+table.rxn-grid input:not(.text):not([type=radio]):not([type=checkbox]) { min-width: 50px; }
+:root[data-palette='contrast'] table.rxn-grid input:not(.text):not([type=radio]):not([type=checkbox]) { min-width: 54px; }
+table.rxn-grid .struct-cell { width: 58px; }
+table.rxn-grid .struct-cell .mol-thumb { width: 56px; height: 35px; }
 table.rxn-grid .name-cell { min-width: 104px; }
 table.rxn-grid input.text { min-width: 92px; }
 table.rxn-grid .fill-toggle { white-space: normal; line-height: 1.2; padding: 0 4px; }
