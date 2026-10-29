@@ -683,7 +683,8 @@ def first_time_review(browser, token: str) -> list[tuple[str, str, str, str]]:
         # the sign dialog: the password has the focus; the reminder lists what's empty; signing still works and sends
         # only what it sent before; the record matches its signature; closing gives the focus back to the button
         pg.click("button:has-text('Sign as author')")
-        pg.wait_for_selector("dialog.modal .sign-reminder >> text=Procedure", timeout=10000)
+        pg.wait_for_selector("dialog.modal input[type=password]", timeout=10000)
+        pg.wait_for_timeout(500)
         if pg.evaluate("document.activeElement.type") != "password":
             bad("sign dialog", "the focus isn't on the password")
         pg.keyboard.press("Escape")
@@ -693,8 +694,9 @@ def first_time_review(browser, token: str) -> list[tuple[str, str, str, str]]:
         sent: list = []
         pg.on("request", lambda r: r.url.endswith(f"/api/experiments/{exp['id']}/sign") and sent.append(r.post_data_json))
         pg.click("button:has-text('Sign as author')")
-        pg.wait_for_selector("dialog.modal .sign-reminder")
-        reminder = pg.inner_text("dialog.modal .sign-reminder")
+        pg.wait_for_selector("dialog.modal input[type=password]")
+        pg.wait_for_timeout(800)
+        reminder = pg.inner_text("dialog.modal .sign-reminder") if pg.query_selector("dialog.modal .sign-reminder") else ""
         for part in ("Aim", "Procedure", "Observations & results", "hazards not recorded"):
             if part not in reminder:
                 bad("sign reminder", f"{part!r} isn't in {reminder!r}")
@@ -722,7 +724,7 @@ def first_time_review(browser, token: str) -> list[tuple[str, str, str, str]]:
         where["path"] = "/account"
         pg.goto(B + "/account")
         pg.click("button:has-text('Change password')")
-        pg.wait_for_selector("dialog.modal >> text=Repeat password")
+        pg.wait_for_selector("dialog.modal input[autocomplete=current-password]")
         pg.fill("dialog.modal input[autocomplete=current-password]", PW)
         pg.get_by_label("New password", exact=True).fill("copper-lantern-meadow-42")
         pg.get_by_label("Repeat password", exact=True).fill("copper-lantern-meadow-24")
@@ -747,9 +749,9 @@ def first_time_review(browser, token: str) -> list[tuple[str, str, str, str]]:
             where["path"] = f"/experiments/{exps[eid]['id']} at {width} px"
             try:
                 pg.goto(f"{B}/experiments/{exps[eid]['id']}")
-                pg.wait_for_selector("table.rxn-grid td.yield", timeout=15000)
+                pg.wait_for_selector("table.grid td.yield", timeout=15000)
                 pg.wait_for_timeout(300)
-                out = pg.evaluate("""() => [...document.querySelectorAll('.grid-wrap')].filter(w => w.querySelector('table.rxn-grid')).flatMap(w => {
+                out = pg.evaluate("""() => [...document.querySelectorAll('.grid-wrap')].filter(w => w.querySelector('td.yield, input.lim-dot')).flatMap(w => {
                     const box = w.getBoundingClientRect(), why = []
                     if (w.scrollWidth > w.clientWidth + 1) why.push(`the table needs ${w.scrollWidth - w.clientWidth}px more`)
                     for (const y of w.querySelectorAll('td.yield')) if (y.getBoundingClientRect().right > box.right + 1) why.push('Yield is off to the side')
