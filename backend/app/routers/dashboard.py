@@ -107,15 +107,22 @@ def dashboard(user: CurrentUser, session: DB):
         extra = {"assigned_to_me": bool(r and r.witness_id == user.id), "witness": user_brief(session, r.witness_id) if r else None,
                  "asked_at": r.created_at.isoformat() + "Z" if r else None, "overdue": bool(r and r.due_at and r.due_at < now)}
         return {**summ(e), **extra}
+    # "awaiting" (the dashboard's count and the widget's list): only records whose author asked me, overdue first.
+    # "could_witness", listed apart: signed records nobody was asked to witness. A record whose author asked someone
+    # else is in neither (0.28 counted every signed record I could open as waiting for me).
     others = [e for e in exps if e.status == ExperimentStatus.signed and e.owner_id != user.id]
-    others.sort(key=lambda e: (not (e.id in reqs and reqs[e.id].witness_id == user.id), not (e.id in reqs and reqs[e.id].due_at and reqs[e.id].due_at < now)))
-    awaiting = [with_request(e) for e in others[:10]]
+    asked_me = [e for e in others if e.id in reqs and reqs[e.id].witness_id == user.id]
+    asked_me.sort(key=lambda e: not (reqs[e.id].due_at and reqs[e.id].due_at < now))
+    nobody_asked = [e for e in others if e.id not in reqs] if user.role != Role.viewer else []  # a read-only account can't witness
+    awaiting = [with_request(e) for e in asked_me[:10]]
+    could_witness = [with_request(e) for e in nobody_asked[:10]]
     waiting = [with_request(e) for e in [e for e in mine if e.status == ExperimentStatus.signed][:10]]
     return {
         "lists": {
             "recent": [summ(e) for e in mine[:8]],
             "open": [summ(e) for e in [e for e in mine if e.status == ExperimentStatus.open][:10]],
             "awaiting": awaiting,
+            "could_witness": could_witness,
             "waiting": waiting,
             "returned": returned[:10],
             "pinned": pinned,

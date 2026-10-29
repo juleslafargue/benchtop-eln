@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Link } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, fmt, type Material, type StoichRow } from '../api'
+import { api, fmt, greenOk, type Material, type StoichRow } from '../api'
 import { Mol, NumInput, StructureEditor } from './bits'
 import MaterialPicker from './MaterialPicker'
 import type { LookupResult } from './Safety'
@@ -290,18 +290,22 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
       )}
       {(() => {
         const m = totals.metrics || lateMetrics || {}
+        const g = greenOk(m)
         const items: [string, string, string][] = [
-          ['Atom economy', m.atom_economy_pct != null ? `${fmt(m.atom_economy_pct, 1)}%` : '', 'Product MW ÷ sum of reactant MWs (one of each reactant). Independent of yield.'],
-          ['RME', m.rme_pct != null ? `${fmt(m.rme_pct, 1)}%` : '', 'Reaction mass efficiency: isolated product ÷ mass of reactants used.'],
+          ['Atom economy', g.ae != null ? `${fmt(g.ae, 1)}%` : '', 'Product MW ÷ sum of the MWs of the rows marked Reactant (one of each). Reagents, catalysts and solvents don\'t count. Independent of yield.'],
+          ['RME', g.rme != null ? `${fmt(g.rme, 1)}%` : '', 'Reaction mass efficiency: isolated product ÷ mass of the rows marked Reactant.'],
           ['E-factor', m.e_factor != null ? fmt(m.e_factor, 1) : '', 'kg of waste per kg of product: everything in the table except the product.'],
           ['PMI', m.pmi != null ? fmt(m.pmi, 1) : '', 'Process mass intensity: total mass in ÷ mass of product (= E-factor + 1).'],
           ['Solvent', m.solvent_l_per_kg != null ? `${fmt(m.solvent_l_per_kg, 0)} L/kg` : '', 'Reaction solvent volume per kg of product.'],
         ]
         const shown = items.filter(i => i[1])
-        if (!shown.length) return null
+        const impossible = [g.aeImpossible && 'atom economy', g.rmeImpossible && 'RME'].filter(Boolean).join(' and ')
+        if (!shown.length && !impossible) return null
         return <div className="metrics" aria-label="Green chemistry metrics">
           <span className="fld-cap" style={{ alignSelf: 'center' }}>Green metrics</span>
           {shown.map(([k, v, t]) => <span key={k} title={t}>{k} <b>{v}</b></span>)}
+          {impossible && <span className="warn-text metrics-roles">{impossible[0].toUpperCase() + impossible.slice(1)} would be over 100 %.
+            Check {g.aeImpossible ? '' : 'the isolated mass and '}the roles: a co-reactant may be marked as Reagent (only Reactants count).</span>}
           <span className="faint" title={m.scope}>reaction only{m.missing_mass?.length ? ` · E-factor/PMI need a mass for ${m.missing_mass.join(', ')}` : ''}</span>
         </div>
       })()}

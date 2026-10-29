@@ -412,9 +412,16 @@ def green_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     reactants = [r for r in rows if r["role"] == "reactant"]
     inputs = [r for r in rows if r["role"] != "product"]
     out: dict[str, Any] = {"scope": "reaction only (work-up and purification not included)"}
+    # Only rows marked Reactant count in atom economy and RME. Over 100 % is impossible: usually a co-reactant
+    # (acetic anhydride, say) is marked as Reagent. Then no number is given, and "impossible" says which.
+    impossible: list[str] = []
     if prod and reactants and all(_f(r["mw"]) for r in reactants):
         # one of each reactant, as in the balanced equation for most couplings and condensations
-        out["atom_economy_pct"] = _r(100.0 * _f(prod["mw"]) / sum(_f(r["mw"]) for r in reactants), 1)
+        ae = _r(100.0 * _f(prod["mw"]) / sum(_f(r["mw"]) for r in reactants), 1)
+        if ae > 100:
+            impossible.append("atom_economy")
+        else:
+            out["atom_economy_pct"] = ae
     missing = [r["name"] or r["smiles"] or r["role"] for r in inputs if _f(r["mass_mg"]) is None]
     out["missing_mass"] = missing
     actual = _f(prod["actual_mass_mg"]) if prod else None
@@ -425,10 +432,16 @@ def green_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             out["e_factor"] = _r((inputs_mg - actual) / actual, 1)
         rmass = [_f(r["mass_mg"]) for r in reactants]
         if rmass and all(rmass):
-            out["rme_pct"] = _r(100.0 * actual / sum(rmass), 1)
+            rme = _r(100.0 * actual / sum(rmass), 1)
+            if rme > 100:
+                impossible.append("rme")
+            else:
+                out["rme_pct"] = rme
         solvent_ml = sum(_f(r["volume_ml"]) or 0 for r in rows if r["role"] == "solvent")
         if solvent_ml:
             out["solvent_l_per_kg"] = _r(solvent_ml / (actual / 1000.0), 0)  # mL/g == L/kg
+    if impossible:
+        out["impossible"] = impossible
     return out
 
 

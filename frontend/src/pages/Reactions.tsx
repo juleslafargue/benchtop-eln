@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, downloadAuthed, fmt, PURIFICATION_LABELS, type ReactionSummary } from '../api'
+import { api, downloadAuthed, fmt, greenOk, PURIFICATION_LABELS, type ReactionSummary } from '../api'
 import { StatusDot } from '../components/ExperimentList'
 import { Mol, NumInput, useDebounced } from '../components/bits'
 import { median } from '../stats'
@@ -103,9 +103,13 @@ export default function Reactions() {
                     ? <><b>{fmt(r.yield_pct, 1)}%</b><span className="yield-bar" style={{ width: Math.max(2, Math.min(100, r.yield_pct)) * 0.6 }} /></>
                     : <span className="faint">—</span>}
                   <div className="faint">{r.product}</div>
-                  {(r.metrics?.atom_economy_pct != null || r.metrics?.pmi != null) && <div className="faint" style={{ fontSize: 12 }}
-                    title="Atom economy and process mass intensity, reaction only">
-                    {[r.metrics?.atom_economy_pct != null ? `AE ${fmt(r.metrics.atom_economy_pct, 0)}%` : '', r.metrics?.pmi != null ? `PMI ${fmt(r.metrics.pmi, 0)}` : ''].filter(Boolean).join(' · ')}</div>}
+                  {(() => {
+                    const g = greenOk(r.metrics)
+                    const parts = [g.ae != null ? `AE ${fmt(g.ae, 0)}%` : g.aeImpossible ? 'AE: check roles' : '', r.metrics?.pmi != null ? `PMI ${fmt(r.metrics.pmi, 0)}` : ''].filter(Boolean)
+                    return parts.length > 0 && <div className="faint" style={{ fontSize: 12 }} title={g.aeImpossible
+                      ? 'Atom economy would be over 100 %: a co-reactant may be marked as Reagent. Only Reactants count.'
+                      : 'Atom economy (only Reactants count) and process mass intensity, reaction only'}>{parts.join(' · ')}</div>
+                  })()}
                 </td>
                 <td style={{ fontSize: 13 }}>{r.purification ? PURIFICATION_LABELS[r.purification] || r.purification : <span className="faint">—</span>}
                   <div className="faint">{r.characterised.join(', ')}</div></td>

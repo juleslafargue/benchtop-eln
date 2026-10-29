@@ -333,7 +333,16 @@ def list_experiments(
     if owner_id is not None:
         q = q.where(Experiment.owner_id == owner_id)
     q = q.order_by(Experiment.updated_at.desc(), Experiment.id.desc()).offset(offset).limit(limit)
-    return [experiment_summary(session, e) for e in session.exec(q)]
+    exps = session.exec(q).all()
+    # each one's sample codes (JL-013), so the ⌘K box finds an experiment by the code on its vial
+    from .. import samples
+    from ..models import SampleCode
+    codes: dict[int, list[str]] = {}
+    if exps:
+        for sc in session.exec(select(SampleCode).where(SampleCode.experiment_id.in_([e.id for e in exps]),
+                                                        SampleCode.retired_at == None).order_by(SampleCode.id)):  # noqa: E711
+            codes.setdefault(sc.experiment_id, []).append(samples.fmt(sc.prefix, sc.number))
+    return [{**experiment_summary(session, e), "sample_codes": codes.get(e.id, [])} for e in exps]
 
 
 def _new_entry(session, exp_id: int, kind: EntryKind, title: str, content: dict, pos: int, user: User):

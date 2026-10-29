@@ -148,14 +148,17 @@ def get_material(mat_id: int, user: CurrentUser, session: DB):
     m = get_or_404(session, Material, mat_id)
     out = material_out(session, m, with_lots=True, user=user)
     # experiments whose reaction tables reference this material
-    used = []
+    used, hidden = [], set()
     for e in session.exec(select(Entry).where(Entry.kind == EntryKind.reaction, Entry.deleted == False)):  # noqa: E712
         rows = (e.content or {}).get("rows")
         if isinstance(rows, list) and any(isinstance(r, dict) and r.get("material_id") == m.id for r in rows):
             exp = session.get(Experiment, e.experiment_id)
-            if exp and acc.can_read(exp) and exp.id not in {u["id"] for u in used}:
+            if exp and not acc.can_read(exp):
+                hidden.add(exp.id)  # counted, so "Used in" doesn't say it's in none when the lot's ledger lists them
+            elif exp and exp.id not in {u["id"] for u in used}:
                 used.append({"id": exp.id, "eid": exp.eid, "title": exp.title, "status": exp.status.value})
     out["used_in"] = used
+    out["used_in_hidden"] = len(hidden)
     return out
 
 
@@ -317,15 +320,18 @@ def reverse_transaction(tx_id: int, user: Writer, session: DB):
 
 
 @router.get("/lots/{lot_id}/transactions")
-def lot_history(lot_id: int, _: CurrentUser, session: DB):
+def lot_history(lot_id: int, user: CurrentUser, session: DB):
+    from ..access import access_for
+    acc = access_for(session, user)
     get_or_404(session, Lot, lot_id)
     txs = session.exec(select(LotTransaction).where(LotTransaction.lot_id == lot_id).order_by(LotTransaction.id.desc()))
     out = []
     for t in txs:
         exp = session.get(Experiment, t.experiment_id) if t.experiment_id else None
+        # a record this person can't open: its number only, as for a lot's source experiment (no link to a "not found")
         out.append({"id": t.id, "delta": t.delta, "balance_after": t.balance_after, "note": t.note,
                     "created_at": t.created_at.isoformat() + "Z", "user": user_brief(session, t.user_id),
-                    "experiment": {"id": exp.id, "eid": exp.eid} if exp else None})
+                    "experiment": {"id": exp.id if acc.can_read(exp) else None, "eid": exp.eid} if exp else None})
     return out
 
 

@@ -39,10 +39,16 @@ def get_record(session: Session, key: str) -> Optional[ChemSafety]:
     return session.exec(select(ChemSafety).where(ChemSafety.key == key)).first() if key else None
 
 
+def _status(cs: ChemSafety) -> str:
+    """As shown: "pending" (nothing fetched yet) only while PubChem lookups are on. With them off nothing will ever
+    arrive, so it's "unavailable" (0.28 showed "Fetching…" for ever, and wouldn't record the hazards)."""
+    return "unavailable" if cs.status == "pending" and not pubchem.enabled() else cs.status
+
+
 def brief(cs: ChemSafety | None) -> dict[str, Any] | None:
     """Compact form for lists: signal word, pictograms, flags."""
     if cs is None or not cs.data:
-        return {"status": cs.status if cs else "pending"} if cs else None
+        return {"status": _status(cs)} if cs else None
     d = cs.data
     return {"status": cs.status, "signal": d.get("signal", ""), "pictograms": [p["code"] for p in d.get("pictograms") or []],
             "flags": [f["label"] for f in d.get("flags") or []],
@@ -58,7 +64,7 @@ def summary(cs: ChemSafety | None) -> dict[str, Any] | None:
         return None
     age = (utcnow() - cs.fetched_at).total_seconds() / 86400 if cs.fetched_at else None
     return {
-        "key": cs.key, "status": cs.status, "error": cs.error, "cid": cs.cid, "title": cs.title, "data": cs.data,
+        "key": cs.key, "status": _status(cs), "error": cs.error, "cid": cs.cid, "title": cs.title, "data": cs.data,
         "fetched_at": cs.fetched_at.isoformat() + "Z" if cs.fetched_at else None,
         "age_days": round(age, 1) if age is not None else None,
         "stale": age is None or age > settings.safety_refresh_days,

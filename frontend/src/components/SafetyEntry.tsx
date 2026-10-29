@@ -74,7 +74,8 @@ export default function SafetyEntry({ content, onChange, readOnly, experimentId 
 
   return (
     <div className="risk">
-      {!readOnly && a && !a.pubchem_enabled && <p className="notice" style={{ margin: 0 }}>PubChem lookups are switched off on this server, so only data fetched earlier is shown.</p>}
+      {!readOnly && a && !a.pubchem_enabled && <p className="notice" style={{ margin: 0 }}>PubChem lookups are switched off on this server, so only hazard data
+        fetched earlier is shown. For a chemical without it, check the supplier's SDS and note what matters under Controls and PPE.</p>}
       {err && <p className="error">{err}</p>}
       {changed && <div className="sp-note warn" role="status"><span><b>{changed}</b> {readOnly ? 'This signed record keeps what was known when it was signed.' : 'Review the warnings and record them again.'}</span>
         {!readOnly && a && <button className="btn sm primary" onClick={() => set('snapshot', snapOf(a))}>Record current hazards</button>}</div>}
@@ -90,7 +91,7 @@ export default function SafetyEntry({ content, onChange, readOnly, experimentId 
           <tbody>{shown.map((c, i) => <tr key={i}>
             <td><b style={{ fontWeight: 600 }}>{c.name}</b><br /><span className="faint">{c.role}</span></td>
             <td><span className="picto-row">{c.pictograms.map(p => <Pictogram key={p} code={p} size={26} />)}<SignalWord signal={c.signal} /></span></td>
-            <td className="codes">{c.status === 'pending' ? 'Fetching…' : c.status === 'not_found' ? 'Not in PubChem: check the SDS' : c.status === 'unclassified' ? 'No GHS classification listed'
+            <td className="codes">{c.status === 'pending' ? 'Fetching…' : c.status === 'unavailable' ? 'Not available here: check the SDS' : c.status === 'not_found' ? 'Not in PubChem: check the SDS' : c.status === 'unclassified' ? 'No GHS classification listed'
               : c.status === 'error' ? 'Couldn\'t fetch: check the SDS' : c.codes.map((code, j) => <span key={code} title={c.titles[j]}>{j ? ', ' : ''}{code}</span>)}</td>
             <td className="faint" style={{ fontSize: 12.5 }}>{c.source}{c.age ? ` · ${c.age}` : ''}</td>
           </tr>)}</tbody>
@@ -117,7 +118,7 @@ export default function SafetyEntry({ content, onChange, readOnly, experimentId 
           {snap ? `Hazards recorded in this notebook ${when(snap.taken_at)}.` : 'Hazards are not yet recorded in the notebook.'} Data from PubChem (EU CLP, ECHA and other public sources), refreshed every {a?.refresh_days ?? 30} days.
           The supplier's SDS takes precedence.</span>
         {!readOnly && <span className="row" style={{ gap: 6 }}>
-          <button className="btn sm" disabled={busy} onClick={() => load(true)}>{busy ? 'Checking…' : 'Re-check PubChem'}</button>
+          {a?.pubchem_enabled !== false && <button className="btn sm" disabled={busy} onClick={() => load(true)}>{busy ? 'Checking…' : 'Re-check PubChem'}</button>}
           {a && <button className="btn sm primary" disabled={!a.chemicals.length || a.pending > 0} onClick={() => set('snapshot', snapOf(a))}>{snap ? 'Record again' : 'Record hazards in notebook'}</button>}
         </span>}
       </div>

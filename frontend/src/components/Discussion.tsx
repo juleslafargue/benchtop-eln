@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useApp } from '../App'
 import { ago, api, displayName, when, type Comment, type Entry, type User, type UserBrief } from '../api'
 import { initials } from './Layout'
+import { rankMentions } from '../mentions'
 
 let peopleCache: Promise<User[]> | null = null
 const people = () => (peopleCache ??= api.get<User[]>('/api/users').then(us => us.filter(u => u.active)).catch(() => { peopleCache = null; return [] }))
@@ -18,7 +19,7 @@ export function Composer({ placeholder, onSend, autoFocus, initial = '', submitL
   const [busy, setBusy] = useState(false)
   const ta = useRef<HTMLTextAreaElement>(null)
   useEffect(() => { people().then(setUsers) }, [])
-  const matches = menu ? users.filter(u => `${u.username} ${u.full_name}`.toLowerCase().includes(menu.q.toLowerCase())).slice(0, 6) : []
+  const matches = menu ? rankMentions(users, menu.q) : []
 
   const update = (v: string, caret: number) => {
     setText(v)

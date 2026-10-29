@@ -34,7 +34,7 @@ export default function Guide() {
   const { notebooks, canWrite, user } = useApp()
   const K = isMac ? '⌘K' : 'Ctrl K'
   const pref = user.preferences?.default_notebook_id
-  const nb = notebooks.find(n => n.id === pref) || notebooks[0]
+  const nb = notebooks.find(n => n.id === pref) || notebooks.find(n => n.owner?.id === user.id) || notebooks[0]
   useEffect(() => {  // opened at /guide#signing: go to that part
     const id = decodeURIComponent(location.hash.slice(1))
     if (id && GUIDE_SECTIONS.some(s => s.id === id)) window.setTimeout(() => jump(id), 0)
@@ -152,8 +152,9 @@ export default function Guide() {
           that went wrong can be voided with a reason; it's kept, marked as voided, never deleted.</li>
       </ol>
       <p>Comments don't change a signed record: they aren't part of what was signed, so a record can be discussed
-        during review or long after. Records waiting for your witness signature are listed first on
-        the <Link to="/">dashboard</Link>.</p>
+        during review or long after. Records whose author asked you to witness them are listed on
+        the <Link to="/">dashboard</Link> under <b>Asked to witness</b>; below them, apart, are signed records nobody
+        was asked to witness. Witness only a record you've read, and leave those whose author asked someone else.</p>
     </>,
     finding: <>
       <ul>

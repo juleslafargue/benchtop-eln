@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { api, downloadAuthed, type Attachment } from '../api'
 import { useApp } from '../App'
 import type { EntryEditorProps } from './EntryCard'
-import { hydrogensInFormula } from '../spectra'
-import { canViewSpectrum } from '../viewable'
+import { hydrogensInFormula, parseSpectrumBuffer } from '../spectra'
+import { canViewSpectrum, needsReadCheck } from '../viewable'
 import SpectrumViewer, { type SavedAnalysis } from './SpectrumViewer'
 
 function ImagePreview({ att }: { att: Attachment }) {
@@ -36,6 +36,21 @@ export default function FileEntry({ content, onChange, readOnly, experimentId, a
   }
   const ids: number[] = content.attachment_ids || []
   const mine = ids.map(id => attachments.find(a => a.id === id)).filter(Boolean) as Attachment[]
+  // a .txt/.csv/.tsv is read first: "View spectrum" only for one the viewer can show (0.28 offered it for any .txt,
+  // which then failed with "Expected two numeric columns"). Unknown (couldn't fetch it): offered, as before.
+  const [readable, setReadable] = useState<Record<number, boolean>>({})
+  const toCheck = mine.filter(a => needsReadCheck(a) && !(a.id in readable)).map(a => a.id).join(',')
+  useEffect(() => {
+    if (!toCheck) return
+    let alive = true
+    for (const a of mine.filter(x => toCheck.split(',').includes(String(x.id)))) {
+      api.raw(`/api/attachments/${a.id}?inline=true`).then(r => r.arrayBuffer())
+        .then(buf => parseSpectrumBuffer(buf, a.filename).then(() => true, () => false), () => true)
+        .then(ok => { if (alive) setReadable(m => ({ ...m, [a.id]: ok })) })
+    }
+    return () => { alive = false }
+  }, [toCheck]) // eslint-disable-line react-hooks/exhaustive-deps
+  const offerViewer = (a: Attachment) => canViewSpectrum(a) && (!needsReadCheck(a) || readable[a.id] === true)
 
   const upload = async (files: FileList | null) => {
     if (!files?.length) return
@@ -68,7 +83,7 @@ export default function FileEntry({ content, onChange, readOnly, experimentId, a
           {mine.map(a => (
             <li key={a.id} style={{ flexWrap: 'wrap' }}>
               <span className="grow"><b style={{ fontWeight: 600 }}>{a.filename}</b> <span className="faint">{size(a.size)} · sha256 {a.sha256.slice(0, 12)}…</span></span>
-              {canViewSpectrum(a) && <button className={`btn sm${viewing === a.id ? ' primary' : ''}`} onClick={() => setViewing(viewing === a.id ? null : a.id)}>{viewing === a.id ? 'Hide spectrum' : 'View spectrum'}</button>}
+              {offerViewer(a) && <button className={`btn sm${viewing === a.id ? ' primary' : ''}`} onClick={() => setViewing(viewing === a.id ? null : a.id)}>{viewing === a.id ? 'Hide spectrum' : 'View spectrum'}</button>}
               <button className="btn sm" onClick={() => downloadAuthed(`/api/attachments/${a.id}`, a.filename)}>Download</button>
               {!readOnly && a.from_instrument && <button className="btn ghost sm" onClick={() => notMine(a)} title="It isn't this experiment's: send it back to the Inbox">Not mine</button>}
               {!readOnly && !a.from_instrument && <button className="btn ghost sm" onClick={() => onChange({ ...content, attachment_ids: ids.filter(i => i !== a.id) })}>Unlink</button>}

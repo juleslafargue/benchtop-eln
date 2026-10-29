@@ -45,6 +45,7 @@ def _strings(v: Any, key: str = "") -> list[str]:
 
 
 _NUM = re.compile(r"^\d+(?:[.,]\d+)?$")
+_CODE = re.compile(r"[a-z][a-z0-9]{1,5}[-_ ]\d{1,6}", re.I)  # what a sample code looks like (see samples.py)
 
 
 def _pattern(term: str) -> re.Pattern:
@@ -141,11 +142,23 @@ def search(user: CurrentUser, session: DB, q: str = "", mode: str = "text", thre
     exps = {e.id: e for e in session.exec(visible_experiment_filter(select(Experiment), session, user)) if allowed(e)}
 
     if mode == "text":
-        terms = _terms(q)
+        from .. import samples
+        from ..models import Attachment, Lot, Notebook, SampleCode, User
+        def as_code(t: str) -> str:
+            """A sample code typed as jl-13, JL_013 or "JL 013" is searched for as it's written: jl-013."""
+            if _CODE.fullmatch(t.strip()):
+                found = samples.find(session, t)
+                if len(found) == 1:
+                    return found[0].text.lower()
+            return t.lower()
+        terms = [as_code(q)] if _CODE.fullmatch(q) and " " in q else [as_code(t) for t in _terms(q)]
         if not terms:
             return empty
         pats = [_pattern(t) for t in terms]
-        from ..models import Attachment, Lot, Notebook, User
+        codes: dict[int, list[str]] = {}
+        for sc in session.exec(select(SampleCode).where(SampleCode.retired_at == None)):  # noqa: E711
+            if sc.experiment_id in exps:
+                codes.setdefault(sc.experiment_id, []).append(samples.fmt(sc.prefix, sc.number))
         nbs = {n.id: n.name for n in session.exec(select(Notebook))}
         users = {u.id: (u.full_name or u.username) for u in session.exec(select(User))}
         sections: dict[int, list[tuple[str, str]]] = {}
@@ -165,11 +178,13 @@ def search(user: CurrentUser, session: DB, q: str = "", mode: str = "text", thre
             fields = [  # (label, text, weight)
                 ("ID", exp.eid, 10), ("Title", exp.title, 6), ("Tags", " ".join(exp.tags or []), 4),
                 ("Description", exp.description or "", 3), ("Notebook", nbs.get(exp.notebook_id, ""), 2),
-                ("Author", users.get(exp.owner_id, ""), 2),
+                ("Author", users.get(exp.owner_id, ""), 2), ("Sample code", " ".join(codes.get(eid, [])), 10),
             ] + [(t, txt, 1) for t, txt in sections.get(eid, [])] + [("File", a.filename, 2) for a in files.get(eid, [])]
             if not _has(" \n ".join(f[1] for f in fields), pats):
                 continue
             score = sum(f[2] * _count(f[1], p) for f in fields for p in pats)
+            if any(c.lower() in terms for c in codes.get(eid, [])):
+                score += 1000  # the experiment the code was handed to comes before records that only mention it
             # where it matched, for the result card: prefer a section body over metadata
             where = next(((lab, txt) for lab, txt, w in fields if w == 1 and any(p.search(txt.lower()) for p in pats)), None) \
                 or next(((lab, txt) for lab, txt, w in fields if any(p.search(txt.lower()) for p in pats)), ("", ""))

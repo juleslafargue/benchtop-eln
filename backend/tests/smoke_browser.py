@@ -15,6 +15,7 @@ On data from an older version, upgraded by this one (the oldest demo lab is 0.9.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -184,8 +185,16 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
                 over = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
                 if over > 2:
                     note("too wide", f"page is {over}px wider than the screen")
+                if label == "desktop" and (path.startswith("/experiments/") or path == "/reactions"):
+                    # 0.28 showed "AE 139%" (a co-reactant marked as Reagent); records signed back then still hold it
+                    ae = [float(x) for x in re.findall(r"(?:Atom economy|AE|RME)\s*(\d+(?:\.\d+)?)\s*%", pg.inner_text("body"))]
+                    if any(x > 100 for x in ae):
+                        note("atom economy", f"shows {max(ae)} %, which is impossible")
             ctx.close()
         problems += unsaved_typing(browser, tok["slaurent"])
+        problems += reaction_amounts(browser, tok["slaurent"])
+        problems += text_file_viewer(browser, tok["slaurent"])
+        problems += mention_pick(browser, tok["hweiss"])
         problems += demo_never_publishes(browser, tok["slaurent"])
         problems += getting_started(browser, tok["hweiss"])
         browser.close()
@@ -284,6 +293,185 @@ def unsaved_typing(browser, token: str) -> list[tuple[str, str, str, str]]:
         c.close()
     finally:
         ctx.close()
+    return found
+
+
+def reaction_amounts(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """A number typed in the reaction table stays. 0.28 and before: type 1.2 in a row's Equiv and Tab on; the Mass cell
+    got focus before the recalculated mass arrived, still showed the old mass, and leaving it saved that old mass as if
+    typed, putting Equiv back to 1.1. The server's answer is held back here until the cursor is in the Mass cell; then
+    the cell is left with Tab, with Enter, with a click elsewhere, and after typing the mass that was there back in."""
+    print("Reaction table: typing an equivalent and moving on before the recalculated amounts arrive…", flush=True)
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Reaction table check"}).json()
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Esterification amounts", "notebook_id": nb["id"]}).json()
+    rows = [{"role": "reactant", "name": "Benzoic acid", "smiles": "OC(=O)c1ccccc1", "limiting": True, "basis": "mass", "mass_mg": 122.12},
+            {"role": "reactant", "name": "Benzyl alcohol", "smiles": "OCc1ccccc1", "equiv": 1.1, "basis": "equiv"}]
+    httpx.post(f"{B}/api/experiments/{exp['id']}/entries", headers=H, json={"kind": "reaction", "title": "Amounts", "content": {"rows": rows}})
+    entry = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["title"] == "Amounts")
+    sec = f"#entry-{entry['id']}"
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    held: list = []
+    hold = {"on": False}
+    pg.route("**/api/chem/stoichiometry", lambda route: held.append(route) if hold["on"] else route.continue_())
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        pg.wait_for_selector(f"{sec} input[aria-label='equiv']")
+        cell = lambda k: pg.locator(f"{sec} input[aria-label='{k}']").nth(1)  # noqa: E731 - the second reactant's row
+        for equiv, leave in (("1.2", "Tab"), ("1.3", "Enter"), ("1.4", "click"), ("1.5", "retype")):
+            old_mass, old_mmol = cell("mass_mg").input_value(), cell("mmol").input_value()
+            hold["on"] = True
+            cell("equiv").click()
+            cell("equiv").fill(equiv)
+            pg.keyboard.press("Tab")  # to mmol
+            pg.keyboard.press("Tab")  # to Mass
+            for _ in range(50):
+                if held:
+                    break
+                pg.wait_for_timeout(100)
+            hold["on"] = False
+            if pg.evaluate("document.activeElement.getAttribute('aria-label')") != "mass_mg":
+                found.append(("reaction table", "", leave, "two Tabs from Equiv didn't reach the Mass cell"))
+            if leave == "retype":  # typed in the cell, but the same mass as was there
+                pg.keyboard.press("Control+A")
+                pg.keyboard.type(old_mass)
+            while held:
+                held.pop().continue_()
+            # the answer has arrived when the mmol cell (left alone) shows the new amount
+            pg.wait_for_function(f"document.querySelectorAll(\"{sec} input[aria-label='mmol']\")[1].value !== {old_mmol!r}", timeout=10000)
+            if leave != "retype":
+                try:
+                    pg.wait_for_function(f"document.activeElement.value !== {old_mass!r}", timeout=5000)
+                except Exception:  # noqa: BLE001
+                    found.append(("reaction table", "", leave, "the Mass cell with the cursor in it kept showing the old mass"))
+            if leave in ("Tab", "retype"):
+                pg.keyboard.press("Tab")
+            elif leave == "Enter":
+                pg.keyboard.press("Enter")
+            else:
+                pg.click(f"{sec} .rxn-scheme")
+            pg.wait_for_timeout(1500)
+            pg.wait_for_selector(f"{sec} .save-state:not(.dirty)", timeout=15000)
+            shown = cell("equiv").input_value()
+            saved = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"]
+                         if e["id"] == entry["id"])["content"]["rows"][1]
+            if shown != equiv or saved.get("equiv") != float(equiv) or saved.get("basis") != "equiv":
+                found.append(("reaction table", "", leave, f"typed Equiv {equiv}, left the Mass cell ({leave}): the table shows "
+                              f"{shown}, the record has {saved.get('equiv')} from {saved.get('basis')}"))
+            if "basis" in (cell("mass_mg").get_attribute("class") or ""):
+                found.append(("reaction table", "", leave, "the Mass cell was marked as typed in"))
+        # and a mass that is typed, in a unit, is still saved
+        cell("mass_mg").click()
+        cell("mass_mg").fill("0.25 g")
+        pg.keyboard.press("Tab")
+        pg.wait_for_timeout(1500)
+        pg.wait_for_selector(f"{sec} .save-state:not(.dirty)", timeout=15000)
+        saved = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"]
+                     if e["id"] == entry["id"])["content"]["rows"][1]
+        if saved.get("mass_mg") != 250 or saved.get("basis") != "mass" or cell("mass_mg").input_value() != "250":
+            found.append(("reaction table", "", "typed mass", f"typed 0.25 g in Mass: the record has {saved.get('mass_mg')} mg from {saved.get('basis')}"))
+    except Exception as e:  # noqa: BLE001
+        found.append(("reaction table", "", "error", str(e).splitlines()[0][:160]))
+    ctx.close()
+    return found
+
+
+def text_file_viewer(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """"View spectrum" is offered for a .txt that holds a spectrum (two columns of numbers), not for one of notes:
+    0.28 offered it for any .txt, which then failed with "Expected two numeric columns (x, y)"."""
+    print("Files: View spectrum only for a .txt that is one…", flush=True)
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Text files check"}).json()
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Notes and a trace", "notebook_id": nb["id"]}).json()
+    xy = "".join(f"{4000 - i * 10} {0.5 + (i % 7) / 10}\n" for i in range(300))
+    ids = [httpx.post(f"{B}/api/experiments/{exp['id']}/attachments", headers=H, files={"file": (name, body.encode(), "text/plain")}).json()["id"]
+           for name, body in (("weighing notes.txt", "Weighed 120 mg on balance 2.\nColour: pale yellow.\n"), ("ir-trace.txt", xy))]
+    httpx.post(f"{B}/api/experiments/{exp['id']}/entries", headers=H, json={"kind": "file", "title": "Files", "content": {"attachment_ids": ids}})
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        pg.wait_for_selector("ul.files li:has-text('ir-trace.txt') button:has-text('View spectrum')", timeout=15000)
+        pg.wait_for_load_state("networkidle")
+        if pg.query_selector("ul.files li:has-text('weighing notes.txt') button:has-text('View spectrum')"):
+            found.append(("files", "", "txt", "a .txt of notes offers View spectrum"))
+        pg.click("ul.files li:has-text('ir-trace.txt') button:has-text('View spectrum')")
+        pg.wait_for_selector("ul.files li:has-text('ir-trace.txt') canvas", timeout=15000)
+    except Exception as e:  # noqa: BLE001
+        found.append(("files", "", "error", str(e).splitlines()[0][:160]))
+    ctx.close()
+    return found
+
+
+def mention_pick(browser, admin_token: str) -> list[tuple[str, str, str, str]]:
+    """Typing @nn and Enter in a comment mentions Nadia Newbie (@nnewbie). 0.28 listed everyone whose name contained
+    the letters, in username order, so Enter picked Hannah Weiss (Ha-nn-ah)."""
+    print("Mentions: @nn picks the person whose username starts with it…", flush=True)
+    H = {"Authorization": "Bearer " + admin_token}
+    r = httpx.post(B + "/api/users", headers=H, json={"username": "nnewbie", "password": "quartz-flask-ember-92",
+                                                    "full_name": "Nadia Newbie", "role": "scientist", "must_change": False})
+    if r.status_code != 201:
+        return [("mentions", "", "account", f"couldn't make the account: {r.text[:120]}")]
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Mentions check"}).json()
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Who did the TLC?", "notebook_id": nb["id"]}).json()
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{admin_token}')")
+    pg = ctx.new_page()
+    found = []
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        box = pg.locator("textarea[aria-label='Ask a question or leave a note…']")
+        box.click()
+        box.type("Thanks @nn")
+        pg.wait_for_selector(".mention-menu li.on", timeout=10000)
+        first = pg.inner_text(".mention-menu li.on")
+        pg.keyboard.press("Enter")
+        if "@nnewbie" not in first or box.input_value() != "Thanks @nnewbie ":
+            found.append(("mentions", "", "pick", f"@nn + Enter gave {box.input_value()!r} (highlighted: {first!r})"))
+    except Exception as e:  # noqa: BLE001
+        found.append(("mentions", "", "error", str(e).splitlines()[0][:160]))
+    ctx.close()
+    found += sample_code_lookup(browser, "nnewbie", "quartz-flask-ember-92")
+    return found
+
+
+def sample_code_lookup(browser, username: str, password: str) -> list[tuple[str, str, str, str]]:
+    """The ⌘K box and Search find an experiment from the sample code on its vial (0.28 found nothing: codes weren't
+    searched). Typed as on a vial label: nn-1."""
+    print("Sample codes: ⌘K and Search find the experiment a code was handed to…", flush=True)
+    token = httpx.post(B + "/api/auth/login", json={"username": username, "password": password}).json()["token"]
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    httpx.put(B + "/api/auth/me/sample-prefix", headers=H, json={"prefix": "NN"})
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "First year"}).json()
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Recrystallisation of crude amide", "notebook_id": nb["id"]}).json()
+    code = httpx.post(f"{B}/api/experiments/{exp['id']}/samples", headers=H, json={}).json().get("code")
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    try:
+        pg.goto(B + "/")
+        pg.wait_for_selector(".palette-trigger")
+        pg.wait_for_load_state("networkidle")
+        pg.click(".palette-trigger")
+        pg.fill(".palette-input", "nn-1")
+        pg.wait_for_timeout(500)
+        top = pg.inner_text(".palette-list li[aria-selected='true']") if pg.query_selector(".palette-list li[aria-selected='true']") else ""
+        if exp["eid"] not in top:
+            found.append(("sample codes", "⌘K", "find", f"nn-1 ({code}) in ⌘K: the first result is {top!r}, not {exp['eid']}"))
+        pg.goto(f"{B}/search?q={code}")
+        pg.wait_for_selector(".search-results li, .empty-state", timeout=15000)
+        first = pg.inner_text(".search-results li") if pg.query_selector(".search-results li") else ""
+        if exp["eid"] not in first:
+            found.append(("sample codes", "/search", "find", f"searching {code}: the first result is {first[:80]!r}, not {exp['eid']}"))
+    except Exception as e:  # noqa: BLE001
+        found.append(("sample codes", "", "error", str(e).splitlines()[0][:160]))
+    ctx.close()
     return found
 
 

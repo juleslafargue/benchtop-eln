@@ -585,6 +585,7 @@ kbd { font: 11px var(--sans); border: 1px solid var(--rule-strong); border-botto
 .w-list li a { display: flex; gap: 10px; align-items: center; padding: 7px 12px; text-decoration: none; border-top: 1px solid var(--rule); font-size: 14px; }
 .w-list li:first-child a { border-top: 0; }
 .w-list li a:hover { background: var(--paper-2); }
+.w-sub { margin: 0; padding: 8px 12px 4px; border-top: 1px solid var(--rule); font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
 .w-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .w-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .w-main .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

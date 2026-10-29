@@ -11,7 +11,7 @@ export interface GhsData {
   not_classified: boolean; sources: string[]; flags: { key: string; label: string; codes: string[] }[]; url: string
 }
 export interface SafetySummary {
-  key: string; status: 'ok' | 'unclassified' | 'not_found' | 'error' | 'pending'; error: string; cid: number | null; title: string
+  key: string; status: 'ok' | 'unclassified' | 'not_found' | 'error' | 'pending' | 'unavailable'; error: string; cid: number | null; title: string
   data: GhsData | null; fetched_at: string | null; age_days: number | null; stale: boolean; refresh_days: number
   changed_at: string | null; change: { added: string[]; removed: string[]; signal_before: string; signal_after: string } | null
   change_unacknowledged: boolean
@@ -83,6 +83,8 @@ export function GhsDetails({ s, compact = false }: { s: SafetySummary; compact?:
   const d = s.data && { ...s.data, pictograms: s.data.pictograms || [], hazards: s.data.hazards || [], precautions: s.data.precautions || [],
     other_hazards: s.data.other_hazards || [], flags: s.data.flags || [], sources: s.data.sources || [] }
   if (s.status === 'pending') return <p className="faint">Fetching safety data…</p>
+  if (s.status === 'unavailable') return <p className="faint">Hazard data isn't available here: this Benchtop doesn't look chemicals up on
+    PubChem. Check the supplier's SDS{compact ? '' : ", and note anything important under Hazard notes (Edit)"}.</p>
   if (s.status === 'not_found') return <p className="faint">PubChem has no entry for this chemical. Check the supplier's SDS.</p>
   if (!d) return <p className="error">{s.error || 'No safety data yet.'}</p>
   if (d.not_classified) return <><p>No GHS hazard classification is listed in PubChem for this compound. That isn't proof it's safe: check the supplier's SDS.</p><Provenance s={s} /></>

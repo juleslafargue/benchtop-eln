@@ -5,7 +5,8 @@ import { api } from '../api'
 import Modal from './Modal'
 import { AudiencePicker, defaultAudience, type AudienceValue } from './Audience'
 
-export default function NewNotebookDialog({ onClose }: { onClose: () => void }) {
+/** With `onCreated`, the new notebook is handed back (the New experiment dialog picks it) instead of being opened. */
+export default function NewNotebookDialog({ onClose, onCreated }: { onClose: () => void; onCreated?: (id: number) => void }) {
   const { refreshNotebooks, toast, groups } = useApp()
   const nav = useNavigate()
   const [name, setName] = useState('')
@@ -18,6 +19,7 @@ export default function NewNotebookDialog({ onClose }: { onClose: () => void }) 
       const nb = await api.post<{ id: number }>('/api/notebooks', { name, description, ...aud })
       await refreshNotebooks()
       toast('Notebook created')
+      if (onCreated) { onCreated(nb.id); return }
       onClose()
       nav(`/notebooks/${nb.id}`)
     } catch (e: any) { setErr(e.message) }

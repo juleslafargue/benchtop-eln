@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ComponentProps } from 'react'
+import { lazy, Suspense, useEffect, useState, type ComponentProps } from 'react'
 import { depictUrl } from '../api'
 
 const StructureEditorLazy = lazy(() => import('./StructureEditor'))
@@ -33,7 +33,9 @@ export function parseAmount(text: string, unit?: keyof typeof UNITS): number | n
   return f === undefined ? undefined : n * f
 }
 
-/** Numeric input that keeps the user's text while focused and re-syncs from props on blur.
+/** Numeric input. While you type, it keeps your text (so "1." isn't eaten); otherwise it shows the stored value.
+ *  Leaving the box saves only what you typed in it since you entered it: a box you only passed through (Tab, Enter,
+ *  a click elsewhere) shows and keeps the value recalculated meanwhile, instead of saving the old one it showed.
  *  With `unit`, a typed unit is converted (e.g. "1.2 g" into a mg field). */
 export function NumInput({ value, onCommit, disabled, className, label, nd = 4, unit }: {
   value: number | null | undefined; onCommit: (v: number | null) => void
@@ -42,24 +44,25 @@ export function NumInput({ value, onCommit, disabled, className, label, nd = 4, 
   // tiny amounts (after a big scale-down) keep 3 significant figures instead of rounding to 0.00
   const shown = value === null || value === undefined ? ''
     : value !== 0 && Math.abs(value) < 10 ** (1 - nd) ? String(Number(Number(value).toPrecision(3))) : String(Number(Number(value).toFixed(nd)))
-  const [text, setText] = useState(shown)
-  const focused = useRef(false)
-  useEffect(() => { if (!focused.current) setText(shown) }, [shown])
+  // null: not typed in since entering the box. Otherwise the typed text, and what the box showed when typing began.
+  const [draft, setDraft] = useState<{ text: string; from: string } | null>(null)
   const commit = () => {
-    const t = text.trim()
-    if (t === shown) return
+    if (!draft) return
+    setDraft(null)
+    const t = draft.text.trim()
+    if (t === draft.from || t === shown) return  // typed, but back to what was there: nothing to save
     const n = parseAmount(t, unit)
-    if (n === undefined || (n !== null && Number.isNaN(n))) { setText(shown); return }
+    if (n === undefined || (n !== null && Number.isNaN(n))) return  // not a number: the stored value comes back
     onCommit(n)
   }
   return (
     <input
-      aria-label={label} inputMode={unit ? 'text' : 'decimal'} className={className} disabled={disabled} value={text}
+      aria-label={label} inputMode={unit ? 'text' : 'decimal'} className={className} disabled={disabled} value={draft ? draft.text : shown}
       title={unit ? `Number in ${unit}, or type a unit (e.g. ${({ mg: '1.2 g', mL: '250 µL', mmol: '0.5 mol', h: '30 min', M: '500 mM' })[unit]})` : undefined}
-      onFocus={() => { focused.current = true }}
-      onBlur={() => { focused.current = false; commit() }}
+      onFocus={() => setDraft(null)}
+      onBlur={commit}
       onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-      onChange={e => setText(e.target.value)}
+      onChange={e => { const text = e.target.value; setDraft(d => ({ text, from: d ? d.from : shown })) }}
     />
   )
 }

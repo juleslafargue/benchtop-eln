@@ -349,7 +349,7 @@ export function parseDelimited(raw: string, name: string): Spectrum {
     const a = Number(parts[0]), b = Number(parts[1])
     if (Number.isFinite(a) && Number.isFinite(b)) { xs.push(a); ys.push(b) }
   }
-  if (xs.length < 2) throw new Error('Expected two numeric columns (x, y).')
+  if (xs.length < 2) throw new Error("this isn't a spectrum Benchtop can show: it needs two columns of numbers (x and y), or JCAMP-DX. Download it to open it in another program.")
   const [xmin, xmax] = extent(xs) // no spread: a million-point file would overflow the call stack
   const ppmLike = xmin > -2 && xmax < 250 && /nmr|1h|13c|ppm/i.test(name)
   const irLike = xmin >= 350 && xmax <= 4500 && /ir|ftir/i.test(name)

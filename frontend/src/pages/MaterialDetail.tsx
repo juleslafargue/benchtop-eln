@@ -41,7 +41,8 @@ export function LotHistory({ lot, onClose }: { lot: Lot; onClose: () => void }) 
       <table className="plain"><thead><tr><th>When</th><th>Change</th><th>Balance</th><th>By</th><th>Note</th></tr></thead>
         <tbody>{tx.map(t => <tr key={t.id}><td>{when(t.created_at)}</td><td className="num">{t.delta > 0 ? '+' : ''}{fmt(t.delta, 4)} {lot.unit}</td>
           <td className="num">{fmt(t.balance_after, 4)}</td><td>{displayName(t.user)}</td>
-          <td>{t.experiment ? <Link to={`/experiments/${t.experiment.id}`}>{t.experiment.eid}</Link> : null} {t.note}</td></tr>)}</tbody></table>
+          <td>{t.experiment?.id ? <Link to={`/experiments/${t.experiment.id}`}>{t.experiment.eid}</Link>
+            : t.experiment ? <span title="A record you can't open">{t.experiment.eid}</span> : null} {t.note}</td></tr>)}</tbody></table>
     </Modal>
   )
 }
@@ -87,11 +88,11 @@ export default function MaterialDetail() {
 
       <section className="stack" style={{ gap: 8 }}>
         <div className="spread"><h2 style={{ fontSize: 17 }}>Safety (GHS)</h2>
-          <button className="btn sm" disabled={refreshing} onClick={async () => {
+          {(m.safety as SafetySummary | null)?.status !== 'unavailable' && <button className="btn sm" disabled={refreshing} onClick={async () => {
             setRefreshing(true)
             try { await api.post(`/api/materials/${m.id}/safety/refresh`, {}); await load(); toast('Safety data refreshed from PubChem') }
             catch (e: any) { toast(e.message) } finally { setRefreshing(false) }
-          }}>{refreshing ? 'Checking PubChem…' : 'Refresh now'}</button></div>
+          }}>{refreshing ? 'Checking PubChem…' : 'Refresh now'}</button>}</div>
         {(m.safety as SafetySummary | null)?.change_unacknowledged && (() => {
           const s = m.safety as SafetySummary
           return <div className="sp-note warn" role="status"><span><b>The classification changed</b> at the last check{s.change?.added?.length ? `: now includes ${s.change.added.join(', ')}` : ''}
@@ -131,7 +132,9 @@ export default function MaterialDetail() {
           <ul className="list">
             {(m.used_in || []).map(e => <li key={e.id}><Link className="list-row" style={{ gridTemplateColumns: '92px 1fr auto' }} to={`/experiments/${e.id}`}>
               <span className="eid">{e.eid}</span><span>{e.title}</span><StatusDot status={e.status} /></Link></li>)}
-            {!m.used_in?.length && <li className="empty">Not linked to any reaction tables yet.</li>}
+            {!m.used_in?.length && !m.used_in_hidden && <li className="empty">Not linked to any reaction tables yet.</li>}
+            {!!m.used_in_hidden && <li className="empty">{m.used_in?.length ? 'Also in' : 'In'} {m.used_in_hidden} record{m.used_in_hidden === 1 ? '' : 's'} you
+              can't open (in notebooks not shared with you).</li>}
           </ul>
         </div>
       </section>

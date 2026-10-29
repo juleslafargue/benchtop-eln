@@ -16,8 +16,10 @@ type ListKind = 'recent' | 'open' | 'awaiting' | 'returned' | 'pinned' | 'stale'
 type WType = 'list' | 'actions' | 'note' | 'header' | 'yield' | 'month' | 'spectra' | 'inventory'
 export interface Widget { i: string; type: WType; x: number; y: number; w: number; h: number; list?: ListKind; text?: string; title?: string }
 
+type DashItem = ExperimentSummary & { reason?: string; returned_by?: string; assigned_to_me?: boolean; overdue?: boolean; witness?: UserBrief | null; asked_at?: string | null }
 interface DashData {
-  lists: Record<ListKind, (ExperimentSummary & { reason?: string; returned_by?: string; assigned_to_me?: boolean; overdue?: boolean; witness?: UserBrief | null; asked_at?: string | null })[]>
+  // could_witness: signed records nobody was asked to witness, shown apart under "Asked to witness"
+  lists: Record<ListKind, DashItem[]> & { could_witness?: DashItem[] }
   stats: { this_month: number; last_month: number; witnessed_this_month: number; yields: YieldPoint[] }
   spectra: { id: number; filename: string; experiment_id: number; eid: string; title: string; created_at: string }[]
   stale_days?: number
@@ -28,17 +30,17 @@ interface UpdateInfo { current: string; available: { version: string; name: stri
 interface InvRow { lot_id: number; barcode: string; material_id: number; material: string; amount: number; unit: string; location: string; fraction?: number }
 
 const LIST_TITLES: Record<ListKind, string> = {
-  recent: 'Recently edited', open: 'My open experiments', awaiting: 'Waiting for my witness signature',
+  recent: 'Recently edited', open: 'My open experiments', awaiting: 'Asked to witness',
   returned: 'Returned to me', pinned: 'Pinned', stale: 'Drafts gone quiet', waiting: 'My records waiting for a witness',
 }
 const LIST_EMPTY: Record<ListKind, string> = {
-  recent: 'Nothing yet. Start an experiment.', open: 'No open experiments.', awaiting: 'Nothing waiting for you.',
+  recent: 'Nothing yet. Start an experiment.', open: 'No open experiments.', awaiting: 'Nobody has asked you to witness a record.',
   returned: 'Nothing returned. Good.', pinned: 'Pin experiments from their page to keep them here.', stale: 'No drafts left untouched for two weeks.',
   waiting: 'None of your records is waiting for a witness.',
 }
 const CATALOG: { type: WType; list?: ListKind; label: string; w: number; h: number }[] = [
   { type: 'actions', label: 'Quick actions', w: 4, h: 4 },
-  { type: 'list', list: 'awaiting', label: 'Waiting for my witness signature', w: 4, h: 4 },
+  { type: 'list', list: 'awaiting', label: 'Asked to witness', w: 4, h: 4 },
   { type: 'list', list: 'returned', label: 'Returned to me', w: 4, h: 4 },
   { type: 'list', list: 'waiting', label: 'My records waiting for a witness', w: 4, h: 4 },
   { type: 'list', list: 'open', label: 'My open experiments', w: 4, h: 5 },
@@ -63,7 +65,12 @@ export const DEFAULT_WIDGETS: Widget[] = [
   { i: 'spectra', type: 'spectra', x: 6, y: 11, w: 6, h: 5 },
 ]
 
-function ExpList({ items, empty, kind }: { items: DashData['lists'][ListKind]; empty: string; kind: ListKind }) {
+function ExpList({ items, empty, kind, also }: { items: DashItem[]; empty: string; kind: ListKind; also?: DashItem[] }) {
+  if (also?.length) return <>
+    {items.length ? <ExpList items={items} empty={empty} kind={kind} /> : <p className="w-empty">{empty}</p>}
+    <p className="w-sub">Others you could witness <span className="faint">· nobody was asked</span></p>
+    <ExpList items={also} empty="" kind={kind} />
+  </>
   if (!items.length) return <p className="w-empty">{empty}</p>
   return (
     <ul className="w-list">
@@ -75,7 +82,6 @@ function ExpList({ items, empty, kind }: { items: DashData['lists'][ListKind]; e
               : kind === 'awaiting' ? `by ${displayName(e.owner)} · ${when(e.updated_at)}`
                 : kind === 'waiting' ? (e.witness ? `asked ${displayName(e.witness)} · ${when(e.asked_at || e.updated_at)}` : `anyone can witness · ${when(e.updated_at)}`)
                   : `${e.notebook_name || ''} · ${when(e.updated_at)}`}
-              {(e.assigned_to_me && kind === 'awaiting') && <span className="w-badge">asked you</span>}
               {e.overdue && <span className="w-badge overdue">overdue</span>}</span></span>
           <StatusDot status={e.status} />
         </Link></li>
@@ -136,7 +142,7 @@ export default function Dashboard() {
   const body = (w: Widget) => {
     if (!data) return <p className="w-empty">Loading…</p>
     switch (w.type) {
-      case 'list': { const k = w.list || 'recent'; return <ExpList kind={k} items={data.lists[k]} empty={LIST_EMPTY[k]} /> }
+      case 'list': { const k = w.list || 'recent'; return <ExpList kind={k} items={data.lists[k]} empty={LIST_EMPTY[k]} also={k === 'awaiting' ? data.lists.could_witness : undefined} /> }
       case 'actions': return (
         <div className="w-actions">
           {canWrite && <button className="btn primary" onClick={() => setNewExp(true)}>New experiment <kbd>N</kbd></button>}
@@ -207,7 +213,7 @@ export default function Dashboard() {
     <div className="stack" style={{ gap: 14 }}>
       <div className="spread">
         <div><h1 className="page-title">{greeting}, {user.full_name.split(' ')[0] || user.username}</h1>
-          {data && <p className="lede" style={{ margin: 0 }}>{data.lists.awaiting.length} waiting for your witness signature · {data.lists.returned.length} returned to you · {data.lists.open.length} open</p>}</div>
+          {data && <p className="lede" style={{ margin: 0 }}>{data.lists.awaiting.length} you've been asked to witness · {data.lists.returned.length} returned to you · {data.lists.open.length} open</p>}</div>
         {!narrow && (editing ? (
           <div className="row">
             <button className="btn" onClick={() => setAdding(true)}>Add widget</button>

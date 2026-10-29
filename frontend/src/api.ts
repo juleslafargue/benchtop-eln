@@ -116,7 +116,7 @@ export interface Material {
   id: number; mid: string; name: string; kind: string; smiles: string; cas: string; formula: string
   mw: number | null; inchikey: string; density: number | null; synonyms: string; hazards: string; notes: string
   lot_count: number; available_lots: number; lots?: Lot[]; safety?: any; pubchem_cid?: number | null; source_experiment?: { id: number | null; eid: string; title: string } | null
-  used_in?: { id: number; eid: string; title: string; status: Status }[]; created_by_user?: UserBrief; created_at: string
+  used_in?: { id: number; eid: string; title: string; status: Status }[]; used_in_hidden?: number; created_by_user?: UserBrief; created_at: string
   score?: number
 }
 export interface ReactionSummary {
@@ -127,7 +127,15 @@ export interface ReactionSummary {
   purification: string | null; characterised: string[]
   metrics?: GreenMetrics
 }
-export interface GreenMetrics { scope?: string; atom_economy_pct?: number; rme_pct?: number; e_factor?: number; pmi?: number; solvent_l_per_kg?: number; missing_mass?: string[] }
+export interface GreenMetrics { scope?: string; atom_economy_pct?: number; rme_pct?: number; e_factor?: number; pmi?: number; solvent_l_per_kg?: number; missing_mass?: string[]
+  impossible?: ('atom_economy' | 'rme')[] }  // came out over 100 %, so not given (usually a co-reactant marked as Reagent)
+/** Atom economy and RME as they can be shown: over 100 % is impossible (records saved before 0.29 may hold such a number). */
+export const greenOk = (m: GreenMetrics | undefined) => ({
+  ae: m?.atom_economy_pct != null && m.atom_economy_pct <= 100 ? m.atom_economy_pct : null,
+  rme: m?.rme_pct != null && m.rme_pct <= 100 ? m.rme_pct : null,
+  aeImpossible: !!(m?.impossible?.includes('atom_economy') || (m?.atom_economy_pct ?? 0) > 100),
+  rmeImpossible: !!(m?.impossible?.includes('rme') || (m?.rme_pct ?? 0) > 100),
+})
 export const PURIFICATION_LABELS: Record<string, string> = {
   column: 'Flash column', prep_tlc: 'Prep TLC', prep_hplc: 'Prep HPLC', recrystallization: 'Recrystallisation',
   trituration: 'Trituration', distillation: 'Distillation', extraction: 'Extraction only', none: 'Used crude',

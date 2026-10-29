@@ -3,7 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { useApp } from '../App'
 import { api, type ExperimentSummary, type Material } from '../api'
 
-interface Item { key: string; group: string; label: string; hint?: string; run: () => void }
+interface Item { key: string; group: string; label: string; hint?: string; codes?: string[]; run: () => void }
+
+/** "jl-13", "JL_013" or "JL 013" written as a sample code is: JL-013. Anything else: null. */
+export function sampleCode(q: string): string | null {
+  const m = /^([a-z][a-z0-9]{1,5})[-_ ](\d{1,6})$/i.exec(q.trim())
+  return m ? `${m[1].toUpperCase()}-${m[2].replace(/^0+(?=\d)/, '').padStart(3, '0')}` : null
+}
 
 /** Subsequence match with a bonus for word starts and contiguous runs; 0 means no match. */
 function score(q: string, text: string) {
@@ -27,7 +33,7 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
   const nav = useNavigate()
   const { notebooks, user, logout, canWrite } = useApp()
   const [q, setQ] = useState('')
-  const [exps, setExps] = useState<ExperimentSummary[]>([])
+  const [exps, setExps] = useState<(ExperimentSummary & { sample_codes?: string[] })[]>([])
   const [mats, setMats] = useState<Material[]>([])
   const [sel, setSel] = useState(0)
   const list = useRef<HTMLUListElement>(null)
@@ -60,7 +66,8 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
       .map(([k, label]) => ({ key: `p-admin-${k || 'users'}`, group: 'Go to', label: `Admin → ${label}`, run: go(k ? `/admin/${k}` : '/admin') })) : []),
     { key: 'a-out', group: 'Actions', label: 'Sign out', run: () => { onClose(); logout() } },
     ...notebooks.map(n => ({ key: `n${n.id}`, group: 'Notebooks', label: n.name, hint: `${n.experiment_count} experiments`, run: go(`/notebooks/${n.id}`) })),
-    ...exps.map(e => ({ key: `e${e.id}`, group: 'Experiments', label: `${e.eid} ${e.title}`, hint: e.status, run: go(`/experiments/${e.id}`) })),
+    ...exps.map(e => ({ key: `e${e.id}`, group: 'Experiments', label: `${e.eid} ${e.title}`, codes: e.sample_codes,
+      hint: [...(e.sample_codes || []), e.status].join(' · '), run: go(`/experiments/${e.id}`) })),
     ...mats.map(m => ({ key: `m${m.id}`, group: 'Materials', label: `${m.name}${m.cas ? ` (${m.cas})` : ''}`, hint: m.mid, run: go(`/materials/${m.id}`) })),
   ], [exps, mats, notebooks, user.role, canWrite]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -68,7 +75,9 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
     // every word must match somewhere (any order): "bromo suzuki" finds "Suzuki coupling of 4-bromoanisole"
     const words = q.trim().split(/\s+/).filter(Boolean)
     const scoreAll = (text: string) => words.reduce((acc, w) => { const sc = score(w, text); return acc === 0 || sc === 0 ? 0 : acc + sc }, 1)
-    const scored = items.map(it => ({ it, s: scoreAll(`${it.label} ${it.hint || ''}`) })).filter(x => x.s > 0)
+    // a sample code (JL-013, typed any way the instruments accept) goes straight to the experiment it was handed to
+    const code = sampleCode(q)
+    const scored = items.map(it => ({ it, s: code && it.codes?.includes(code) ? 10000 : scoreAll(`${it.label} ${it.hint || ''}`) })).filter(x => x.s > 0)
     if (q) scored.sort((a, b) => b.s - a.s)
     else return scored.filter(x => x.it.group !== 'Materials').slice(0, 14).map(x => x.it) // recent work + actions when empty
     return scored.slice(0, 30).map(x => x.it)
@@ -80,7 +89,7 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
   return (
     <div className="palette-backdrop" onMouseDown={onClose}>
       <div className="palette" role="dialog" aria-label="Go to or do anything" onMouseDown={e => e.stopPropagation()}>
-        <input className="palette-input" autoFocus placeholder="Find an experiment, material or page… (try “suzuki” or a CAS number)"
+        <input className="palette-input" autoFocus placeholder="Find an experiment, material or page… (try “suzuki”, a sample code or a CAS number)"
           value={q} onChange={e => setQ(e.target.value)} aria-controls="palette-list"
           onKeyDown={e => {
             if (e.key === 'ArrowDown') { e.preventDefault(); setSel(i => Math.min(results.length - 1, i + 1)) }
