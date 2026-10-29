@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { median } from '../stats'
+import { day } from '../api'
 
 export interface YieldPoint { experiment_id: number; eid: string; title: string; date: string; yield_pct: number; product: string | null }
 
@@ -51,7 +52,7 @@ export default function YieldChart({ points }: { points: YieldPoint[] }) {
       </svg>
       {h && <div className={`ytip${y(h.yield_pct) < H * 0.35 ? ' below' : ''}${x(t[hover!]) < W * 0.2 ? ' left' : x(t[hover!]) > W * 0.8 ? ' right' : ''}`}
         style={{ left: `${x(t[hover!]) / W * 100}%`, top: `${y(h.yield_pct) / H * 100}%` }}>
-        <b>{h.yield_pct.toFixed(1)}%</b> {h.product || ''}<br /><span className="faint">{h.eid} · {new Date(h.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+        <b>{h.yield_pct.toFixed(1)}%</b> {h.product || ''}<br /><span className="faint">{h.eid} · {day(h.date)}</span>
       </div>}
     </div>
   )

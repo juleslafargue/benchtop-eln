@@ -210,6 +210,12 @@ export const when = (iso: string) => {
   return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
+/** A day, the same way everywhere: "8 Sep 2026" (in the order this browser's language uses) */
+export const day = (iso: string | number | Date) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+
+/** Lot units are stored as typed on a keyboard ("uL"); shown as written ("µL") */
+export const unitLabel = (u: string | null | undefined) => (u === 'uL' ? 'µL' : u || '')
+
 export const displayName = (u?: UserBrief | null) => (u ? u.full_name || u.username : '—')
 
 /** "just now", "5 min ago", "3 h ago", "yesterday", then a date */

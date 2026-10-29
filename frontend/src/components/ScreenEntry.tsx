@@ -58,7 +58,7 @@ export default function ScreenEntry({ content, onChange, readOnly, experimentId 
       <div className="grid-wrap">
         <table className="heat" aria-label={`${content.response} by ${content.y_name} and ${content.x_name}`}>
           <thead>
-            <tr><th />{xs.length > 0 && <th colSpan={xs.length} style={{ textAlign: 'center' }}>{content.x_name}</th>}</tr>
+            <tr><td aria-hidden="true" />{xs.length > 0 && <th colSpan={xs.length} style={{ textAlign: 'center' }}>{content.x_name}</th>}</tr>
             <tr><th style={{ textAlign: 'right' }}>{content.y_name}</th>{xs.map((x, j) => <th key={j}>{x}</th>)}</tr>
           </thead>
           <tbody>

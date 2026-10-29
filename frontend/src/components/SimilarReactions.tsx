@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, displayName, fmt, type StoichRow, type UserBrief } from '../api'
+import { day, api, displayName, fmt, type StoichRow, type UserBrief } from '../api'
 import { Mol } from './bits'
 import Modal from './Modal'
 import type { Conditions } from './ConditionsBar'
@@ -72,7 +72,7 @@ export default function SimilarReactions({ rows, experimentId, readOnly, onUse }
                 <span className="similar-score" title="How alike the two reactions are, from structures, the transformation and the reagents">{Math.round(s.score * 100)}% match</span>
               </div>
               <Link to={`/experiments/${s.experiment_id}`} className="similar-link"><b>{s.eid}</b> {s.title}</Link>
-              <div className="faint">{s.owner ? displayName(s.owner) : ''} · {new Date(s.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} · <span className={`status ${s.status}`}>{s.status}</span></div>
+              <div className="faint">{s.owner ? displayName(s.owner) : ''} · {day(s.date)} · <span className={`status ${s.status}`}>{s.status}</span></div>
               {conditionsLine(s) && <div className="similar-cond">{conditionsLine(s)}</div>}
               {s.notes && <div className="similar-notes">“{s.notes}”</div>}
             </div>

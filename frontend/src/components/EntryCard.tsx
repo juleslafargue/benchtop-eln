@@ -39,6 +39,8 @@ export interface EntryEditorProps {
   attachments: Attachment[]
   onAttachmentsChanged: () => void
   context: EntryContext
+  /** what a screen reader calls the section's main text box: its title */
+  label?: string
 }
 
 /** Experiment-level facts an editor may need, e.g. the product formula for scaling NMR integrals. */
@@ -190,11 +192,12 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
   }, [state, save])
 
   const [collapsed, setCollapsed] = useCollapsed(`entry.${entry.id}`)
-  const props: EntryEditorProps = { content, onChange: change, readOnly, experimentId, attachments, onAttachmentsChanged, context }
+  const props: EntryEditorProps = { content, onChange: change, readOnly, experimentId, attachments, onAttachmentsChanged, context, label: title || KIND_LABEL[entry.kind] }
   const stateText = { saved: `v${version}`, dirty: 'Unsaved', saving: 'Saving…', error: 'Not saved' }[state]
 
   return (
     <section className="entry" id={`entry-${entry.id}`} aria-label={title}>
+      <h2 className="vh">{title || KIND_LABEL[entry.kind]}</h2>
       <header className={`entry-head${collapsed ? ' collapsed' : ''}`}>
         <button className="entry-toggle" onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed} aria-controls={`entry-body-${entry.id}`}
           aria-label={collapsed ? `Show ${title}` : `Hide ${title}`} title={collapsed ? 'Show this section' : 'Hide this section'}>
@@ -204,16 +207,18 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
           onChange={e => { edits.current++; setTitle(e.target.value); setState('dirty') }} />
         <span className="entry-kind" title={entry.kind === 'custom' && content?.schema?.plugin ? `From the ${content.schema.plugin} plugin` : undefined}><KindIcon kind={entry.kind} />{entry.kind === 'custom' ? (content?.schema?.name || 'Plugin section') : KIND_LABEL[entry.kind]}</span>
         <span className={`save-state${state === 'dirty' || state === 'saving' ? ' dirty' : ''}${state === 'error' ? ' err' : ''}`} title={error}>{stateText}</span>
+        <span className="entry-actions">
         {onComment && <button className="btn ghost sm entry-comments" onClick={onComment} aria-label={comments ? `${comments} open comment${comments === 1 ? '' : 's'} on this section` : 'Comment on this section'}
           title="Comment on this section">
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" /></svg>
           {comments ? <span className="n">{comments}</span> : null}</button>}
-        <button className="btn ghost sm" onClick={() => setShowVersions(true)}>History</button>
+        <button className="btn ghost sm" onClick={() => setShowVersions(true)} aria-label={`History of ${title}`}>History</button>
         {!readOnly && <>
-          <button className="btn ghost sm" disabled={isFirst} onClick={() => onMove(-1)} aria-label="Move section up">↑</button>
-          <button className="btn ghost sm" disabled={isLast} onClick={() => onMove(1)} aria-label="Move section down">↓</button>
-          <button className="btn ghost sm" onClick={remove} aria-label="Remove section">Remove</button>
+          <button className="btn ghost sm" disabled={isFirst} onClick={() => onMove(-1)} aria-label={`Move ${title} up`}>↑</button>
+          <button className="btn ghost sm" disabled={isLast} onClick={() => onMove(1)} aria-label={`Move ${title} down`}>↓</button>
+          <button className="btn ghost sm" onClick={remove} aria-label={`Remove section ${title}`}>Remove</button>
         </>}
+        </span>
       </header>
       {offer && <DraftOffer d={offer} kind={entry.kind} situation={draftSituation(offer, version, readOnly)} copied={copied} onPutBack={putBack} onDiscard={discard} onCopy={copy} />}
       {state === 'error' && <p className="error" style={{ padding: '6px 16px 0' }}>{error} {error.includes('reload') && <button className="btn sm" onClick={() => location.reload()}>Reload</button>}</p>}

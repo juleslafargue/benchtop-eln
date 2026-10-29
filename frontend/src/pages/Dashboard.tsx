@@ -4,7 +4,7 @@ import GridLayout, { WidthProvider, type Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
 import { useApp } from '../App'
-import { api, displayName, fmt, when, type ExperimentSummary, type User, type UserBrief } from '../api'
+import { unitLabel, day, api, displayName, fmt, when, type ExperimentSummary, type User, type UserBrief } from '../api'
 import { StatusDot } from '../components/ExperimentList'
 import NewExperimentDialog from '../components/NewExperimentDialog'
 import NewNotebookDialog from '../components/NewNotebookDialog'
@@ -172,7 +172,7 @@ export default function Dashboard() {
       case 'spectra': return data.spectra.length ? (
         <ul className="w-list">{data.spectra.map(s => <li key={s.id}><Link to={`/experiments/${s.experiment_id}`}>
           <span className="w-main"><span className="w-title">{s.filename}</span><span className="faint">{s.eid} · {s.title}</span></span>
-          <span className="faint">{new Date(s.created_at).toLocaleDateString()}</span></Link></li>)}</ul>
+          <span className="faint">{day(s.created_at)}</span></Link></li>)}</ul>
       ) : <p className="w-empty">Drop spectra onto an experiment and they'll be listed here.</p>
       case 'inventory': {
         const { low, expiring } = data.inventory
@@ -183,13 +183,13 @@ export default function Dashboard() {
             {changes.map((c, k) => <li key={`s${k}`}><Link to={c.material_id ? `/materials/${c.material_id}` : '/materials'}>
               <span className="w-flag bad">Safety</span>
               <span className="w-main"><span className="w-title">{c.material}: classification changed</span>
-                <span className="faint">{[c.change?.added?.length ? `now ${c.change.added.join(', ')}` : '', c.change?.removed?.length ? `dropped ${c.change.removed.join(', ')}` : ''].filter(Boolean).join(' · ') || 'signal word or pictograms changed'} · {new Date(c.changed_at).toLocaleDateString()}</span></span></Link></li>)}
+                <span className="faint">{[c.change?.added?.length ? `now ${c.change.added.join(', ')}` : '', c.change?.removed?.length ? `dropped ${c.change.removed.join(', ')}` : ''].filter(Boolean).join(' · ') || 'signal word or pictograms changed'} · {day(c.changed_at)}</span></span></Link></li>)}
             {low.map(r => <li key={`l${r.lot_id}`}><Link to={`/materials/${r.material_id}`}>
               <span className="w-flag warn">Low</span>
-              <span className="w-main"><span className="w-title">{r.material}</span><span className="faint">{r.barcode} · {fmt(r.amount, 3)} {r.unit} left ({Math.round((r.fraction || 0) * 100)}%)</span></span></Link></li>)}
+              <span className="w-main"><span className="w-title">{r.material}</span><span className="faint">{r.barcode} · {fmt(r.amount, 3)} {unitLabel(r.unit)} left ({Math.round((r.fraction || 0) * 100)}%)</span></span></Link></li>)}
             {expiring.map(r => <li key={`e${r.lot_id}`}><Link to={`/materials/${r.material_id}`}>
               <span className={`w-flag ${r.expired ? 'bad' : 'warn'}`}>{r.expired ? 'Expired' : 'Expires'}</span>
-              <span className="w-main"><span className="w-title">{r.material}</span><span className="faint">{r.barcode} · {new Date(r.expires_at).toLocaleDateString()}</span></span></Link></li>)}
+              <span className="w-main"><span className="w-title">{r.material}</span><span className="faint">{r.barcode} · {day(r.expires_at)}</span></span></Link></li>)}
           </ul>
         )
       }

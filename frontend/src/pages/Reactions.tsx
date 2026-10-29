@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, downloadAuthed, fmt, greenOk, PURIFICATION_LABELS, type ReactionSummary } from '../api'
+import { day, api, downloadAuthed, fmt, greenOk, PURIFICATION_LABELS, type ReactionSummary } from '../api'
 import { StatusDot } from '../components/ExperimentList'
 import { Mol, NumInput, useDebounced } from '../components/bits'
 import { median } from '../stats'
@@ -88,7 +88,7 @@ export default function Reactions() {
                 <td style={{ minWidth: 170 }}>
                   <Link to={`/experiments/${r.experiment_id}`} style={{ fontWeight: 600 }}>{r.eid}</Link> <StatusDot status={r.status} />
                   <div style={{ fontSize: 13 }}>{r.title}</div>
-                  <div className="faint">{new Date(r.date).toLocaleDateString()}</div>
+                  <div className="faint">{day(r.date)}</div>
                 </td>
                 <td>{r.reaction_smiles ? <Mol className="rx-scheme" rxn smiles={r.reaction_smiles} w={520} h={160} /> : <span className="faint">—</span>}</td>
                 <td className="num">{r.scale_mmol !== null ? `${fmt(r.scale_mmol, 2)} mmol` : '—'}<div className="faint">{r.limiting}</div></td>

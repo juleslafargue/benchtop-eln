@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, when, type Experiment } from '../api'
+import { day, api, when, type Experiment } from '../api'
 import { doiHref, fileSize, firstEmbargoDay, parseKeywords, problems, type Creator, type PublicationInfo, type PublishDetails } from '../publish'
 import Modal from './Modal'
 
@@ -45,9 +45,9 @@ export function PublishPanel({ exp, onChange }: { exp: Experiment; onChange: () 
   const pub = exp.publication
   if (pub?.status === 'published') return (
     <div className="publish-panel">
-      <h3>Publishing</h3>
+      <h2 className="rail-h">Publishing</h2>
       <div className="published-box">
-        <div><b>Published on {pub.site}</b>{pub.published_at ? ` · ${new Date(pub.published_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}</div>
+        <div><b>Published on {pub.site}</b>{pub.published_at ? ` · ${day(pub.published_at)}` : ''}</div>
         <div>DOI <a href={doiHref(pub)} target="_blank" rel="noreferrer noopener">{pub.doi}</a></div>
         {pub.sandbox && <div className="faint">On the Zenodo sandbox, for trying things out: this DOI doesn't work outside it.</div>}
         <a className="faint" href={pub.url} target="_blank" rel="noreferrer noopener">Open the record on Zenodo</a>
@@ -65,7 +65,7 @@ export function PublishPanel({ exp, onChange }: { exp: Experiment; onChange: () 
   const done = () => { setDialog(''); onChange(); load() }
   return (
     <div className="publish-panel">
-      <h3>Publishing</h3>
+      <h2 className="rail-h">Publishing</h2>
       {!p && <>
         <p className="faint" style={{ margin: 0 }}>Make this record an open dataset on {st.site}, with a DOI to cite in a thesis or a paper's
           supporting information.</p>

@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react'
 import { NavLink, Navigate, useLocation, useParams } from 'react-router-dom'
 import { useApp } from '../App'
 import type { NmrStatus } from '../components/Prediction'
-import { api, when, type AuditEvent, type Role, type User } from '../api'
+import { api, displayName, when, type AuditEvent, type Role, type User } from '../api'
 import Modal from '../components/Modal'
 import { Plugins, Webhooks } from '../components/Integrations'
 import { ZenodoSettingsPanel } from '../components/Publish'
 import { EmailSettingsPanel, TimestampSettingsPanel, WitnessSettingsPanel } from '../components/AdminSigning'
 import InstrumentsPanel from '../components/AdminInstruments'
 import PasswordField from '../components/PasswordField'
+import { auditSentence, type AuditNames } from '../auditText'
 
 function EditUser({ u, onClose, onSaved }: { u: User; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState({ username: u.username, full_name: u.full_name, email: u.email })
@@ -32,26 +33,71 @@ function EditUser({ u, onClose, onSaved }: { u: User; onClose: () => void; onSav
   )
 }
 
-function UserForm({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function UserForm({ onClose, onSaved }: { onClose: () => void; onSaved: (added: Added) => void }) {
+  const { groups, refreshGroups } = useApp()
   const [f, setF] = useState({ username: '', full_name: '', email: '', password: '', role: 'scientist' as Role, must_change: true })
+  const [groupId, setGroupId] = useState<number | ''>(groups.length === 1 ? groups[0].id : '')
   const [err, setErr] = useState('')
   const [valid, setValid] = useState(false)
-  const save = async () => { try { await api.post('/api/users', f); onSaved() } catch (e: any) { setErr(e.message) } }
+  const [busy, setBusy] = useState(false)
+  const save = async () => {
+    setBusy(true); setErr('')
+    let made: User
+    try { made = await api.post<User>('/api/users', f) } catch (e: any) { setErr(e.message); setBusy(false); return }
+    // the account exists now: a group that couldn't be set is reported, not a reason to lose the account
+    const g = groups.find(x => x.id === groupId)
+    let problem = ''
+    if (g) {
+      try { await api.put(`/api/groups/${g.id}/members/${made.id}`, { role: 'member' }); refreshGroups() }
+      catch (e: any) { problem = `Couldn't add them to ${g.name} (${e.message}). Add them on the Groups page.` }
+    }
+    onSaved({ u: made, group: problem ? '' : g?.name || '', mustChange: f.must_change, problem })
+  }
   return (
     <Modal title="Add user" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button>
-      <button className="btn primary" disabled={!f.username || !valid} onClick={save}>Add user</button></>}>
+      <button className="btn primary" disabled={!f.username || !valid || busy} onClick={save}>{busy ? 'Adding…' : 'Add user'}</button></>}>
       <div className="form-grid">
         <label className="field">Username<input className="input" autoFocus value={f.username} onChange={e => setF({ ...f, username: e.target.value })} /></label>
         <label className="field">Full name<input className="input" value={f.full_name} onChange={e => setF({ ...f, full_name: e.target.value })} /></label>
         <label className="field">Email<input className="input" type="email" value={f.email} onChange={e => setF({ ...f, email: e.target.value })} /></label>
         <label className="field">Role<select className="select" value={f.role} onChange={e => setF({ ...f, role: e.target.value as Role })}>
           <option value="scientist">Scientist</option><option value="viewer">Viewer (read-only)</option><option value="admin">Admin</option></select></label>
+        <label className="field">Group<select className="select" value={groupId} onChange={e => setGroupId(e.target.value ? Number(e.target.value) : '')}>
+          <option value="">No group</option>
+          {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>
+          <span className="faint" style={{ fontSize: 12.5 }}>{groups.length ? "They'll see the notebooks kept for this group." : 'No groups yet: make one on the Groups page.'}</span></label>
       </div>
-      <PasswordField label="First password (give it to them privately)" value={f.password} onChange={v => setF({ ...f, password: v })} onValid={setValid}
-        username={f.username} fullName={f.full_name} email={f.email} />
+      <div style={{ marginTop: 12 }}><PasswordField label="First password (give it to them privately)" value={f.password} onChange={v => setF({ ...f, password: v })} onValid={setValid}
+        username={f.username} fullName={f.full_name} email={f.email} /></div>
       <label className="check-row" style={{ marginTop: 8 }}><input type="checkbox" checked={f.must_change} onChange={e => setF({ ...f, must_change: e.target.checked })} />
         Ask them to choose their own password when they first sign in (recommended: you know this one)</label>
       {err && <p className="error">{err}</p>}
+    </Modal>
+  )
+}
+
+interface Added { u: User; group: string; mustChange: boolean; problem: string }
+
+/** After adding someone: what to send them. The password isn't shown again: it goes to them privately. */
+function UserAdded({ u, group, mustChange, problem, onClose }: Added & { onClose: () => void }) {
+  const { toast } = useApp()
+  const address = window.location.origin
+  const message = `Your Benchtop account is ready.\nAddress: ${address}\nUsername: ${u.username}\n`
+    + (mustChange ? "I'll give you the first password separately; you'll choose your own when you first sign in." : "I'll give you the password separately.")
+  return (
+    <Modal title={`${displayName(u)} can sign in now`} onClose={onClose} footer={<>
+      <button className="btn" onClick={() => navigator.clipboard?.writeText(message).then(() => toast('Message copied')).catch(() => toast("Couldn't copy: select the text instead"))}>Copy a message for them</button>
+      <button className="btn primary" onClick={onClose}>Done</button></>}>
+      <p style={{ marginTop: 0 }}>Send them:</p>
+      <dl className="kv">
+        <dt>Address</dt><dd className="mono">{address}</dd>
+        <dt>Username</dt><dd className="mono">{u.username}</dd>
+        <dt>Password</dt><dd>the one you chose: tell them privately, not in the same message</dd>
+      </dl>
+      <p>{mustChange ? 'When they first sign in, Benchtop asks them to choose their own password before anything else.'
+        : 'They keep the password you chose; they can change it in Account settings.'}
+        {' '}{group ? `They're in ${group}, so they see its notebooks.` : "They're not in a group: add them on the Groups page so they see the group's notebooks."}</p>
+      {problem && <p className="error">{problem}</p>}
     </Modal>
   )
 }
@@ -328,8 +374,18 @@ function Users() {
   const [resetting, setResetting] = useState<User | null>(null)
   const load = () => { api.get<User[]>('/api/users').then(setUsers) }
   useEffect(load, [])
-  const toggle = async (u: User) => { await api.patch(`/api/users/${u.id}`, { active: !u.active }); load() }
-  const role = async (u: User, r: Role) => { await api.patch(`/api/users/${u.id}`, { role: r }); load() }
+  const [added, setAdded] = useState<Added | null>(null)
+  const toggle = async (u: User) => {
+    if (u.active && !confirm(`Disable ${displayName(u)} (${u.username})? They're signed out everywhere now and can't sign in until an admin enables the account again. Their records stay as they are.`)) return
+    try { await api.patch(`/api/users/${u.id}`, { active: !u.active }); toast(u.active ? `${u.username} is disabled and signed out` : `${u.username} can sign in again`) }
+    catch (e: any) { toast(e.message) }
+    load()
+  }
+  const role = async (u: User, r: Role) => {
+    try { await api.patch(`/api/users/${u.id}`, { role: r }); toast(`${u.username} is now ${r === 'admin' ? 'an admin' : r === 'viewer' ? 'a viewer (read-only)' : 'a scientist'}`) }
+    catch (e: any) { toast(e.message) }
+    load()
+  }
   const signOut = async (u: User) => {
     try { const r = await api.post<{ ended: number }>(`/api/users/${u.id}/sign-out`); toast(`Signed ${u.username} out of ${r.ended} device${r.ended === 1 ? '' : 's'}`) }
     catch (e: any) { toast(e.message) }
@@ -338,7 +394,7 @@ function Users() {
     <section className="stack" style={{ gap: 8 }}>
       <div className="spread"><h2 style={{ fontSize: 17 }}>Users</h2><button className="btn sm" onClick={() => setAdding(true)}>Add user</button></div>
       <div className="panel grid-wrap" style={{ border: 0 }}>
-        <table className="plain"><thead><tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th /></tr></thead>
+        <table className="plain"><thead><tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th><span className="vh">Actions</span></th></tr></thead>
           <tbody>{users.map(u => (
             <tr key={u.id}><td>{u.username}</td><td>{u.full_name}</td><td className="faint">{u.email}</td>
               <td><select className="select" style={{ padding: '2px 6px' }} value={u.role} disabled={u.id === me.id} onChange={e => role(u, e.target.value as Role)} aria-label={`Role for ${u.username}`}>
@@ -352,27 +408,44 @@ function Users() {
       </div>
       {editing && <EditUser u={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); toast('User updated') }} />}
       {resetting && <ResetPassword u={resetting} onClose={() => setResetting(null)} onDone={() => { setResetting(null); load(); toast(`Password reset; ${resetting.username} was signed out and will choose a new one`) }} />}
-      {adding && <UserForm onClose={() => setAdding(false)} onSaved={() => { setAdding(false); load() }} />}
+      {adding && <UserForm onClose={() => setAdding(false)} onSaved={a => { setAdding(false); load(); toast(`Added ${a.u.username}`); setAdded(a) }} />}
+      {added && <UserAdded {...added} onClose={() => setAdded(null)} />}
     </section>
   )
 }
 
 function AuditTrail() {
+  const { groups } = useApp()
   const [events, setEvents] = useState<AuditEvent[]>([])
+  const [people, setPeople] = useState<User[]>([])
   const [chain, setChain] = useState<any>(null)
-  useEffect(() => { api.get<AuditEvent[]>('/api/audit?limit=150').then(setEvents) }, [])
+  useEffect(() => { api.get<AuditEvent[]>('/api/audit?limit=150').then(setEvents); api.get<User[]>('/api/users').then(setPeople).catch(() => {}) }, [])
+  const names: AuditNames = {
+    people: Object.fromEntries(people.map(u => [u.username, displayName(u)])),
+    userIds: Object.fromEntries(people.map(u => [u.id, displayName(u)])),
+    groups: Object.fromEntries(groups.map(g => [g.id, g.name])),
+  }
   return (
     <section className="stack" style={{ gap: 8 }}>
       <div className="spread"><h2 style={{ fontSize: 17 }}>Audit trail</h2>
         <button className="btn sm" onClick={async () => setChain(await api.get('/api/audit/verify'))}>Verify hash chain</button></div>
-      <p className="faint" style={{ margin: 0 }}>Every change anyone makes, newest first (the latest 150 here). Each event is chained to the one before by its fingerprint, so an event changed or removed outside Benchtop breaks the chain: Verify hash chain checks all of them.</p>
+      <p className="faint" style={{ margin: 0 }}>Every change anyone makes, newest first (the latest 150 here). Each event is chained to the one before by its fingerprint, so an event changed or removed outside Benchtop breaks the chain: Verify hash chain checks all of them. Open Details to see an event exactly as it is stored.</p>
       {chain && <p className={chain.ok ? 'notice' : 'error'} style={chain.ok ? { borderLeftColor: 'var(--witnessed)' } : undefined}>
         {chain.ok ? `All ${chain.checked} events verified. Chain head ${chain.head.slice(0, 16)}…${chain.forks ? ` (${chain.forks} pair${chain.forks === 1 ? ' was' : 's were'} written at the same moment by an older version; both intact, not tampering.)` : ''}` : `Chain broken at event #${chain.broken_at} (${chain.reason}). Records from that point may have been altered.`}</p>}
       <div className="panel panel-pad">
-        <ul className="timeline">{events.map(e => (
-          <li key={e.id}><span className="faint">{when(e.ts)}</span><span>{e.username}</span>
-            <span><span className="act">{e.action}</span> {e.object_type} {e.object_id ?? ''} <span className="hash">{JSON.stringify(e.details).slice(0, 120)}</span></span></li>
-        ))}</ul>
+        <ul className="timeline audit-list">{events.map(e => {
+          const said = auditSentence(e, names)
+          return <li key={e.id}><span className="faint">{when(e.ts)}</span>
+            <span className="audit-what">{said ?? <><span className="act">{e.action}</span> {e.object_type} {e.object_id ?? ''} <span className="faint">by {e.username}</span></>}
+              <details className="audit-raw"><summary>Details</summary>
+                <dl className="kv">
+                  <dt>Action</dt><dd className="mono">{e.action}</dd>
+                  <dt>On</dt><dd className="mono">{e.object_type}{e.object_id != null ? ` #${e.object_id}` : ''}</dd>
+                  <dt>By</dt><dd className="mono">{e.username}</dd>
+                  <dt>Details</dt><dd className="mono">{JSON.stringify(e.details)}</dd>
+                  <dt>Event</dt><dd className="mono">#{e.id} · {e.hash}</dd>
+                </dl></details></span></li>
+        })}</ul>
       </div>
     </section>
   )

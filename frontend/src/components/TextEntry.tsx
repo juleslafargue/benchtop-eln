@@ -138,7 +138,7 @@ function stamp() {
 }
 
 /** A toolbar dropdown that closes on outside click or Escape. */
-function Menu({ label, title, children, wide, on }: { label: ReactNode; title: string; children: (close: () => void) => ReactNode; wide?: boolean; on?: boolean }) {
+function Menu({ label, title, children, wide, on, text }: { label: ReactNode; title: string; children: (close: () => void) => ReactNode; wide?: boolean; on?: boolean; text?: string }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -150,7 +150,7 @@ function Menu({ label, title, children, wide, on }: { label: ReactNode; title: s
   }, [open])
   return (
     <div className="rt-menu" ref={ref}>
-      <button type="button" className={`rt-drop${on ? ' on' : ''}`} title={title} aria-label={title} aria-haspopup="true" aria-expanded={open}
+      <button type="button" className={`rt-drop${on ? ' on' : ''}`} title={title} aria-label={text ? `${title}: ${text}` : title} aria-haspopup="true" aria-expanded={open}
         onMouseDown={e => e.preventDefault()} onClick={() => setOpen(o => !o)}>{label}<span className="rt-caret" aria-hidden>▾</span></button>
       {open && <div className={`rt-pop${wide ? ' wide' : ''}`} role="menu">{children(() => setOpen(false))}</div>}
     </div>
@@ -177,7 +177,11 @@ const ICONS = {
   alignR: 'M2 4h12M6 7h8M2 10h12M6 13h8',
 }
 
-export default function TextEntry({ content, onChange, readOnly, experimentId, onAttachmentsChanged }: EntryEditorProps) {
+// shortcut hints as this computer writes them: ⌘B on a Mac, Ctrl+B elsewhere (the editor takes either)
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+export const keys = (mac: string) => IS_MAC ? mac : mac.replace('⌘⇧', 'Ctrl+Shift+').replace('⌘', 'Ctrl+')
+
+export default function TextEntry({ content, onChange, readOnly, experimentId, onAttachmentsChanged, label }: EntryEditorProps) {
   const { toast } = useApp()
   const wrap = useRef<HTMLDivElement>(null)
   const picker = useRef<HTMLInputElement>(null)
@@ -190,12 +194,17 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
       TaskList, TaskItem.configure({ nested: true }),
       Table.configure({ resizable: false }), TableRow, TableCell, TableHeader,
       AttachmentImage, RecordLinks, PastePictures(experimentId, () => onAttachmentsChanged(), m => toast(m)),
-      Placeholder('Write here. Ctrl+, for subscript, Ctrl+. for superscript, “[ ] ” for a checklist.'),
+      Placeholder(`Write here. ${keys('⌘,')} for subscript, ${keys('⌘.')} for superscript, “[ ] ” for a checklist.`),
     ],
     content: content.html || '',
     editable: !readOnly,
+    editorProps: { attributes: { role: 'textbox', 'aria-label': label || 'Text', 'aria-multiline': 'true' } },
     onUpdate: ({ editor }) => onChange({ ...content, html: editor.getHTML() }),
   }, [readOnly])
+  // the section can be renamed while the editor stays: keep its name for screen readers in step
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) editor.setOptions({ editorProps: { attributes: { role: 'textbox', 'aria-label': label || 'Text', 'aria-multiline': 'true' } } })
+  }, [editor, label])
 
   // pick up server-normalised HTML without clobbering the caret during typing
   useEffect(() => {
@@ -204,8 +213,9 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
 
   if (!editor) return null
   const c = () => editor.chain().focus()
-  const B = ({ cmd, on, label, title, disabled }: { cmd: () => void; on?: boolean; label: ReactNode; title: string; disabled?: boolean }) => (
-    <button type="button" className={on ? 'on' : ''} title={title} aria-label={title} aria-pressed={on === undefined ? undefined : !!on} disabled={disabled}
+  // a button that shows text (x₂, H₂O) is named starting with that text, so it can be called by what it shows
+  const B = ({ cmd, on, label, title, disabled, text }: { cmd: () => void; on?: boolean; label: ReactNode; title: string; disabled?: boolean; text?: string }) => (
+    <button type="button" className={on ? 'on' : ''} title={title} aria-label={text ? `${text}: ${title}` : title} aria-pressed={on === undefined ? undefined : !!on} disabled={disabled}
       onMouseDown={e => e.preventDefault()} onClick={cmd}>{label}</button>
   )
   const Sep = () => <span className="rt-sep" aria-hidden />
@@ -230,25 +240,25 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
     <div>
       {!readOnly && (
         <div className="rt-toolbar" role="toolbar" aria-label="Formatting">
-          <B label={<Icon d={ICONS.undo} />} title="Undo (⌘Z)" cmd={() => c().undo().run()} disabled={!editor.can().undo()} />
-          <B label={<Icon d={ICONS.redo} />} title="Redo (⌘⇧Z)" cmd={() => c().redo().run()} disabled={!editor.can().redo()} />
+          <B label={<Icon d={ICONS.undo} />} title={keys('Undo (⌘Z)')} cmd={() => c().undo().run()} disabled={!editor.can().undo()} />
+          <B label={<Icon d={ICONS.redo} />} title={keys('Redo (⌘⇧Z)')} cmd={() => c().redo().run()} disabled={!editor.can().redo()} />
           <Sep />
-          <Menu label={<span className="rt-style">{style}</span>} title="Paragraph style">
+          <Menu label={<span className="rt-style">{style}</span>} title="Paragraph style" text={style}>
             {close => <>
               {([['Text', () => c().setParagraph().run(), 'p'], ['Heading', () => c().setHeading({ level: 2 }).run(), 'h2'], ['Subheading', () => c().setHeading({ level: 3 }).run(), 'h3'], ['Code', () => c().setCodeBlock().run(), 'code']] as const)
                 .map(([l, fn, cls]) => <button key={l} role="menuitem" className={`rt-item st-${cls}${style === l ? ' on' : ''}`} onMouseDown={e => e.preventDefault()} onClick={() => { fn(); close() }}>{l}</button>)}
             </>}
           </Menu>
           <Sep />
-          <B label={<b>B</b>} title="Bold (⌘B)" on={editor.isActive('bold')} cmd={() => c().toggleBold().run()} />
-          <B label={<i>I</i>} title="Italic (⌘I)" on={editor.isActive('italic')} cmd={() => c().toggleItalic().run()} />
-          <B label={<u>U</u>} title="Underline (⌘U)" on={editor.isActive('underline')} cmd={() => c().toggleUnderline().run()} />
-          <B label={<s>S</s>} title="Strikethrough (⌘⇧S)" on={editor.isActive('strike')} cmd={() => c().toggleStrike().run()} />
-          <B label="x₂" title="Subscript (⌘,)" on={editor.isActive('subscript')} cmd={() => c().toggleSubscript().run()} />
-          <B label="x²" title="Superscript (⌘.)" on={editor.isActive('superscript')} cmd={() => c().toggleSuperscript().run()} />
-          <B label={<span className="rt-formula">H₂O</span>} title="Format as chemical formula: subscripts the numbers in the selection or word (CH2Cl2 → CH₂Cl₂)" cmd={() => formatFormula(editor)} />
+          <B label={<b>B</b>} title={keys('Bold (⌘B)')} on={editor.isActive('bold')} cmd={() => c().toggleBold().run()} />
+          <B label={<i>I</i>} title={keys('Italic (⌘I)')} on={editor.isActive('italic')} cmd={() => c().toggleItalic().run()} />
+          <B label={<u>U</u>} title={keys('Underline (⌘U)')} on={editor.isActive('underline')} cmd={() => c().toggleUnderline().run()} />
+          <B label={<s>S</s>} title={keys('Strikethrough (⌘⇧S)')} on={editor.isActive('strike')} cmd={() => c().toggleStrike().run()} />
+          <B label="x₂" text="x₂" title={keys('Subscript (⌘,)')} on={editor.isActive('subscript')} cmd={() => c().toggleSubscript().run()} />
+          <B label="x²" text="x²" title={keys('Superscript (⌘.)')} on={editor.isActive('superscript')} cmd={() => c().toggleSuperscript().run()} />
+          <B label={<span className="rt-formula">H₂O</span>} text="H₂O" title="Format as chemical formula: subscripts the numbers in the selection or word (CH2Cl2 → CH₂Cl₂)" cmd={() => formatFormula(editor)} />
           <span className="rt-split">
-            <B label={<span className="rt-hl" data-hl={lastHl}>ab</span>} title={`Highlight in ${lastHl} (⌘⇧H for yellow)`} on={hlOn} cmd={() => applyHl(lastHl)} />
+            <B label={<span className="rt-hl" data-hl={lastHl}>ab</span>} text="ab" title={`Highlight in ${lastHl} (${keys('⌘⇧H')} for yellow)`} on={hlOn} cmd={() => applyHl(lastHl)} />
             <Menu title="Highlight colour" on={false} label={null}>
               {close => <div className="stack" style={{ gap: 4, padding: 2 }}>
                 <div className="rt-swatches">
@@ -260,7 +270,7 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
             </Menu>
           </span>
           <span className="rt-split rt-size" role="group" aria-label="Font size">
-            <B label="−" title="Smaller text (⌘⇧<)" cmd={() => setFontSize(editor, nextSize(size, -1))} disabled={size === FONT_SIZES[0]} />
+            <B label="−" title={keys('Smaller text (⌘⇧<)')} cmd={() => setFontSize(editor, nextSize(size, -1))} disabled={size === FONT_SIZES[0]} />
             <Menu title="Font size" on={size !== null} label={<span className="rt-size-n">{size ?? 'Size'}</span>}>
               {close => <div className="rt-size-list">
                 <button role="menuitem" className={`rt-item${size === null ? ' on' : ''}`} onMouseDown={e => e.preventDefault()} onClick={() => { setFontSize(editor, null); close() }}>Default</button>
@@ -268,9 +278,9 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
                   onClick={() => { setFontSize(editor, pt); close() }}><span style={{ fontSize: `${Math.min(pt, 20)}pt`, lineHeight: 1.1 }}>{pt}</span></button>)}
               </div>}
             </Menu>
-            <B label="+" title="Larger text (⌘⇧>)" cmd={() => setFontSize(editor, nextSize(size, 1))} disabled={size === FONT_SIZES[FONT_SIZES.length - 1]} />
+            <B label="+" title={keys('Larger text (⌘⇧>)')} cmd={() => setFontSize(editor, nextSize(size, 1))} disabled={size === FONT_SIZES[FONT_SIZES.length - 1]} />
           </span>
-          <Menu title="Text colour" on={!!colour} label={<span className="rt-colour" style={{ borderBottomColor: colour || 'currentColor' }}>A</span>}>
+          <Menu title="Text colour" text="A" on={!!colour} label={<span className="rt-colour" style={{ borderBottomColor: colour || 'currentColor' }}>A</span>}>
             {close => <div className="rt-swatches">
               {COLOURS.map(([n, v]) => <button key={n} role="menuitem" title={n} aria-label={n} className={`rt-swatch${(colour || null) === v ? ' on' : ''}`}
                 style={{ color: v || 'var(--ink)' }} onMouseDown={e => e.preventDefault()}
@@ -279,7 +289,7 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
           </Menu>
           <Sep />
           <B label={<Icon d={ICONS.bullet} />} title="Bulleted list" on={editor.isActive('bulletList')} cmd={() => c().toggleBulletList().run()} />
-          <B label="1." title="Numbered steps" on={editor.isActive('orderedList')} cmd={() => c().toggleOrderedList().run()} />
+          <B label="1." text="1." title="Numbered steps" on={editor.isActive('orderedList')} cmd={() => c().toggleOrderedList().run()} />
           <B label={<Icon d={ICONS.check} />} title="Checklist" on={editor.isActive('taskList')} cmd={() => c().toggleTaskList().run()} />
           <Menu title={picture ? 'Picture alignment' : 'Alignment'} label={<Icon d={align === 'center' ? ICONS.alignC : align === 'right' ? ICONS.alignR : ICONS.alignL} />}>
             {close => <>{([['left', 'Left', ICONS.alignL], ['center', 'Centre', ICONS.alignC], ['right', 'Right', ICONS.alignR]] as const).map(([a, l, d]) =>
@@ -316,7 +326,7 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
               </div>
             </form>}
           </Menu>
-          <Menu title="Insert symbol" label="Ω" wide>
+          <Menu title="Insert symbol" text="Ω" label="Ω" wide>
             {close => <>{SYMBOLS.map(([group, list]) => <div key={group} className="rt-symgroup">
               <div className="rt-symhead">{group}</div>
               <div className="rt-syms">{list.map(s => <button key={s} role="menuitem" title={`Insert ${s}`} onMouseDown={e => e.preventDefault()}

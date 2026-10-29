@@ -25,8 +25,8 @@ export default function BenchPage() {
   const load = useCallback(() => api.get<Experiment>(`/api/experiments/${id}`).then(e => { setExp(e); setErr('') }).catch(e => setErr(e.message)), [id])
   useEffect(() => { load(); const iv = setInterval(load, 30_000); return () => clearInterval(iv) }, [load])
   useEffect(() => { loadAttachmentImages(logRef.current) })
-  if (err) return <div className="bench-page"><p className="error">{err}</p><Link to="/">Go to Benchtop</Link></div>
-  if (!exp) return <div className="bench-page"><p className="faint">Loading…</p></div>
+  if (err) return <main className="bench-page"><p className="error">{err}</p><Link to="/">Go to Benchtop</Link></main>
+  if (!exp) return <main className="bench-page"><p className="faint">Loading…</p></main>
 
   const editable = canWrite && exp.status === 'open' && (exp.can_edit ?? exp.owner.id === user.id)
   const log = exp.entries.find(e => e.kind === 'text' && (e.content?.bench_log || e.title === 'Bench log'))
@@ -59,7 +59,7 @@ export default function BenchPage() {
   }
 
   return (
-    <div className="bench-page">
+    <main className="bench-page">
       <header className="bench-head">
         <div className="faint">{exp.eid} · {displayName(exp.owner)}</div>
         <h1>{exp.title}</h1>
@@ -103,7 +103,7 @@ export default function BenchPage() {
       </>}
 
       {rx && <section className="bench-card">
-        <div className="fld-cap">Reaction</div>
+        <h2 className="fld-cap">Reaction</h2>
         <table className="bench-rx"><colgroup><col /><col className="c-eq" /><col className="c-amt" /></colgroup><tbody>
           {rx.rows.map((r: any, i: number) => <tr key={i} className={r.role === 'product' ? 'faint' : ''}>
             <td>{r.name || r.formula}</td><td className="num">{r.equiv != null && r.role !== 'solvent' && r.role !== 'product' ? `${fmt(r.equiv, 2)} eq` : ''}</td>
@@ -114,11 +114,11 @@ export default function BenchPage() {
       </section>}
 
       <section className="bench-card">
-        <div className="fld-cap">Bench log</div>
+        <h2 className="fld-cap">Bench log</h2>
         {log?.content?.html ? <div ref={logRef} className="prose bench-log" dangerouslySetInnerHTML={{ __html: log.content.html }} />
           : <p className="faint">Nothing logged yet.</p>}
       </section>
       <p className="faint" style={{ textAlign: 'center', fontSize: 12 }}>Signed in as {displayName(user)} on this phone · <Link to="/account">Account</Link></p>
-    </div>
+    </main>
   )
 }

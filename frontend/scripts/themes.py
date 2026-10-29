@@ -11,7 +11,7 @@ KEYS = ["ground", "paper", "paper-2", "ink", "ink-2", "ink-3", "rule", "rule-str
 
 THEMES = {
     "benchtop": {  # the default, as in styles.css (here only for the contrast check)
-        "light": dict(ground="#e6ecf1", paper="#fbfcfd", **{"paper-2": "#f2f5f8"}, ink="#17212c", **{"ink-2": "#4b5b6b", "ink-3": "#65727f"},
+        "light": dict(ground="#e6ecf1", paper="#fbfcfd", **{"paper-2": "#f2f5f8"}, ink="#17212c", **{"ink-2": "#4b5b6b", "ink-3": "#5d6a77"},
                       rule="#cbd5de", **{"rule-strong": "#9fb0bf"}, accent="#b8336a", **{"accent-ink": "#ffffff", "accent-soft": "#f6e3eb"},
                       open="#5b6b7b", signed="#9a6410", witnessed="#1d7466", voided="#8b4a4a", danger="#b3261e", focus="#2f6fdf"),
         "dark": dict(ground="#10171e", paper="#172029", **{"paper-2": "#1d2833"}, ink="#e4ebf1", **{"ink-2": "#a7b5c2", "ink-3": "#8293a2"},
@@ -20,9 +20,9 @@ THEMES = {
     },
     # a bound lab notebook: pale grid paper, blue-black ink, the red margin rule (dark: the navy cover)
     "notebook": {
-        "light": dict(ground="#e7ece6", paper="#fdfdfb", **{"paper-2": "#f1f4ef"}, ink="#1a2240", **{"ink-2": "#434e6c", "ink-3": "#68728c"},
+        "light": dict(ground="#e7ece6", paper="#fdfdfb", **{"paper-2": "#f1f4ef"}, ink="#1a2240", **{"ink-2": "#434e6c", "ink-3": "#5f6883"},
                       rule="#cdd5d8", **{"rule-strong": "#98a5b3"}, accent="#24479e", **{"accent-ink": "#ffffff", "accent-soft": "#e0e7f7"},
-                      open="#5a6480", signed="#9a6410", witnessed="#1f6f5e", voided="#8b4a4a", danger="#b3261e", focus="#24479e",
+                      open="#5a6480", signed="#935f0f", witnessed="#1f6f5e", voided="#8b4a4a", danger="#b3261e", focus="#24479e",
                       grid="rgba(84, 128, 176, .16)", margin="#d9534f"),
         "dark": dict(ground="#121828", paper="#1a2134", **{"paper-2": "#20283d"}, ink="#e7eaf3", **{"ink-2": "#aab3c8", "ink-3": "#8590a8"},
                      rule="#2d3750", **{"rule-strong": "#48546f"}, accent="#91aaff", **{"accent-ink": "#0d1430", "accent-soft": "#232f55"},
@@ -31,7 +31,7 @@ THEMES = {
     },
     # a fume hood: brushed steel, graphite, and the yellow of the sash label
     "steel": {
-        "light": dict(ground="#dee1e4", paper="#fafbfb", **{"paper-2": "#eef0f2"}, ink="#1b1f23", **{"ink-2": "#484f57", "ink-3": "#6a737c"},
+        "light": dict(ground="#dee1e4", paper="#fafbfb", **{"paper-2": "#eef0f2"}, ink="#1b1f23", **{"ink-2": "#484f57", "ink-3": "#5b636b"},
                       rule="#c6cbd0", **{"rule-strong": "#959da6"}, accent="#22282e", **{"accent-ink": "#ffd23f", "accent-soft": "#f6edc4"},
                       open="#5c656e", signed="#9a5a0c", witnessed="#1d6b5f", voided="#8b4a4a", danger="#b3261e", focus="#1f6fd1"),
         "dark": dict(ground="#101214", paper="#171a1d", **{"paper-2": "#1e2226"}, ink="#e6e8ea", **{"ink-2": "#a9b0b7", "ink-3": "#848c94"},
@@ -40,9 +40,9 @@ THEMES = {
     },
     # litmus: violet paper (dark: the same violet, a shade from black)
     "litmus": {
-        "light": dict(ground="#ebe7f1", paper="#fdfcfe", **{"paper-2": "#f4f1f8"}, ink="#221a33", **{"ink-2": "#524868", "ink-3": "#776e8c"},
+        "light": dict(ground="#ebe7f1", paper="#fdfcfe", **{"paper-2": "#f4f1f8"}, ink="#221a33", **{"ink-2": "#524868", "ink-3": "#6c6380"},
                       rule="#d6cfe2", **{"rule-strong": "#a89cbd"}, accent="#6a3aa8", **{"accent-ink": "#ffffff", "accent-soft": "#ece2f8"},
-                      open="#635a76", signed="#9a6410", witnessed="#1d6f63", voided="#9a3f4f", danger="#b3261e", focus="#6a3aa8"),
+                      open="#635a76", signed="#935f0f", witnessed="#1d6f63", voided="#9a3f4f", danger="#b3261e", focus="#6a3aa8"),
         "dark": dict(ground="#16121f", paper="#1d1829", **{"paper-2": "#251f34"}, ink="#ece8f4", **{"ink-2": "#b3aac6", "ink-3": "#8f86a4"},
                      rule="#322a44", **{"rule-strong": "#5b5075"}, accent="#c3a3ff", **{"accent-ink": "#1c0f33", "accent-soft": "#33264d"},
                      open="#aea5c0", signed="#e2a852", witnessed="#55c3ad", voided="#e398a6", danger="#ff8a80", focus="#c3a3ff"),
@@ -82,10 +82,11 @@ def ratio(a: str, b: str) -> float:
     return (la + 0.05) / (lb + 0.05)
 
 
-# (foreground, background, minimum): body text 7 (contrast theme) / 4.5, secondary text 4.5, statuses and accents 3+
-CHECKS = [("ink", "paper", 7), ("ink-2", "paper", 4.5), ("ink-3", "paper", 4.5), ("ink-3", "ground", 3.5), ("ink", "ground", 7),
+# (foreground, background, minimum): body text 7 (contrast theme) / 4.5, secondary text 4.5 (on the page, panels and
+# the sidebar alike: axe-core checks every one), statuses and accents 3+
+CHECKS = [("ink", "paper", 7), ("ink-2", "paper", 4.5), ("ink-3", "paper", 4.5), ("ink-3", "ground", 4.5), ("ink-3", "paper-2", 4.5), ("ink", "ground", 7),
           ("accent", "paper", 4.5), ("accent-ink", "accent", 4.5), ("ink", "accent-soft", 7), ("open", "paper", 4.5),
-          ("signed", "paper", 4.5), ("witnessed", "paper", 4.5), ("voided", "paper", 4.5), ("danger", "paper", 4.5),
+          ("signed", "paper", 4.5), ("signed", "paper-2", 4.5), ("witnessed", "paper", 4.5), ("voided", "paper", 4.5), ("danger", "paper", 4.5),
           ("focus", "paper", 3), ("rule-strong", "paper", 2)]
 
 

@@ -3,7 +3,7 @@ import { useApp } from '../App'
 import { applyOverrides, assign, groupLabel, predMult, PredictionPanel, usePrediction, type ConfirmedAssignments, type ObservedSignal, type Prediction } from './Prediction'
 import { baselineCorrect, phased } from '../fid'
 import Modal from './Modal'
-import { api } from '../api'
+import { day, api } from '../api'
 import {
   analyzeMultiplet, autoAnalyse1H, autoPeaks13C, findResidual, formatSignal, integrate, lowerBound, MULTIPLICITIES,
   parseSpectrumBuffer, pickPeaks,
@@ -808,7 +808,7 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
                 {isProton(spec) && <><th>Mult.</th><th>J (Hz)</th></>}
                 <th title="Type a value to make that signal the reference">{isProton(spec) ? 'H' : 'Integral'}</th>
                 {pred && nucleus === '1H' && <th title="Atoms (numbered as in the structure below) whose predicted shift falls in this signal">Assigned to</th>}
-                <th />
+                <th><span className="vh">Remove</span></th>
               </tr></thead>
               <tbody>
                 {order.map(({ r, i }) => {
@@ -882,7 +882,7 @@ function OverlayPicker({ near, exclude, onPick, onClose }: { near: number; exclu
         {(items || []).filter(i => !exclude.includes(i.id)).map(i => (
           <li key={i.id}><button className="list-row btn ghost" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 12, alignItems: 'center', width: '100%', textAlign: 'left', borderRadius: 0 }} onClick={() => onPick(i)}>
             <span style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}><b style={{ fontWeight: 600 }}>{i.filename}</b><span className="faint" style={{ display: 'block' }}>{i.eid} · {i.title}</span></span>
-            <span className="faint">{i.same_experiment ? 'this experiment' : new Date(i.created_at).toLocaleDateString()}</span>
+            <span className="faint">{i.same_experiment ? 'this experiment' : day(i.created_at)}</span>
           </button></li>
         ))}
         {items && !items.filter(i => !exclude.includes(i.id)).length && <li className="empty">No other spectra yet. Drop more files onto any experiment to compare them here.</li>}

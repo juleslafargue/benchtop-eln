@@ -4,7 +4,7 @@ import PasswordField from '../components/PasswordField'
 import Logo from '../components/Logo'
 
 function Setup({ onLogin }: { onLogin: (token: string, user: User) => void }) {
-  const [f, setF] = useState({ full_name: '', username: '', email: '', password: '', confirm: '', load_demo: true })
+  const [f, setF] = useState({ full_name: '', username: '', email: '', password: '', load_demo: true })
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [valid, setValid] = useState(false)
@@ -14,7 +14,6 @@ function Setup({ onLogin }: { onLogin: (token: string, user: User) => void }) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (f.password !== f.confirm) { setErr('The two passwords are different'); return }
     setBusy(true); setErr('')
     try {
       const r = await api.post<{ token: string; user: User }>('/api/setup', { ...f, username: f.username || suggested })
@@ -23,7 +22,7 @@ function Setup({ onLogin }: { onLogin: (token: string, user: User) => void }) {
   }
 
   return (
-    <div className="login">
+    <main className="login">
       <form className="panel panel-pad login-card stack" style={{ width: 'min(460px, 100%)' }} onSubmit={submit}>
         <Logo size={40} />
         <div>
@@ -37,8 +36,7 @@ function Setup({ onLogin }: { onLogin: (token: string, user: User) => void }) {
           <label className="field">Email (optional)<input className="input" type="email" autoComplete="email" value={f.email} onChange={set('email')} /></label>
         </div>
         <PasswordField label="Password" value={f.password} onChange={v => setF({ ...f, password: v })} onValid={setValid}
-          username={f.username || suggested} fullName={f.full_name} email={f.email} />
-        <label className="field">Repeat password<input className="input" type="password" autoComplete="new-password" value={f.confirm} onChange={set('confirm')} /></label>
+          username={f.username || suggested} fullName={f.full_name} email={f.email} repeat />
         <label className="check-row">
           <input type="checkbox" checked={f.load_demo} onChange={set('load_demo')} />
           Add a demo notebook to explore (two worked Suzuki couplings, sample reagents, an NMR spectrum)
@@ -48,7 +46,7 @@ function Setup({ onLogin }: { onLogin: (token: string, user: User) => void }) {
           style={{ justifyContent: 'center' }}>{busy ? (f.load_demo ? 'Setting up and adding the demo…' : 'Setting up…') : 'Create account'}</button>
         <p className="faint" style={{ margin: 0 }}>The built-in “admin” login is switched off once your account exists.</p>
       </form>
-    </div>
+    </main>
   )
 }
 
@@ -88,7 +86,7 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: User
   if (needsSetup === null) return null
   if (needsSetup) return <Setup onLogin={onLogin} />
   return (
-    <div className="login">
+    <main className="login">
       {demo?.enabled && <div className="panel panel-pad demo-panel">
         <div><span className="demo-badge">Demo</span><h2>The Ruiz lab (demo data)</h2>
           <p className="faint" style={{ margin: '2px 0 0' }}>Three months of a fictional research group's work. Sign in as anyone to see Benchtop from their side; each sees only what their groups and shares allow.</p></div>
@@ -119,7 +117,10 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: User
         {err && <p className="error" role="alert">{err}</p>}
         {(!sso?.enabled || sso.password_login || showPw) &&
           <button className={`btn${sso?.enabled ? '' : ' primary'}`} disabled={busy || !username || !password} style={{ justifyContent: 'center' }}>Sign in</button>}
+        <p className="faint" style={{ margin: 0, fontSize: 13 }}>{sso?.enabled
+          ? <>Forgotten your password? For {sso.name}, use its usual password reset; for a Benchtop password, ask your Benchtop admin to reset it.</>
+          : 'Forgotten your password? Ask your Benchtop admin to reset it.'}</p>
       </form>
-    </div>
+    </main>
   )
 }

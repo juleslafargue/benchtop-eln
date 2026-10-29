@@ -79,6 +79,18 @@ test('the wording is British and plain', () => {
   assert.ok(t.length < 14000, `${t.length} characters: too long to read in five minutes`)
 })
 
+test('it covers what a first-time user tripped over (0.29 review)', () => {
+  const t = text(render())
+  assert.match(t, /making a notebook of your own, and choose who can open it/, 'make your own notebook first')
+  assert.match(t, /ask your Benchtop admin to add you to it/, 'group notebooks need the group')
+  assert.match(t, /can't be deleted, only voided, so check which notebook/, 'check the notebook before Create')
+  assert.match(t, /Only Reactants count in the atom economy/, 'Reactant vs Reagent')
+  assert.match(t, /type one amount in each row/, 'one of mass, volume, mmol or equiv')
+  assert.match(t, /Check the highlighted name before you press Enter/, '@mentions')
+  assert.match(t, /sample code on a vial/, 'finding an experiment from its sample code')
+  assert.match(t, /Witness only a record you've read/, 'witness only what you were asked to and have read')
+})
+
 test('it says only what the app does: the shortcuts it names exist', () => {
   const t = text(render())
   const shortcuts = src('components/Shortcuts.tsx')

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useApp } from '../App'
-import { ago, api, when } from '../api'
+import { day, ago, api, when } from '../api'
 import Modal from './Modal'
 import { resetPluginSections } from './AddSection'
 import { resetFileReaders } from '../spectra'
@@ -44,7 +44,7 @@ export function ApiTokens() {
             <b style={{ fontWeight: 600 }}>{t.name}</b>
             <span className={`tag${t.scope === 'write' ? ' lead' : ''}`} style={{ marginLeft: 8 }}>{t.scope === 'write' ? 'read & write' : 'read only'}</span>
             {t.expired && <span className="tag warn-tag" style={{ marginLeft: 6 }}>expired</span>}
-            <div className="faint"><code>{t.prefix}…</code> · made {when(t.created_at)} · {t.expires_at ? `${t.expired ? 'expired' : 'expires'} ${new Date(t.expires_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` : 'never expires'}
+            <div className="faint"><code>{t.prefix}…</code> · made {when(t.created_at)} · {t.expires_at ? `${t.expired ? 'expired' : 'expires'} ${day(t.expires_at)}` : 'never expires'}
               {' · '}{t.last_used_at ? `last used ${ago(t.last_used_at)}${t.last_used_ip ? ` from ${t.last_used_ip}` : ''}` : 'never used'}</div>
           </div>
           <button className="btn sm" onClick={() => revoke(t)}>Revoke</button>

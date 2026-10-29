@@ -26,8 +26,8 @@ export default function PurificationEntry(props: EntryEditorProps) {
         {chrom && text('eluent', 'Eluent', 'e.g. 0→20% EtOAc/hexanes')}
         {content.method === 'recrystallization' && text('eluent', 'Solvent', 'e.g. hot EtOH')}
         {content.method === 'distillation' && text('eluent', 'Conditions', 'e.g. 85 °C at 12 mbar')}
-        {text('rf', 'Rf', '0.45', 70)}
-        {text('rf_eluent', 'TLC eluent', '10% EtOAc/hexanes')}
+        {text('rf', 'Rf', 'e.g. 0.45', 88)}
+        {text('rf_eluent', 'TLC eluent', 'e.g. 10% EtOAc/hexanes')}
         <label className="cond">
           <span>Isolated</span>
           <span className="cond-in"><NumInput label="Isolated mass in mg" className="input" disabled={readOnly} value={content.isolated_mg ?? null} nd={2} unit="mg"
@@ -35,7 +35,7 @@ export default function PurificationEntry(props: EntryEditorProps) {
         </label>
         {text('appearance', 'Appearance', 'e.g. white solid')}
       </div>
-      <TextEntry {...props} content={{ html: content.notes_html || '' }} onChange={c => set({ notes_html: c.html })} />
+      <TextEntry {...props} label={`${props.label || 'Work-up'}: notes`} content={{ html: content.notes_html || '' }} onChange={c => set({ notes_html: c.html })} />
     </div>
   )
 }

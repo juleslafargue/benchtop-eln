@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, displayName, type Experiment, type WitnessCandidate } from '../api'
 import Modal from './Modal'
+import { reminderText } from '../signCheck'
 
 export type SignAction = 'sign' | 'witness' | 'reject' | 'withdraw' | 'void'
 
@@ -34,6 +35,16 @@ export default function SignDialog({ exp, action, onDone, onClose }: {
     }).catch(() => setPeople([]))
   }, [action, exp.id])
   const chosen = people?.find(p => p.id === witnessId)
+  // a reminder only: it doesn't stop signing, and nothing of it is sent (the server alone decides what a signature covers).
+  // Read afresh: the page's copy doesn't follow what was typed into the sections since it opened.
+  const [empty, setEmpty] = useState('')
+  useEffect(() => {
+    if (action !== 'sign') return
+    let live = true
+    setEmpty(reminderText(exp.entries))
+    api.get<Experiment>(`/api/experiments/${exp.id}`).then(x => { if (live) setEmpty(reminderText(x.entries)) }).catch(() => {})
+    return () => { live = false }
+  }, [action, exp.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = async () => {
     setBusy(true); setErr('')
@@ -53,6 +64,8 @@ export default function SignDialog({ exp, action, onDone, onClose }: {
       <form className="stack" onSubmit={e => { e.preventDefault(); go() }}>
         <p style={{ margin: 0 }}><b>{exp.eid}</b> {exp.title}</p>
         <p className="notice" style={{ margin: 0 }}>{c.meaning}</p>
+        {action === 'sign' && empty && <p className="sign-reminder" role="note"><b>Still empty:</b> {empty}. <span className="faint">You can sign anyway; once signed,
+          later results go in a follow-up.</span></p>}
         {action === 'sign' && people && <label className="field">Ask someone to witness it
           <select className="select" value={witnessId} onChange={e => setWitnessId(e.target.value ? Number(e.target.value) : '')}>
             <option value="">No one in particular (anyone with access can witness)</option>

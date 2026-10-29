@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { Extension, Node, mergeAttributes } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
-import { api, attachmentUrl, type Attachment } from '../api'
+import { day, api, attachmentUrl, type Attachment } from '../api'
 import { Mol } from './bits'
 
 /** How a picture sits in the text, as in Word or Google Docs. Stored on the <img> as data-align and data-width. */
@@ -286,7 +286,7 @@ export function RefPreview({ root }: { root: React.RefObject<HTMLElement> }) {
             <div className="faint" style={{ fontSize: 12 }}>{info.code}{info.status ? <> · <span className={`status ${info.status}`}>{info.status === 'open' ? 'draft' : info.status}</span></> : ''}</div>
             <b className="ref-title">{info.title}</b>
             {info.smiles && <span className="ref-mol"><Mol smiles={info.smiles} rxn={info.kind === 'experiment' && info.smiles.includes('>')} w={540} h={150} /></span>}
-            <div className="faint" style={{ fontSize: 12 }}>{info.kind === 'experiment' ? `${info.author || ''}${info.date ? ` · ${new Date(info.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}`
+            <div className="faint" style={{ fontSize: 12 }}>{info.kind === 'experiment' ? `${info.author || ''}${info.date ? ` · ${day(info.date)}` : ''}`
               : [info.formula, info.mw ? `${info.mw.toFixed(2)} g/mol` : '', info.cas].filter(Boolean).join(' · ')}</div>
             <button className="btn sm" onClick={() => nav(info.kind === 'experiment' ? `/experiments/${info.id}` : `/materials/${info.id}`)}>Open {info.code}</button>
           </>}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from '../api'
+import { day, api } from '../api'
 import { useApp } from '../App'
 
 export interface PredGroup {
@@ -265,7 +265,7 @@ export function PredictionPanel({ pred, assignment, nucleus, observedLabel, stat
       </div>
       {(editable || confirmed) && <div className="asg-confirm">
         {confirmed
-          ? <><span className="ok-text">✓ Assignments confirmed{confirmed.confirmed_by ? ` by ${confirmed.confirmed_by}` : ''}{confirmed.confirmed_at ? `, ${new Date(confirmed.confirmed_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}.</span>
+          ? <><span className="ok-text">✓ Assignments confirmed{confirmed.confirmed_by ? ` by ${confirmed.confirmed_by}` : ''}{confirmed.confirmed_at ? `, ${day(confirmed.confirmed_at)}` : ''}.</span>
             <span className="faint"> Confirmed assignments become your lab's data when the experiment is signed, and improve future predictions.</span>
             {editable && <button className="btn ghost sm" onClick={onUnconfirm}>Edit</button>}</>
           : checking ? <div className="asg-check">
@@ -280,7 +280,7 @@ export function PredictionPanel({ pred, assignment, nucleus, observedLabel, stat
       </div>}
       <p className="provenance">{matched} of {predictable} predicted {nucleus === '1H' ? 'proton' : 'carbon'} groups match a signal{pred.covered < pred.total ? ` · ${pred.total - pred.covered} without data` : ''}.
         Source: NMRShiftDB2{pred.source.molecules ? `, ${Number(pred.source.molecules).toLocaleString()} structures` : ''}{pred.source.assigned_atoms ? `, ${Number(pred.source.assigned_atoms).toLocaleString()} assigned ${nucleus} shifts` : ''}
-        {pred.source.built_at ? ` (${pred.source.bundled ? 'table shipped with Benchtop' : 'downloaded'} ${new Date(pred.source.built_at).toLocaleDateString()})` : ''}.{' '}
+        {pred.source.built_at ? ` (${pred.source.bundled ? 'table shipped with Benchtop' : 'downloaded'} ${day(pred.source.built_at)})` : ''}.{' '}
         {pred.source.lab_groups ? `${pred.source.lab_groups} group${pred.source.lab_groups === 1 ? '' : 's'} also use your lab's confirmed assignments. ` : ''}HOSE-style environment matching; half of “high” confidence predictions are within {nucleus === '1H' ? '0.06' : '0.5'} ppm, “low” ones are only rough. Second-order effects aren't modelled. Hover a row to see its atoms.</p>
     </div>
   )

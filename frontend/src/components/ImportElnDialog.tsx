@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, type ElnPreview, type ElnImportResult } from '../api'
+import { api, type ElnPreview, type ElnImportResult, day as dayOf } from '../api'
 import Modal from './Modal'
 
 const mb = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} kB`
-const day = (iso: string | null) => iso ? new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : ''
+const day = (iso: string | null) => iso ? dayOf(iso) : ''
 
 /** Bring experiments from another ELN (or another Benchtop) in, from a .eln file: look first, then tick what to import. */
 export default function ImportElnDialog({ notebookId, onClose, onDone }: { notebookId: number; onClose: () => void; onDone: () => void }) {

@@ -15,6 +15,23 @@ const ROLE_LABEL: Record<StoichRow['role'], string> = {
   reactant: 'Reactants', reagent: 'Reagents', catalyst: 'Catalysts', solvent: 'Solvents', product: 'Products',
 }
 
+const ROLE_ONE: Record<StoichRow['role'], string> = { reactant: 'Reactant', reagent: 'Reagent', catalyst: 'Catalyst', solvent: 'Solvent', product: 'Product' }
+
+/** What to call a row (in labels read aloud, and messages): its name, else its formula, else its place ("Reactant 2").
+ *  Never the SMILES, and no name is made up. The server's chem.row_label says the same. */
+export function rowLabel(r: StoichRow, rows: StoichRow[]): string {
+  if (r.name?.trim()) return r.name.trim()
+  if (r.formula?.trim()) return r.formula.trim()
+  const same = rows.filter(x => x.role === r.role)
+  return `${ROLE_ONE[r.role] || 'Row'} ${same.indexOf(r) + 1 || same.length || 1}`
+}
+
+/** Column names, as read aloud with the row's name ("Mass (mg), benzyl azide"). */
+const COL_LABEL: Partial<Record<keyof StoichRow, string>> = {
+  equiv: 'Equiv', mmol: 'mmol', mass_mg: 'Mass (mg)', volume_ml: 'Volume (mL)', density: 'Density (g/mL)', conc_m: 'Concentration (M)',
+  purity: 'Purity (%)', actual_mass_mg: 'Isolated mass (mg)',
+}
+
 const blank = (role: StoichRow['role']): StoichRow => ({
   role, name: '', smiles: '', formula: '', mw: null, material_id: null, lot_id: null,
   equiv: role === 'product' ? 1 : null, mmol: null, mass_mg: null, volume_ml: null, density: null, conc_m: null,
@@ -127,10 +144,10 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
       const u = usage(r)
       try {
         const res = await api.post<{ transaction_id: number }>(`/api/lots/${r.lot_id}/transactions`, {
-          ...u, direction: 'out', experiment_id: experimentId, note: `${r.name || r.formula} in reaction`,
+          ...u, direction: 'out', experiment_id: experimentId, note: `${rowLabel(r, rows)} in reaction`,
         })
         next[rows.indexOf(r)] = { ...r, deducted: { tx_id: res.transaction_id, ...u } } as StoichRow
-      } catch (e: any) { toast(`${r.name}: ${e.message}`) }
+      } catch (e: any) { toast(`${rowLabel(r, rows)}: ${e.message}`) }
     }
     onChange({ ...content, rows: next })
     toast('Inventory updated')
@@ -170,24 +187,26 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
   const products = grouped.find(g => g.role === 'product')?.items || []
 
   const nameCell = (r: StoichRow, i: number) => (
-    <td style={{ minWidth: 170 }}>
+    <td className="name-cell">
       <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
-        <input className="text" aria-label="Name" disabled={readOnly} value={r.name} placeholder={r.formula || "Name"}
+        <input className="text" aria-label={r.name ? 'Name' : `Name of ${rowLabel(r, rows)}`} disabled={readOnly} value={r.name}
+          placeholder={r.formula || ROLE_ONE[r.role]} title={r.name || undefined}
           onChange={e => onChange({ ...content, rows: rows.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) })} />
         {r.material_id && <Link to={`/materials/${r.material_id}`} className="faint" title="Open in registry">reg</Link>}
       </div>
     </td>
   )
   const structCell = (r: StoichRow, i: number) => (
-    <td style={{ width: 70 }}>
+    <td className="struct-cell">
       {r.smiles
-        ? <button className="btn ghost sm" style={{ padding: 0 }} onClick={() => setZoom(r.smiles)} aria-label="Enlarge structure"><Mol className="mol-thumb" smiles={r.smiles} w={128} h={80} /></button>
-        : !readOnly && <button className="btn ghost sm" onClick={() => setDrawing({ mode: 'molecule', row: i })}>Draw</button>}
+        ? <button className="btn ghost sm" style={{ padding: 0 }} onClick={() => setZoom(r.smiles)} aria-label={`Enlarge the structure of ${rowLabel(r, rows)}`}>
+          <Mol className="mol-thumb" smiles={r.smiles} w={128} h={80} alt={`Structure of ${rowLabel(r, rows)}`} /></button>
+        : !readOnly && <button className="btn ghost sm" onClick={() => setDrawing({ mode: 'molecule', row: i })} aria-label={`Draw the structure of ${rowLabel(r, rows)}`}>Draw</button>}
     </td>
   )
   const UNIT_OF: Partial<Record<keyof StoichRow, 'mg' | 'mL' | 'mmol' | 'M'>> = { mass_mg: 'mg', actual_mass_mg: 'mg', volume_ml: 'mL', mmol: 'mmol', conc_m: 'M' }
   const n = (r: StoichRow, i: number, k: keyof StoichRow, basis?: StoichRow['basis'], nd = 4) => (
-    <td><NumInput label={String(k)} nd={nd} disabled={readOnly} value={r[k] as number | null} unit={UNIT_OF[k]}
+    <td><NumInput label={`${COL_LABEL[k] || String(k)}, ${rowLabel(r, rows)}`} nd={nd} sig={5} disabled={readOnly} value={r[k] as number | null} unit={UNIT_OF[k]}
       className={basis && r.basis === basis ? 'basis' : ''} onCommit={v => setField(i, { [k]: v } as Partial<StoichRow>, basis)} /></td>
   )
 
@@ -215,10 +234,10 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
 
       {rows.length > 0 && (
         <div className="grid-wrap">
-          <table className="grid">
+          <table className="grid rxn-grid">
             <thead><tr>
-              <th></th><th>Name</th><th>MW</th><th title="Limiting reagent">Lim.</th><th>Equiv</th><th>mmol</th>
-              <th>Mass (mg)</th><th>Vol (mL)</th><th>ρ (g/mL)</th><th>Conc (M)</th><th>Purity %</th><th></th>
+              <th><span className="vh">Structure</span></th><th>Name</th><th>MW</th><th title="Limiting reagent">Lim.</th><th>Equiv</th><th>mmol</th>
+              <th>Mass (mg)</th><th>Vol (mL)</th><th title="Density">ρ (g/mL)</th><th title="Concentration of a solution">Conc (M)</th><th>Purity %</th><th><span className="vh">Remove</span></th>
             </tr></thead>
             <tbody>
               {nonProduct.map(g => [
@@ -228,7 +247,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
                     {structCell(r, i)}{nameCell(r, i)}
                     <td className="calc" title={r.formula}>{fmt(r.mw, 2)}</td>
                     <td style={{ textAlign: 'center' }}>{g.role !== 'solvent' &&
-                      <input type="radio" className="lim-dot" name={`lim-${experimentId}`} aria-label="Limiting reagent" disabled={readOnly}
+                      <input type="radio" className="lim-dot" name={`lim-${experimentId}`} aria-label={`Limiting reagent: ${rowLabel(r, rows)}`} disabled={readOnly}
                         checked={r.limiting} onChange={() => setField(i, { limiting: true }, r.mass_mg ? 'mass' : 'mmol')} />}</td>
                     {g.role === 'solvent'
                       ? <td colSpan={2}><label className="fill-toggle" title="Calculate this solvent's volume from the target concentration">
@@ -239,8 +258,8 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
                     {n(r, i, 'mass_mg', 'mass', 3)}
                     {r.basis === 'fill' ? <td className="calc"><b>{fmt(r.volume_ml, 3)}</b></td> : n(r, i, 'volume_ml', 'volume')}
                     {n(r, i, 'density', undefined, 4)}{n(r, i, 'conc_m', undefined, 4)}{n(r, i, 'purity', undefined, 2)}
-                    <td>{!readOnly && <button className="btn ghost sm" onClick={() => removeRow(i)} aria-label={`Remove ${r.name || 'row'}`}>×</button>}
-                      {(r as any).deducted && <span className="faint" style={{ whiteSpace: 'nowrap' }} title="Deducted from inventory">✓ used
+                    <td>{!readOnly && <button className="btn ghost sm" onClick={() => removeRow(i)} aria-label={`Remove ${rowLabel(r, rows)}`}>×</button>}
+                      {(r as any).deducted && <span className="faint used" title="Deducted from inventory">✓ used
                         {!readOnly && <button className="btn ghost sm" style={{ padding: '0 4px' }} onClick={() => undoDeduct(i)}>undo</button>}</span>}</td>
                   </tr>
                 )),
@@ -252,10 +271,10 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
 
       {products.length > 0 && (
         <div className="grid-wrap">
-          <table className="grid">
+          <table className="grid rxn-grid">
             <thead><tr>
-              <th></th><th>Product</th><th>MW</th><th>Equiv</th><th>Theor. mmol</th><th>Theor. mass (mg)</th>
-              <th>Isolated (mg)</th><th>Purity %</th><th>Yield</th><th></th>
+              <th><span className="vh">Structure</span></th><th>Product</th><th>MW</th><th>Equiv</th><th title="Theoretical amount">Theor. mmol</th><th title="Theoretical mass">Theor. mass (mg)</th>
+              <th>Isolated (mg)</th><th>Purity %</th><th>Yield</th><th><span className="vh">Register or remove</span></th>
             </tr></thead>
             <tbody>
               {products.map(({ r, i }) => (
@@ -268,8 +287,8 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
                   {n(r, i, 'actual_mass_mg', undefined, 2)}{n(r, i, 'purity', undefined, 2)}
                   <td className="calc yield">{r.yield_pct !== null ? `${fmt(r.yield_pct, 1)}%` : ''}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    {!readOnly && r.actual_mass_mg && !r.material_id && <button className="btn sm" onClick={() => register(r)}>Register</button>}
-                    {!readOnly && <button className="btn ghost sm" onClick={() => removeRow(i)} aria-label="Remove product">×</button>}
+                    {!readOnly && r.actual_mass_mg && !r.material_id && <button className="btn sm" onClick={() => register(r)} title="Add the product to the registry, as a lot of what you isolated">Register</button>}
+                    {!readOnly && <button className="btn ghost sm" onClick={() => removeRow(i)} aria-label={`Remove ${rowLabel(r, rows)}`}>×</button>}
                   </td>
                 </tr>
               ))}
@@ -306,7 +325,10 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
           {shown.map(([k, v, t]) => <span key={k} title={t}>{k} <b>{v}</b></span>)}
           {impossible && <span className="warn-text metrics-roles">{impossible[0].toUpperCase() + impossible.slice(1)} would be over 100 %.
             Check {g.aeImpossible ? '' : 'the isolated mass and '}the roles: a co-reactant may be marked as Reagent (only Reactants count).</span>}
-          <span className="faint" title={m.scope}>reaction only{m.missing_mass?.length ? ` · E-factor/PMI need a mass for ${m.missing_mass.join(', ')}` : ''}</span>
+          <span className="faint" title={m.scope}>reaction only{m.missing_mass?.length ? ` · E-factor/PMI need a mass for ${m.missing_mass.map((x: string) => {
+            const r = rows.find(r => r.smiles && r.smiles === x)  // saved before 0.29, which named unnamed rows by their SMILES
+            return r ? rowLabel(r, rows) : x
+          }).join(', ')}` : ''}</span>
         </div>
       })()}
       {(content.warnings || []).map((w: string) => <p className="warn" key={w}>{w}</p>)}
@@ -333,7 +355,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
       </>}>
         <p style={{ marginTop: 0 }}>These amounts will be taken from their lots and linked to this experiment. You can undo each one afterwards.</p>
         <table className="plain"><thead><tr><th>Material</th><th>Amount</th></tr></thead>
-          <tbody>{deducting.map((r, k) => { const u = usage(r); return <tr key={k}><td>{r.name || r.formula}</td><td className="num">{fmt(u.amount, 3)} {u.unit}</td></tr> })}</tbody></table>
+          <tbody>{deducting.map((r, k) => { const u = usage(r); return <tr key={k}><td>{rowLabel(r, rows)}</td><td className="num">{fmt(u.amount, 3)} {u.unit}</td></tr> })}</tbody></table>
         <p className="faint">Masses are as weighed (already corrected for purity), so they match what leaves the bottle.</p>
       </Modal>}
       {pasting && <Modal title="Paste reaction SMILES" onClose={() => setPasting(false)} footer={<>

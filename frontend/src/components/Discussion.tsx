@@ -189,7 +189,7 @@ export default function Discussion({ experimentId, entries, focusEntry, onFocusD
 
   return (
     <div ref={box} className="discussion" id="discussion">
-      <h3>Discussion{open.length ? <span className="count-pill">{open.length}</span> : null}</h3>
+      <h2 className="rail-h">Discussion{open.length ? <span className="count-pill">{open.length}</span> : null}</h2>
       <label className="discussion-target"><span className="faint">On</span>
         <select className="select sm" value={target} onChange={e => setTarget(e.target.value ? Number(e.target.value) : '')}>
           <option value="">The whole experiment</option>

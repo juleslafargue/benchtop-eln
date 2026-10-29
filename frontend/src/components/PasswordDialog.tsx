@@ -28,7 +28,7 @@ export default function PasswordDialog({ onClose }: { onClose: () => void }) {
         {forced && <p style={{ margin: 0 }}>Your account was set up (or its password reset) by an administrator, who therefore knows the password. Choose one only you know to continue.</p>}
         {first && <p style={{ margin: 0 }}>You sign in with single sign-on, but signing a record means re-entering a password (the e-signature rules ask for it). Choose one you'll remember; it's only used for signing.</p>}
         {!first && !forced && <label className="field">Current password<input className="input" type="password" autoComplete="current-password" autoFocus value={cur} onChange={e => setCur(e.target.value)} /></label>}
-        <PasswordField value={next} onChange={setNext} onValid={setValid} username={user.username} fullName={user.full_name} email={user.email} autoFocus={first || forced} />
+        <PasswordField value={next} onChange={setNext} onValid={setValid} username={user.username} fullName={user.full_name} email={user.email} autoFocus={first || forced} repeat />
         {err && <p className="error">{err}</p>}
       </div>
     </Modal>

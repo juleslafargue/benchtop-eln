@@ -8,7 +8,7 @@ from sqlmodel import func, select
 
 from .. import chem, pubchem, safety
 from ..config import settings
-from ..models import ChemSafety, EntryKind, Experiment, Material
+from ..models import ChemSafety, EntryKind, Experiment, Material, Role
 from ..security import DB, Admin, CurrentUser
 from ..services import get_or_404, live_entries
 
@@ -17,13 +17,14 @@ MAX_FETCH_PER_REQUEST = 15
 
 
 @router.get("/lookup")
-def lookup(q: str, _: CurrentUser, session: DB):
+def lookup(q: str, user: CurrentUser, session: DB):
     """Find a compound by name, CAS number or SMILES and return its identity plus GHS data."""
     q = q.strip()
     if not q:
         raise HTTPException(400, "Type a name, CAS number or SMILES")
-    if not pubchem.enabled():
-        raise HTTPException(503, "PubChem lookups are turned off on this server (BENCHTOP_PUBCHEM=off)")
+    if not pubchem.enabled():  # said plainly; an admin, who can turn it on, also gets the setting's name
+        raise HTTPException(503, "Looking chemicals up on PubChem is turned off on this server. Pick the chemical from the "
+                                 "registry, or draw its structure, instead" + (" (BENCHTOP_PUBCHEM=off)." if user.role == Role.admin else "."))
     smiles = ""
     if not pubchem.valid_cas(q) and any(ch in q for ch in "=#()[]@/\\") :
         try:
@@ -77,7 +78,8 @@ def experiment_safety(exp_id: int, user: CurrentUser, session: DB, refresh: bool
             cs = safety.ensure(session, **kw, force=refresh)
             fetched += 1
         records.append(cs)
-        out.append({"name": r.get("name") or (cs.title if cs else ""), "role": r.get("role", ""), "smiles": r.get("smiles", ""),
+        out.append({"name": (r.get("name") or "").strip() or (cs.title if cs and cs.title else "") or chem.row_label(r, rows),
+                    "role": r.get("role", ""), "smiles": r.get("smiles", ""),
                     "material_id": m.id if m else None, "safety": safety.summary(cs)})
     session.commit()
     a = safety.assess(rows, records)

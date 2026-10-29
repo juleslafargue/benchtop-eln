@@ -94,7 +94,7 @@ export default function CustomEntry({ content, onChange, readOnly }: EntryEditor
               {t.min_rows > 0 && <span className="faint"> · at least {t.min_rows} row{t.min_rows === 1 ? '' : 's'}</span>}</div>
             <div className="grid-wrap">
               <table className="grid">
-                <thead><tr>{t.columns.map(c => <th key={c.id}>{c.label}{c.unit ? ` (${c.unit})` : ''}{c.required && <span className="cf-req"> *</span>}</th>)}{!readOnly && <th />}</tr></thead>
+                <thead><tr>{t.columns.map(c => <th key={c.id}>{c.label}{c.unit ? ` (${c.unit})` : ''}{c.required && <span className="cf-req"> *</span>}</th>)}{!readOnly && <th><span className="vh">Remove</span></th>}</tr></thead>
                 <tbody>
                   {r.map((row, i) => (
                     <tr key={i}>

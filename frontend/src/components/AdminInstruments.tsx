@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '../App'
-import { ago, api, type FolderPreview, type Instrument } from '../api'
+import { day, ago, api, type FolderPreview, type Instrument } from '../api'
 import Modal from './Modal'
 
 interface ListOut { instruments: Instrument[]; kinds: Record<string, string>; scan_seconds: number; max_mb: number }
@@ -166,7 +166,7 @@ function OldData({ inst, onClose, onTaken }: { inst: Instrument; onClose: () => 
                 <label>
                   <input type="checkbox" disabled={x.gone} checked={picked.has(x.path)} onChange={() => toggle(x.path)} />
                   <span className="old-main"><span className="mono old-path">{x.path}</span>
-                    <span className="faint old-meta">{x.gone ? 'No longer in the folder' : `${mb(x.size)}${x.modified ? ` · ${new Date(x.modified).toLocaleDateString()}` : ''}`}</span>
+                    <span className="faint old-meta">{x.gone ? 'No longer in the folder' : `${mb(x.size)}${x.modified ? ` · ${day(x.modified)}` : ''}`}</span>
                     {!x.gone && x.action !== 'attach' && x.note && <span className="old-note">{x.note}</span>}</span>
                   {!x.gone && <span className={`old-where ${x.action === 'attach' ? 'ok-text' : 'faint'}`}>
                     {x.action === 'attach' ? `→ ${x.experiment}` : '→ Inbox'}</span>}

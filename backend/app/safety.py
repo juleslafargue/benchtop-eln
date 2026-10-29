@@ -205,11 +205,12 @@ CONTROLS = [  # P-code -> plain-language control
 
 def assess(rows: list[dict[str, Any]], records: list[Optional[ChemSafety]]) -> dict[str, Any]:
     """Combine per-chemical GHS data with a few well-known incompatibility rules."""
+    from .chem import row_label
     chems = []
     for r, cs in zip(rows, records):
         d = cs.data if cs else None
         codes = pubchem.effective_codes(d)
-        chems.append({"name": r.get("name") or (d or {}).get("title") or r.get("smiles", ""), "role": r.get("role", ""),
+        chems.append({"name": (r.get("name") or "").strip() or (d or {}).get("title") or row_label(r, rows), "role": r.get("role", ""),
                       "smiles": r.get("smiles", ""), "ik": inchikey_of(r.get("smiles", "")),
                       "codes": codes, "flags": {f["key"] for f in pubchem.flags_for(codes)}, "precautions": (d or {}).get("precautions") or []})
     has = lambda flag: [c["name"] for c in chems if flag in c["flags"]]  # noqa: E731

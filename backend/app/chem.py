@@ -229,6 +229,24 @@ def new_row(**kw: Any) -> dict[str, Any]:
     return row
 
 
+ROLE_WORD = {"reactant": "Reactant", "reagent": "Reagent", "catalyst": "Catalyst", "solvent": "Solvent", "product": "Product"}
+
+
+def row_label(row: dict[str, Any], rows: list[Any]) -> str:
+    """What to call a reaction-table row in a message: its name, else its formula, else its place ("Reactant 2").
+    Never the raw SMILES, which means nothing to most readers; and no name is made up."""
+    name = str(row.get("name") or "").strip()
+    if name:
+        return name
+    formula = str(row.get("formula") or "").strip()
+    if formula:
+        return formula
+    role = row.get("role") if row.get("role") in ROLES else "reactant"
+    same = [r for r in rows if isinstance(r, dict) and (r.get("role") if r.get("role") in ROLES else "reactant") == role]
+    n = next((i for i, r in enumerate(same, 1) if r is row), len(same) or 1)
+    return f"{ROLE_WORD[role]} {n}"
+
+
 def _f(v: Any) -> Optional[float]:
     if v is None or v == "":
         return None
@@ -277,7 +295,7 @@ def compute_stoichiometry(rows_in: list[dict[str, Any]], target_conc_m: Any = No
                 r["mw"], r["formula"] = p["mw"], p["formula"]
                 r["smiles"] = p["smiles"]
             except ChemError:
-                warnings.append(f"Could not parse structure for '{r['name'] or r['smiles']}'")
+                warnings.append(f"Could not read the structure of {row_label(r, rows)}")
 
     limiting = [r for r in rows if r["limiting"] and r["role"] != "product"]
     if len(limiting) > 1:
@@ -422,7 +440,7 @@ def green_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             impossible.append("atom_economy")
         else:
             out["atom_economy_pct"] = ae
-    missing = [r["name"] or r["smiles"] or r["role"] for r in inputs if _f(r["mass_mg"]) is None]
+    missing = [row_label(r, rows) for r in inputs if _f(r["mass_mg"]) is None]
     out["missing_mass"] = missing
     actual = _f(prod["actual_mass_mg"]) if prod else None
     if actual:

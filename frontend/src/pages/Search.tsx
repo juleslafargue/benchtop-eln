@@ -111,7 +111,7 @@ export default function Search() {
       <div className="panel panel-pad stack search-box">
         <div className="seg search-modes" role="radiogroup" aria-label="Search by">
           {(['text', 'substructure', 'similarity'] as Mode[]).map(m => (
-            <button type="button" key={m} role="radio" aria-checked={mode === m} aria-pressed={mode === m} onClick={() => { setMode(m); input.current?.focus() }}>
+            <button type="button" key={m} role="radio" aria-checked={mode === m} onClick={() => { setMode(m); input.current?.focus() }}>
               {{ text: 'Words', substructure: 'Substructure', similarity: 'Similar structures' }[m]}</button>
           ))}
         </div>
@@ -163,7 +163,7 @@ export default function Search() {
         <div className="spread" style={{ gap: 8 }}>
           <div className="seg" role="tablist" aria-label="Result type">
             {(['all', 'experiments', 'materials', 'files'] as Tab[]).filter(t => t === 'all' || !structural || t !== 'files').map(t => (
-              <button key={t} role="tab" aria-selected={tab === t} aria-pressed={tab === t} onClick={() => setTab(t)}>
+              <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
                 {{ all: 'All', experiments: 'Experiments', materials: 'Materials', files: 'Files' }[t]}{t !== 'all' ? ` ${counts[t]}` : ` ${total}`}</button>))}
           </div>
           <span className="faint" style={{ fontSize: 13 }}>{total === 0 ? '' : `${total} result${total === 1 ? '' : 's'}${filtersOn ? ' (filtered)' : ''}`}</span>

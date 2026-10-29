@@ -191,9 +191,12 @@ def test_lookup_endpoint(client, users, registry):
     assert client.get("/api/doi", params={"q": "10.1021/jo971176v"}).status_code == 401
 
 
-def test_lookups_turned_off_say_so(client, users):
+def test_lookups_turned_off_say_so(client, users, admin):
     r = client.get("/api/doi", params={"q": "10.1021/jo971176v"}, headers=users["alice"])  # conftest: BENCHTOP_DOI=off
-    assert r.status_code == 503 and "BENCHTOP_DOI=off" in r.json()["detail"] and "by hand" in r.json()["detail"]
+    assert r.status_code == 503 and "turned off" in r.json()["detail"] and "by hand" in r.json()["detail"]
+    assert "BENCHTOP_DOI" not in r.json()["detail"]  # 0.29: a scientist isn't shown the setting's name
+    r = client.get("/api/doi", params={"q": "10.1021/jo971176v"}, headers=admin)  # an admin, who can turn it on, is
+    assert r.status_code == 503 and "BENCHTOP_DOI=off" in r.json()["detail"]
 
 
 # ---------------------------------------------------------------------------------------------------- the section

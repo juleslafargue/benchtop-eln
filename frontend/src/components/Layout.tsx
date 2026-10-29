@@ -50,6 +50,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   return (
     <BackProvider>
     <div className="shell">
+      <a className="skip-link" href="#main" onClick={e => { e.preventDefault(); document.getElementById('main')?.focus() }}>Skip to content</a>
       <aside className={`side${open ? ' open' : ''}`} aria-label="Main navigation">
         <div className="brand-row"><NavLink to="/" className="brand"><Logo size={26} />Benchtop{demo && <span className="demo-badge" title="Demo data: nothing here is real">Demo</span>}</NavLink>{!narrow && <Notifications />}</div>
         <button className="palette-trigger" onClick={() => setPalette(true)}>
@@ -86,7 +87,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           <button className="btn ghost sm" style={{ alignSelf: 'flex-start' }} onClick={logout}>Sign out</button>
         </div>
       </aside>
-      <main className="main">
+      <main className="main" id="main" tabIndex={-1}>
         <div className="mobile-bar"><button className="btn menu-btn" onClick={() => setOpen(o => !o)} aria-expanded={open}>Menu</button>{narrow && <Notifications />}</div>
         <div className="page"><BackButton />{children}</div>
       </main>

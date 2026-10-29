@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, displayName, fmt, when, type Lot, type Material } from '../api'
+import { unitLabel, api, displayName, fmt, when, type Lot, type Material } from '../api'
 import { StatusDot } from '../components/ExperimentList'
 import { Mol, NumInput } from '../components/bits'
 import Modal from '../components/Modal'
@@ -21,7 +21,7 @@ function LotForm({ material, onSaved, onClose }: { material: Material; onSaved: 
       <button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!f.amount} onClick={save}>Add lot</button></>}>
       <div className="form-grid">
         <label className="field">Amount<NumInput className="input" label="Amount" value={f.amount} onCommit={v => setF({ ...f, amount: v })} /></label>
-        <label className="field">Unit<select className="select" value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })}>{UNITS.map(u => <option key={u}>{u}</option>)}</select></label>
+        <label className="field">Unit<select className="select" value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })}>{UNITS.map(u => <option key={u} value={u}>{unitLabel(u)}</option>)}</select></label>
         <label className="field">Location<input className="input" value={f.location} onChange={e => setF({ ...f, location: e.target.value })} /></label>
         <label className="field">Supplier<input className="input" value={f.supplier} onChange={e => setF({ ...f, supplier: e.target.value })} /></label>
         <label className="field">Catalogue no.<input className="input" value={f.catalog_number} onChange={e => setF({ ...f, catalog_number: e.target.value })} /></label>
@@ -39,7 +39,7 @@ export function LotHistory({ lot, onClose }: { lot: Lot; onClose: () => void }) 
   return (
     <Modal title={`Usage of ${lot.barcode}`} onClose={onClose} footer={<button className="btn" onClick={onClose}>Close</button>}>
       <table className="plain"><thead><tr><th>When</th><th>Change</th><th>Balance</th><th>By</th><th>Note</th></tr></thead>
-        <tbody>{tx.map(t => <tr key={t.id}><td>{when(t.created_at)}</td><td className="num">{t.delta > 0 ? '+' : ''}{fmt(t.delta, 4)} {lot.unit}</td>
+        <tbody>{tx.map(t => <tr key={t.id}><td>{when(t.created_at)}</td><td className="num">{t.delta > 0 ? '+' : ''}{fmt(t.delta, 4)} {unitLabel(lot.unit)}</td>
           <td className="num">{fmt(t.balance_after, 4)}</td><td>{displayName(t.user)}</td>
           <td>{t.experiment?.id ? <Link to={`/experiments/${t.experiment.id}`}>{t.experiment.eid}</Link>
             : t.experiment ? <span title="A record you can't open">{t.experiment.eid}</span> : null} {t.note}</td></tr>)}</tbody></table>
@@ -71,7 +71,7 @@ export default function MaterialDetail() {
         </div>
         {canWrite && <button className="btn" onClick={() => setEditing(true)}>Edit</button>}
       </div>
-      <div className="panel panel-pad" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 300px) 1fr', gap: 24 }}>
+      <div className="panel panel-pad mat-overview">
         <div className="mat-thumb" style={{ width: '100%', height: 200 }}>{m.smiles ? <Mol smiles={m.smiles} w={420} h={280} /> : <span className="faint">No structure</span>}</div>
         <dl className="kv">
           <dt>Formula</dt><dd>{m.formula || '—'}</dd>
@@ -111,11 +111,11 @@ export default function MaterialDetail() {
         <div className="spread"><h2 style={{ fontSize: 17 }}>Lots</h2>{canWrite && <button className="btn sm" onClick={() => setAddingLot(true)}>Receive lot</button>}</div>
         <div className="panel grid-wrap" style={{ border: 0 }}>
           <table className="plain">
-            <thead><tr><th>Barcode</th><th>Amount</th><th>Location</th><th>Supplier</th><th>Purity</th><th>Status</th><th>Received</th><th /></tr></thead>
+            <thead><tr><th>Barcode</th><th>Amount</th><th>Location</th><th>Supplier</th><th>Purity</th><th>Status</th><th>Received</th><th><span className="vh">Actions</span></th></tr></thead>
             <tbody>
               {(m.lots || []).map(l => (
                 <tr key={l.id}>
-                  <td><b style={{ fontWeight: 600 }}>{l.barcode}</b></td><td className="num">{fmt(l.amount, 3)} {l.unit}</td><td>{l.location}</td>
+                  <td><b style={{ fontWeight: 600 }}>{l.barcode}</b></td><td className="num">{fmt(l.amount, 3)} {unitLabel(l.unit)}</td><td>{l.location}</td>
                   <td>{l.supplier}</td><td>{l.purity ? `${l.purity}%` : ''}</td><td>{l.status}</td><td>{when(l.received_at)}</td>
                   <td><button className="btn ghost sm" onClick={() => setHistory(l)}>Usage</button></td>
                 </tr>

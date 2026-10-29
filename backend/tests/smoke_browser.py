@@ -197,6 +197,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += mention_pick(browser, tok["hweiss"])
         problems += demo_never_publishes(browser, tok["slaurent"])
         problems += getting_started(browser, tok["hweiss"])
+        problems += first_time_review(browser, tok["slaurent"])
         browser.close()
     return problems
 
@@ -319,8 +320,10 @@ def reaction_amounts(browser, token: str) -> list[tuple[str, str, str, str]]:
     pg.route("**/api/chem/stoichiometry", lambda route: held.append(route) if hold["on"] else route.continue_())
     try:
         pg.goto(f"{B}/experiments/{exp['id']}")
-        pg.wait_for_selector(f"{sec} input[aria-label='equiv']")
-        cell = lambda k: pg.locator(f"{sec} input[aria-label='{k}']").nth(1)  # noqa: E731 - the second reactant's row
+        # 0.29: each amount cell is named by its column and its row, for screen readers ("Mass (mg), Benzyl alcohol")
+        col = {"equiv": "Equiv", "mmol": "mmol", "mass_mg": "Mass (mg)"}
+        pg.wait_for_selector(f"{sec} input[aria-label='Equiv, Benzoic acid']")
+        cell = lambda k: pg.locator(f"{sec} input[aria-label='{col[k]}, Benzyl alcohol']")  # noqa: E731 - the second reactant's row
         for equiv, leave in (("1.2", "Tab"), ("1.3", "Enter"), ("1.4", "click"), ("1.5", "retype")):
             old_mass, old_mmol = cell("mass_mg").input_value(), cell("mmol").input_value()
             hold["on"] = True
@@ -333,7 +336,7 @@ def reaction_amounts(browser, token: str) -> list[tuple[str, str, str, str]]:
                     break
                 pg.wait_for_timeout(100)
             hold["on"] = False
-            if pg.evaluate("document.activeElement.getAttribute('aria-label')") != "mass_mg":
+            if pg.evaluate("document.activeElement.getAttribute('aria-label')") != "Mass (mg), Benzyl alcohol":
                 found.append(("reaction table", "", leave, "two Tabs from Equiv didn't reach the Mass cell"))
             if leave == "retype":  # typed in the cell, but the same mass as was there
                 pg.keyboard.press("Control+A")
@@ -341,7 +344,7 @@ def reaction_amounts(browser, token: str) -> list[tuple[str, str, str, str]]:
             while held:
                 held.pop().continue_()
             # the answer has arrived when the mmol cell (left alone) shows the new amount
-            pg.wait_for_function(f"document.querySelectorAll(\"{sec} input[aria-label='mmol']\")[1].value !== {old_mmol!r}", timeout=10000)
+            pg.wait_for_function(f"document.querySelector(\"{sec} input[aria-label='mmol, Benzyl alcohol']\").value !== {old_mmol!r}", timeout=10000)
             if leave != "retype":
                 try:
                     pg.wait_for_function(f"document.activeElement.value !== {old_mass!r}", timeout=5000)
@@ -636,6 +639,126 @@ def getting_started(browser, admin_token: str) -> list[tuple[str, str, str, str]
                 bad("guide", "the sidebar has no link to Getting started")
         except Exception as e:  # noqa: BLE001 - a step that didn't work is a problem to report, not a crash
             bad("guide", f"{label}: {str(e).splitlines()[0][:160]}")
+        ctx.close()
+    return found
+
+
+def first_time_review(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """0.29, from a first-time user's review: the keyboard and screen-reader fixes, the reaction table fitting the page,
+    a returned record saying so, the sign dialog's reminder (which changes nothing that is signed), and typing a new
+    password twice. Each check here failed on 0.28."""
+    print("First-time review: focus, labels, Skip to content, the reaction table's width, the sign reminder…", flush=True)
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": ""}
+
+    def bad(kind: str, what: str) -> None:
+        found.append(("first-time review", where["path"], kind, what[:200]))
+    exps = {e["eid"]: e for e in httpx.get(B + "/api/experiments?limit=1000", headers=H).json()}
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Review checks"}).json()
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Signed with empty sections", "notebook_id": nb["id"]}).json()
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    try:
+        # Skip to content: the first Tab stop, and it moves the focus to the page's content
+        where["path"] = "/"
+        pg.goto(B + "/")
+        pg.wait_for_selector(".page-title")
+        pg.keyboard.press("Tab")
+        if pg.evaluate("document.activeElement.textContent") != "Skip to content":
+            bad("skip link", "the first Tab stop isn't Skip to content")
+        pg.keyboard.press("Enter")
+        if pg.evaluate("document.activeElement.id") != "main":
+            bad("skip link", "Skip to content didn't move the focus to the content")
+
+        # every text box and amount cell of a record is named: a text section by its title, an amount by column and row
+        where["path"] = f"/experiments/{exp['id']}"
+        pg.goto(B + where["path"])
+        pg.wait_for_selector(".ProseMirror")
+        names = pg.evaluate("""() => [...document.querySelectorAll('.entry .ProseMirror')].map(e => e.getAttribute('aria-label'))""")
+        if names[:2] != ["Aim", "Procedure"] or None in names:
+            bad("labels", f"text sections are named {names}, not by their titles")
+
+        # the sign dialog: the password has the focus; the reminder lists what's empty; signing still works and sends
+        # only what it sent before; the record matches its signature; closing gives the focus back to the button
+        pg.click("button:has-text('Sign as author')")
+        pg.wait_for_selector("dialog.modal .sign-reminder >> text=Procedure", timeout=10000)
+        if pg.evaluate("document.activeElement.type") != "password":
+            bad("sign dialog", "the focus isn't on the password")
+        pg.keyboard.press("Escape")
+        pg.wait_for_selector("dialog.modal", state="detached")
+        if pg.evaluate("document.activeElement.textContent") != "Sign as author":
+            bad("dialog focus", "closing a dialog didn't give the focus back to the button that opened it")
+        sent: list = []
+        pg.on("request", lambda r: r.url.endswith(f"/api/experiments/{exp['id']}/sign") and sent.append(r.post_data_json))
+        pg.click("button:has-text('Sign as author')")
+        pg.wait_for_selector("dialog.modal .sign-reminder")
+        reminder = pg.inner_text("dialog.modal .sign-reminder")
+        for part in ("Aim", "Procedure", "Observations & results", "hazards not recorded"):
+            if part not in reminder:
+                bad("sign reminder", f"{part!r} isn't in {reminder!r}")
+        pg.fill("dialog.modal input[type=password]", PW)
+        pg.click("dialog.modal button:has-text('Sign and lock')")
+        pg.wait_for_selector("dialog.modal", state="detached", timeout=15000)
+        signed = httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()
+        check = httpx.get(f"{B}/api/experiments/{exp['id']}/verify", headers=H).json()
+        if signed["status"] != "signed":
+            bad("sign reminder", "with empty sections, signing didn't go through")
+        elif not check["intact"] or signed["signatures"][-1]["content_hash"] != check["content_hash"]:
+            bad("sign reminder", "the signature doesn't cover the record as the server computes it")
+        if not sent or set(sent[0]) != {"password", "comment"}:
+            bad("sign reminder", f"signing sent {sorted(sent[0]) if sent else 'nothing'}, not just the password and comment")
+
+        # a returned record says so where its state is shown, with the reason
+        where["path"] = f"/experiments/{exps['EXP-00025']['id']}"
+        pg.goto(B + where["path"])
+        pg.wait_for_selector(".status-card")
+        card = pg.inner_text(".status-card")
+        if "Returned by" not in card or "13C" not in card:
+            bad("returned", f"the status shows {card!r}, not who returned it and why")
+
+        # a new password is typed twice; the Password label belongs to its box
+        where["path"] = "/account"
+        pg.goto(B + "/account")
+        pg.click("button:has-text('Change password')")
+        pg.wait_for_selector("dialog.modal >> text=Repeat password")
+        pg.fill("dialog.modal input[autocomplete=current-password]", PW)
+        pg.get_by_label("New password", exact=True).fill("copper-lantern-meadow-42")
+        pg.get_by_label("Repeat password", exact=True).fill("copper-lantern-meadow-24")
+        pg.wait_for_timeout(800)
+        if not pg.is_disabled("dialog.modal button.primary"):
+            bad("repeat password", "two different new passwords could be saved")
+        pg.get_by_label("Repeat password", exact=True).fill("copper-lantern-meadow-42")
+        pg.wait_for_function("!document.querySelector('dialog.modal button.primary').disabled", timeout=5000)
+        pg.keyboard.press("Escape")
+    except Exception as e:  # noqa: BLE001 - a step that didn't work is a problem to report, not a crash
+        bad("error", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # the reaction table fits beside the sidebar: Yield (and every column) without scrolling sideways, numbers not cut
+    for width in (1280, 1400, 1920):
+        ctx = browser.new_context(viewport={"width": width, "height": 900})
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+        pg = ctx.new_page()
+        for eid in ("EXP-00033", "EXP-00018", "EXP-00015"):
+            if eid not in exps:
+                continue
+            where["path"] = f"/experiments/{exps[eid]['id']} at {width} px"
+            try:
+                pg.goto(f"{B}/experiments/{exps[eid]['id']}")
+                pg.wait_for_selector("table.rxn-grid td.yield", timeout=15000)
+                pg.wait_for_timeout(300)
+                out = pg.evaluate("""() => [...document.querySelectorAll('.grid-wrap')].filter(w => w.querySelector('table.rxn-grid')).flatMap(w => {
+                    const box = w.getBoundingClientRect(), why = []
+                    if (w.scrollWidth > w.clientWidth + 1) why.push(`the table needs ${w.scrollWidth - w.clientWidth}px more`)
+                    for (const y of w.querySelectorAll('td.yield')) if (y.getBoundingClientRect().right > box.right + 1) why.push('Yield is off to the side')
+                    for (const i of w.querySelectorAll('input:not(.text)')) if (i.scrollWidth > i.clientWidth + 1) why.push(`${i.getAttribute('aria-label')} shows ${i.value} cut`)
+                    return why })""")
+                if out:
+                    bad("reaction table", "; ".join(out[:3]))
+            except Exception as e:  # noqa: BLE001
+                bad("reaction table", str(e).splitlines()[0][:160])
         ctx.close()
     return found
 

@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, displayName, downloadAuthed, when, type AuditEvent, type EntryKind, type Experiment, type ExperimentSummary, type Signature, type WitnessCandidate } from '../api'
+import { day, api, displayName, downloadAuthed, when, type AuditEvent, type EntryKind, type Experiment, type ExperimentSummary, type Signature, type WitnessCandidate } from '../api'
 import EntryCard from '../components/EntryCard'
 import { AddSection } from '../components/AddSection'
 import Discussion from '../components/Discussion'
@@ -20,7 +20,7 @@ import type { Attachment, Entry, User, UserBrief } from '../api'
 
 const STATUS_WORD = { open: 'Draft', signed: 'Signed', witnessed: 'Witnessed', voided: 'Voided', locked: 'Locked' }
 const STEPS = ['Draft', 'Signed', 'Witnessed'] as const
-const shortDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+const shortDate = day
 
 const StatusIcon = ({ status }: { status: Experiment['status'] }) => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -37,16 +37,21 @@ function StatusCard({ exp, fresh }: { exp: Experiment; fresh: boolean }) {
   const lastOf = (m: string) => [...exp.signatures].reverse().find(s => s.meaning === m)
   const who = (s?: Signature) => s ? `${s.signer_name || displayName(s.user)} · ${shortDate(s.signed_at)}` : ''
   const author = lastOf('author'), witness = lastOf('witness'), voided = lastOf('void')
+  // a draft whose last signature event is a witness returning it: say so, with the reason, where the state is shown
+  const latest = exp.signatures[exp.signatures.length - 1]
+  const returned = exp.status === 'open' && latest?.meaning === 'rejected' ? latest : undefined
   const step = { open: 0, signed: 1, witnessed: 2, voided: -1, locked: -1 }[exp.status]
-  const line = exp.status === 'open' ? 'Editable until signed'
+  const line = returned ? <>Returned by {who(returned)}{returned.comment && <><br /><span className="sc-reason">“{returned.comment}”</span></>}
+    <br /><span className="faint">Editable until signed again</span></>
+    : exp.status === 'open' ? 'Editable until signed'
     : exp.status === 'signed' ? <>Signed by {who(author)}<br /><span className={exp.witness_request?.overdue ? 'overdue-text' : 'faint'}>
       {exp.witness_request ? `Waiting for ${displayName(exp.witness_request.witness)}${exp.witness_request.overdue ? ' · overdue' : ''}` : 'Waiting for a witness'}</span></>
       : exp.status === 'witnessed' ? <>Witnessed by {who(witness)}</>
         : exp.status === 'locked' ? <>Imported read-only from {exp.origin?.source || 'another ELN'}</>
           : <>Voided by {who(voided)}</>
   return (
-    <div className={`status-card ${exp.status}${fresh ? ' fresh' : ''}`} role="group" aria-label={`Status: ${STATUS_WORD[exp.status]}`}>
-      <span className="sc-pill"><StatusIcon status={exp.status} />{STATUS_WORD[exp.status]}</span>
+    <div className={`status-card ${exp.status}${returned ? ' returned' : ''}${fresh ? ' fresh' : ''}`} role="group" aria-label={`Status: ${returned ? 'Returned to the author' : STATUS_WORD[exp.status]}`}>
+      <span className="sc-pill"><StatusIcon status={exp.status} />{returned ? 'Returned' : STATUS_WORD[exp.status]}</span>
       {step >= 0 && <ol className="sc-steps" aria-label="Signing progress">
         {STEPS.map((label, i) => (
           <li key={label} className={i < step ? 'done' : i === step ? 'now' : ''} aria-current={i === step ? 'step' : undefined}
@@ -406,7 +411,7 @@ export default function ExperimentPage() {
   }
 
   return (
-    <article
+    <article className="exp-page"
       onDragEnter={e => { if (editable && e.dataTransfer.types.includes('Files')) { dragDepth.current++; setDragging(true) } }}
       onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }}
       onDragOver={e => { if (editable && e.dataTransfer.types.includes('Files')) e.preventDefault() }}
@@ -426,6 +431,7 @@ export default function ExperimentPage() {
             {exp.notebook_id && <Link className="faint" to={`/notebooks/${exp.notebook_id}`}>{exp.notebook_name}</Link>}
             {exp.is_template && <span className="tag">Template</span>}
           </div>
+          <h1 className="vh">{exp.eid} {exp.title}</h1>
           <textarea className="exp-title-input" aria-label="Experiment title" disabled={!editable} defaultValue={exp.title} key={`t${exp.id}-${exp.title}`} rows={1} maxLength={300}
             ref={el => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px` } }}
             onInput={e => { const el = e.currentTarget; el.value = el.value.replace(/\n/g, ' '); el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px` }}
@@ -459,9 +465,11 @@ export default function ExperimentPage() {
         {!exp.is_template && <StatusCard exp={exp} fresh={fresh} />}
       </header>
 
-      <div className="tabs" role="tablist">
-        <button role="tab" aria-selected={tab === 'record'} onClick={() => setTab('record')}>Record</button>
-        <button role="tab" aria-selected={tab === 'history'} onClick={() => setTab('history')}>Audit trail</button>
+      <div className="tabs">
+        <div className="tabs-list" role="tablist" aria-label="Record or audit trail">
+          <button role="tab" aria-selected={tab === 'record'} onClick={() => setTab('record')}>Record</button>
+          <button role="tab" aria-selected={tab === 'history'} onClick={() => setTab('history')}>Audit trail</button>
+        </div>
         {tab === 'record' && <div className="tabs-end">
           {exp.entries.length > 1 && (() => {
             const keys = exp.entries.map(e => `entry.${e.id}`)
@@ -515,7 +523,7 @@ export default function ExperimentPage() {
               </div>
             )}
             {!exp.is_template && <div>
-              <h3>Signatures</h3>
+              <h2 className="rail-h">Signatures</h2>
               <WitnessPanel exp={exp} canManage={isOwner || user.role === 'admin'} onChange={load} />
               <SignatureRail sigs={exp.signatures} eid={exp.eid} />
               <button className="btn ghost sm" onClick={runVerify}>Verify integrity</button>
@@ -525,7 +533,7 @@ export default function ExperimentPage() {
             </div>}
             {!exp.is_template && <PublishPanel exp={exp} onChange={load} />}
             {!exp.is_template && <div className="stack bench-tools" style={{ gap: 6 }}>
-              <h3>At the bench</h3>
+              <h2 className="rail-h">At the bench</h2>
               {editable && <button className="btn sm" onClick={() => setBench('log')} title="Shortcut: L">Log a note <kbd>L</kbd></button>}
               {editable && <button className="btn sm" onClick={() => setBench('timer')} title="Shortcut: T">Start a timer <kbd>T</kbd></button>}
               <button className="btn sm" onClick={() => setPhone(true)} title="Shortcut: P">Open on your phone <kbd>P</kbd></button>
@@ -533,7 +541,7 @@ export default function ExperimentPage() {
             <Discussion experimentId={exp.id} entries={exp.entries} focusEntry={focusEntry} onFocusDone={() => setFocusEntry(null)}
               onCountsChange={per => setCommentCounts(per)} canShare={isOwner || user.role === 'admin'} onShare={us => setSharing(us)} />
             <div className="stack" style={{ gap: 6 }}>
-              <h3>Record</h3>
+              <h2 className="rail-h">Record</h2>
               {!exp.is_template && (() => {
                 const pins = user.preferences?.pinned || []
                 const pinned = pins.includes(exp.id)

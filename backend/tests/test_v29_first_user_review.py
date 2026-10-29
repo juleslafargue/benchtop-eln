@@ -189,3 +189,68 @@ def test_the_server_knows_every_item_of_the_sidebar():
     src = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "components" / "MainNav.tsx").read_text()
     items = src[src.index("const ITEMS = ["):src.index("] as const")]
     assert re.findall(r"\{ key: '([a-z]+)'", items) == list(NAV_KEYS)
+
+
+# ------------------------------------------------------------------ batch 2: R6, P4, M2
+
+def test_unnamed_rows_are_called_by_formula_or_place_never_by_smiles(client, lab):
+    """R6: rows from a pasted reaction SMILES have no names. 0.28's messages listed them by SMILES ("E-factor/PMI need a
+    mass for O=C(O)c1ccccc1…") and the risk table called them "reactant". Now: the formula, else "Reactant 2"."""
+    from app.chem import compute_stoichiometry, green_metrics, row_label
+    rows = [{"role": "reactant", "smiles": "O=C(O)c1ccccc1", "limiting": True, "basis": "mass", "mass_mg": 122.1},
+            {"role": "reactant", "smiles": "NCc1ccccc1", "equiv": 1.1, "basis": "equiv"},
+            {"role": "reactant", "smiles": "CCO", "equiv": 1, "basis": "equiv"},
+            {"role": "product", "smiles": "O=C(NCc1ccccc1)c1ccccc1", "equiv": 1, "actual_mass_mg": 150}]
+    out = compute_stoichiometry(rows)
+    for r in out["rows"]:
+        if r["smiles"] == "CCO":
+            r["mass_mg"] = None  # a row without a mass: E-factor and PMI say which row they need
+    missing = green_metrics(out["rows"])["missing_mass"]
+    assert missing == ["C2H6O"], missing
+    assert row_label(out["rows"][0], out["rows"]) == "C7H6O2"
+    lone = {"role": "reactant", "smiles": "not a smiles"}
+    assert row_label(lone, [{"role": "reactant"}, lone]) == "Reactant 2"
+    bad = compute_stoichiometry([{"role": "reactant", "smiles": "C1CC(", "limiting": True, "mass_mg": 10, "basis": "mass"}])
+    assert bad["warnings"] and all("C1CC(" not in w for w in bad["warnings"]), bad["warnings"]
+    # the risk assessment's rows
+    h = lab["rv_newcomer"][0]
+    nb = client.post("/api/notebooks", headers=h, json={"name": "Pasted SMILES"}).json()["id"]
+    e = client.post("/api/experiments", headers=h, json={"title": "Amide from SMILES", "notebook_id": nb}).json()
+    client.post(f"/api/experiments/{e['id']}/entries", headers=h, json={"kind": "reaction", "title": "Pasted", "content": {"rows": out["rows"]}})
+    names = [c["name"] for c in client.get(f"/api/experiments/{e['id']}/safety", headers=h).json()["chemicals"]]
+    assert names and all(n and "c1ccccc1" not in n and n != "reactant" for n in names), names
+
+
+def test_lookups_turned_off_say_so_plainly(client, lab, admin):
+    """P4: 0.28 told scientists "PubChem lookups are turned off on this server (BENCHTOP_PUBCHEM=off)". The setting's
+    name is for the admin, who can change it."""
+    r = client.get("/api/lookup", params={"q": "sodium borohydride"}, headers=lab["rv_newcomer"][0])
+    assert r.status_code == 503 and "turned off" in r.json()["detail"] and "BENCHTOP_" not in r.json()["detail"]
+    r = client.get("/api/lookup", params={"q": "sodium borohydride"}, headers=admin)
+    assert r.status_code == 503 and "BENCHTOP_PUBCHEM=off" in r.json()["detail"]
+
+
+def test_signing_with_empty_sections_covers_what_it_always_did(client, lab):
+    """M2: the sign dialog now lists the sections still empty. It's only shown: signing a record with empty sections
+    still works, the dialog sends what it sent before (password and comment), and the signature's hash is the one
+    the existing code computes for the record as it stands, before and after signing."""
+    from sqlmodel import Session
+
+    from app.db import engine
+    from app.models import Experiment
+    from app.services import content_hash
+    h = lab["rv_author"][0]
+    nb = client.post("/api/notebooks", headers=h, json={"name": "Empty sections"}).json()["id"]
+    e = client.post("/api/experiments", headers=h, json={"title": "Signed as it was", "notebook_id": nb}).json()
+    entries = client.get(f"/api/experiments/{e['id']}", headers=h).json()["entries"]
+    assert entries and all(not (x["content"].get("html") or x["content"].get("rows")) for x in entries if x["kind"] in ("text", "reaction"))
+    with Session(engine) as s:
+        before = content_hash(s, s.get(Experiment, e["id"]))
+    r = client.post(f"/api/experiments/{e['id']}/sign", headers=h, json={"password": PW, "comment": ""})  # SignDialog's body
+    assert r.status_code == 200, r.text
+    sig = r.json()["signatures"][-1]
+    with Session(engine) as s:
+        after = content_hash(s, s.get(Experiment, e["id"]))
+    assert sig["content_hash"] == before == after
+    v = client.get(f"/api/experiments/{e['id']}/verify", headers=h).json()
+    assert v["intact"] and v["content_hash"] == sig["content_hash"]

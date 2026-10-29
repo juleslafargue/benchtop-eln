@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 // While any dialog is open the page behind it must not scroll (a wheel or trackpad gesture inside the
 // structure editor used to move the experiment page underneath). Counted, so nested dialogs work.
@@ -24,21 +24,40 @@ function lockPage() {
   }
 }
 
+/** A dialog. Keyboard focus: it goes to the field marked autoFocus (the sign dialog's password), else the first
+ *  thing that takes focus; when the dialog closes it goes back to whatever had it before (the button that opened
+ *  it), instead of the top of the page. */
 export default function Modal({ title, children, footer, onClose, wide }: {
   title: ReactNode; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   const titleId = useId()
+  // what had the focus as the dialog opened (read while drawing it, before anything inside could take the focus)
+  const [opener] = useState(() => (typeof document === 'undefined' ? null : document.activeElement))
   useEffect(lockPage, [])
+  // The dialog is first drawn open (not yet modal), so a field marked autoFocus can take the focus as it appears;
+  // making it modal then moves the focus to its first field or button, so the autoFocus one is given it back.
+  useLayoutEffect(() => {
+    const d = ref.current!
+    const wanted = document.activeElement
+    if (d.open) d.close()
+    d.showModal()
+    if (wanted instanceof HTMLElement && wanted !== d && d.contains(wanted)) wanted.focus()
+    return () => {
+      if (d.open) d.close()  // while it's open, everything outside it is inert and can't take the focus
+      if (opener instanceof HTMLElement && opener !== document.body && opener.isConnected) {
+        try { opener.focus({ preventScroll: true }) } catch { /* gone */ }
+      }
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const d = ref.current!
-    if (!d.open) d.showModal()
     const cancel = (e: Event) => { e.preventDefault(); onClose() }
     d.addEventListener('cancel', cancel)
     return () => d.removeEventListener('cancel', cancel)
   }, [onClose])
   return (
-    <dialog ref={ref} className={`modal${wide ? ' wide' : ''}`} aria-labelledby={titleId}>
+    <dialog ref={ref} open className={`modal${wide ? ' wide' : ''}`} aria-labelledby={titleId}>
       <div className="modal-head"><h2 id={titleId} style={{ fontSize: 19 }}>{title}</h2></div>
       <div className="modal-body">{children}</div>
       {footer && <div className="modal-foot">{footer}</div>}

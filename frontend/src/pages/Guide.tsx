@@ -44,9 +44,12 @@ export default function Guide() {
     notebooks: <>
       <p>A notebook holds experiments, usually one per project. The notebooks you can open are listed in the sidebar (under Menu on a phone)
         {canWrite ? <>; <b>+ New</b> beside the heading makes another</> : null}.{nb && <> <Link to={`/notebooks/${nb.id}`}>Open {nb.name}</Link></>}</p>
+      <p>Start by making a notebook of your own, and choose who can open it: everyone, your group, or only you. Group
+        notebooks stay out of sight until you're in the group, so ask your Benchtop admin to add you to it.</p>
       <p>Each experiment gets a number, such as EXP-00042, that stays with it for good. Press <kbd>N</kbd> anywhere, or
         click <b>New experiment</b>, to start one: give it a title, choose the notebook and, if you like,
-        a <Link to="/templates">template</Link> to start from.</p>
+        a <Link to="/templates">template</Link> to start from. An experiment can't be deleted, only voided, so check
+        which notebook it's going into before you click Create.</p>
       <ul>
         <li>A new experiment has the usual sections ready: Aim, Reaction, Safety &amp; risk assessment, Procedure,
           Work-up &amp; purification, Characterisation, and Observations &amp; results.</li>
@@ -63,8 +66,12 @@ export default function Guide() {
         the structures, with formulas and molecular weights. <b>Add from registry</b> adds a reagent or solvent from
         the lab's <Link to="/materials">materials</Link>, or finds one on PubChem.</p>
       <ul>
-        <li>Choose the limiting reagent with the dot in the <b>Lim.</b> column, then type one amount in any row: mass,
-          volume, mmol or equivalents. The rest is calculated, allowing for purity, density and concentration.</li>
+        <li>Each row has a role. <b>Reactants</b> end up in the product; <b>Reagents</b> make the reaction go without
+          ending up in it (a base, a coupling agent); <b>Catalysts</b> and <b>Solvents</b> are what they say. Only
+          Reactants count in the atom economy, so a co-reactant such as acetic anhydride is a Reactant.</li>
+        <li>Choose the limiting reagent with the dot in the <b>Lim.</b> column, then type one amount in each row: its
+          mass, volume, mmol or equivalents, not several. The rest is calculated, allowing for purity, density and
+          concentration.</li>
         <li>The cell you typed is highlighted, so you can tell what you entered from what was worked out. Amounts
           take units: <code>1.2 g</code> in a mg cell, <code>250 µL</code> in a mL cell.</li>
         <li>Above the table, fill in the temperature (or rt, reflux), time, atmosphere and target concentration.
@@ -141,13 +148,14 @@ export default function Guide() {
     </>,
     signing: <>
       <p>When an experiment is finished, click <b>Sign as author</b> and enter your password. Signing locks the record:
-        nobody can change it. You can ask a particular colleague to witness it, and they get a notification.</p>
+        nobody can change it. The dialog lists any section still empty, as a reminder. You can ask a particular
+        colleague to witness it, and they get a notification.</p>
       <ol>
         <li><b>Signed</b>: locked and waiting for a witness. Until it's witnessed, you can <b>Withdraw signature</b> to
           make changes; the withdrawal stays in the history.</li>
         <li>A colleague who can open the record (anyone but its author) reads it, then clicks <b>Witness</b> and
           enters their password, or clicks <b>Return to author</b> with a reason. A returned record is a draft again,
-          to correct and sign again.</li>
+          with the reason at the top, to correct and sign again.</li>
         <li><b>Witnessed</b>: final. A witnessed record never changes. Late results go into a follow-up. A record
           that went wrong can be voided with a reason; it's kept, marked as voided, never deleted.</li>
       </ol>
@@ -158,10 +166,11 @@ export default function Guide() {
     </>,
     finding: <>
       <ul>
-        <li><kbd>{K}</kbd> finds any experiment (by number or title), material (by name or CAS number), notebook or
-          page, and runs actions such as New experiment. A few letters of each word are enough, in any order.</li>
+        <li><kbd>{K}</kbd> finds any experiment (by number, title or the sample code on a vial, such as JL-013),
+          material (by name or CAS number), notebook or page, and runs actions such as New experiment. A few letters of
+          each word are enough, in any order.</li>
         <li><Link to="/search">Search</Link> looks through everything: titles, tags, section text, reagents,
-          conditions, tables and file names. Every word must match; put an exact phrase in “quotes”. It also searches
+          conditions, tables, file names and sample codes. Every word must match; put an exact phrase in “quotes”. It also searches
           by structure (substructure or similar structures).</li>
         <li><Link to="/reactions">Reactions</Link> puts every reaction you can open in one table, with conditions and
           yields, to filter and sort.</li>
@@ -178,7 +187,7 @@ export default function Guide() {
           the author signs it.</li>
         <li>Records you can't open don't appear anywhere for you: not in lists, search or suggestions.</li>
         <li>In <b>Discussion</b> beside an experiment, or on a single section, type @ and a name to bring a colleague
-          in; they get a notification.</li>
+          in; they get a notification. Check the highlighted name before you press Enter.</li>
       </ul>
     </>,
     account: <>

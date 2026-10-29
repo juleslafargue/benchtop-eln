@@ -37,13 +37,17 @@ export function parseAmount(text: string, unit?: keyof typeof UNITS): number | n
  *  Leaving the box saves only what you typed in it since you entered it: a box you only passed through (Tab, Enter,
  *  a click elsewhere) shows and keeps the value recalculated meanwhile, instead of saving the old one it showed.
  *  With `unit`, a typed unit is converted (e.g. "1.2 g" into a mg field). */
-export function NumInput({ value, onCommit, disabled, className, label, nd = 4, unit }: {
+export function NumInput({ value, onCommit, disabled, className, label, nd = 4, unit, sig }: {
   value: number | null | undefined; onCommit: (v: number | null) => void
   disabled?: boolean; className?: string; label: string; nd?: number; unit?: keyof typeof UNITS
+  /** show at most this many significant figures (whole numbers stay whole): the value kept is unchanged */
+  sig?: number
 }) {
   // tiny amounts (after a big scale-down) keep 3 significant figures instead of rounding to 0.00
   const shown = value === null || value === undefined ? ''
-    : value !== 0 && Math.abs(value) < 10 ** (1 - nd) ? String(Number(Number(value).toPrecision(3))) : String(Number(Number(value).toFixed(nd)))
+    : value !== 0 && Math.abs(value) < 10 ** (1 - nd) ? String(Number(Number(value).toPrecision(3)))
+      : sig && Math.abs(value) < 10 ** sig ? String(Number(Number(Number(value).toPrecision(sig)).toFixed(nd)))
+        : String(Number(Number(value).toFixed(sig ? 0 : nd)))
   // null: not typed in since entering the box. Otherwise the typed text, and what the box showed when typing began.
   const [draft, setDraft] = useState<{ text: string; from: string } | null>(null)
   const commit = () => {
@@ -67,9 +71,9 @@ export function NumInput({ value, onCommit, disabled, className, label, nd = 4, 
   )
 }
 
-export function Mol({ smiles, w = 220, h = 130, className, rxn, highlight }: { smiles: string; w?: number; h?: number; className?: string; rxn?: boolean; highlight?: string }) {
+export function Mol({ smiles, w = 220, h = 130, className, rxn, highlight, alt }: { smiles: string; w?: number; h?: number; className?: string; rxn?: boolean; highlight?: string; alt?: string }) {
   if (!smiles) return null
-  return <img className={className} src={depictUrl(smiles, w, h, rxn, highlight)} alt={`Structure ${smiles}`} loading="lazy" />
+  return <img className={className} src={depictUrl(smiles, w, h, rxn, highlight)} alt={alt || `Structure ${smiles}`} loading="lazy" />
 }
 
 export function useDebounced<T>(value: T, ms: number): T {
