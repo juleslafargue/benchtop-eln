@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import pytest
 from sqlmodel import Session, select
 
-from app import publishing, sitesettings, zenodo
+from app import eln, publishing, sitesettings, zenodo
 from app.config import settings
 from app.db import engine
 from app.models import AuditEvent, Experiment, Publication, Signature, ZenodoAccount
@@ -205,6 +205,23 @@ def test_the_discussion_goes_only_when_the_author_includes_it(client, users, not
     record = json.loads(next(eln_in(fz, pub["deposition_id"]).read(n) for n in eln_in(fz, pub["deposition_id"]).namelist()
                              if n.endswith("record.benchtop.json")))
     assert [c["body"] for c in record["comments"]] == ["Is the peak at 7.26 just CHCl3?"]
+
+
+@pytest.mark.parametrize("licence, url, name", [("cc-by-4.0", "https://creativecommons.org/licenses/by/4.0/", "CC BY 4.0"),
+                                                 ("cc0-1.0", "https://creativecommons.org/publicdomain/zero/1.0/", "CC0 1.0")])
+def test_the_eln_on_zenodo_carries_the_chosen_licence(client, users, notebook, fz, licence, url, name):
+    """An ordinary .eln reserves all rights (test_v20_eln); the one published on Zenodo is under the licence chosen."""
+    a = users["alice"]
+    assert set(eln.LICENCES) == set(publishing.LICENCES)  # every licence offered has its entry in the .eln
+    exp = signed_record(client, a, notebook, title=f"Licence {name}")
+    connect(client, a)
+    pub = prepare(client, a, exp, licence=licence).json()
+    assert fz.deps[pub["deposition_id"]]["metadata"]["license"] == licence
+    z = eln_in(fz, pub["deposition_id"])
+    by = {n["@id"]: n for n in json.loads(z.read(next(n for n in z.namelist() if n.endswith("ro-crate-metadata.json"))))["@graph"]}
+    assert by["./"]["license"] == {"@id": url}
+    assert by[url]["@type"] == "CreativeWork" and by[url]["name"] == name and by[url]["description"]
+    assert "#licence" not in by
 
 
 def test_a_draft_can_be_discarded_and_prepared_again(client, users, notebook, fz):

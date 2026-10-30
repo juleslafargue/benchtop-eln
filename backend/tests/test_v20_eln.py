@@ -157,6 +157,36 @@ def test_export_follows_the_format_rules(client, users, notebook):
         out.write_bytes(client.get(f"/api/experiments/{exp['id']}/export.eln", headers=h).content)
 
 
+def test_every_export_states_its_licence_all_rights_reserved(client, users, notebook):
+    """RO-Crate 1.2 requires the root to have a licence (the consortium's checker enforces it since roc-validator 0.13.1).
+    An ordinary export grants none; only one made for Zenodo carries an open licence (test_v28_zenodo)."""
+    h = users["alice"]
+    exp = _exp(client, h, notebook, "Licence check")
+    for url in (f"/api/experiments/{exp['id']}/export.eln", f"/api/notebooks/{notebook['id']}/export.eln", "/api/export.eln"):
+        _, by = _graph(_download(client, h, url))
+        assert by["./"]["license"] == {"@id": "#licence"}, url
+        assert by["#licence"] == {"@id": "#licence", "@type": "CreativeWork", "name": "No licence granted: all rights reserved",
+                                  "description": "No licence is granted. All rights are reserved by the authors and their "
+                                                 "institution; ask the authors before reusing."}
+        assert not any("license" in n for i, n in by.items() if i != "./")  # the experiments inherit it from the root
+
+
+def test_imports_with_or_without_a_licence(client, users, notebook, nb2):
+    """Import never depends on the licence: Benchtop's own exports have one, older ones and other ELNs' may not."""
+    a, b = users["alice"], users["bob"]
+    exp = _exp(client, a, notebook, "Licensed round trip")
+    data = client.get(f"/api/experiments/{exp['id']}/export.eln", headers=a).content
+    _, res = _import(client, b, data, nb2, name="licensed.eln")
+    assert not res["failed"] and [c["title"] for c in res["created"]] == ["Licensed round trip"]
+    nodes = json.loads(zipfile.ZipFile(io.BytesIO(_simple())).read("export/ro-crate-metadata.json"))["@graph"][2:]
+    assert nodes[0]["@id"] == "./" and "license" not in nodes[0]
+    # none at all, a plain URL, a reference to an entity that isn't there
+    for licence in (None, "https://creativecommons.org/licenses/by/4.0/", {"@id": "#nowhere"}):
+        root = nodes[0] if licence is None else {**nodes[0], "license": licence}
+        _, res = _import(client, b, _crate([root, *nodes[1:]], {"exp/trace.csv": b"time,signal\n0,1\n"}), nb2)
+        assert not res["failed"] and [c["title"] for c in res["created"]] == ["Grignard"], licence
+
+
 def test_export_respects_sharing_and_leaves_out_files_sent_back(client, users, notebook):
     a, b = users["alice"], users["bob"]
     private = client.post("/api/notebooks", headers=a, json={"name": "Alice private", "visibility": "private"}).json()

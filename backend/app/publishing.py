@@ -527,7 +527,8 @@ def prepare(session: Session, user: User, exp: Experiment, raw: Any) -> dict[str
             raise PublishError(e.status_code if e.status_code < 500 else 502, f"Couldn't make the PDF: {e.detail}") from None
         tmp = eln.scratch_dir() / f"zenodo-{exp.id}-{datetime.now():%H%M%S%f}.eln"
         eln.export(session, user, [exp], tmp, f"{exp.eid} - {exp.title}",
-                   f"{exp.eid} from Benchtop ELN, as published on Zenodo", with_comments=details["include_comments"])
+                   f"{exp.eid} from Benchtop ELN, as published on Zenodo", with_comments=details["include_comments"],
+                   licence=details["licence"])
         files = []
         for name, what, src in ((pdf_name, "pdf", pdf), (eln_name, "eln", tmp)):
             size, md5, sha = zenodo.file_digests(src)

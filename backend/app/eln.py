@@ -38,6 +38,19 @@ PUBLISHER = "#benchtop-eln"
 SOFTWARE = "https://github.com/juleslafargue/benchtop-eln"
 RECORD_FILE = "record.benchtop.json"
 RECORD_FORMAT = "benchtop-record"
+# Who may reuse what's in the file: RO-Crate 1.2 requires the root to say. An ordinary export grants nothing; one made
+# for publishing on Zenodo carries the licence the author chose there (publishing.LICENCES). Import never needs it.
+NO_LICENCE = {"@id": "#licence", "@type": "CreativeWork", "name": "No licence granted: all rights reserved",
+              "description": "No licence is granted. All rights are reserved by the authors and their institution; "
+                             "ask the authors before reusing."}
+LICENCES = {
+    "cc-by-4.0": {"@id": "https://creativecommons.org/licenses/by/4.0/", "@type": "CreativeWork", "name": "CC BY 4.0",
+                  "description": "Creative Commons Attribution 4.0 International: anyone may share and adapt this, "
+                                 "crediting the authors."},
+    "cc0-1.0": {"@id": "https://creativecommons.org/publicdomain/zero/1.0/", "@type": "CreativeWork", "name": "CC0 1.0",
+                "description": "Creative Commons CC0 1.0 Universal: given to the public domain; anyone may use it "
+                               "without conditions."},
+}
 # already-compressed formats are stored as they are: squeezing them again only costs time
 STORED_EXT = re.compile(r"\.(zip|gz|tgz|bz2|xz|7z|rar|jpe?g|png|gif|webp|heic|mp4|mov|avi|mkv|pdf|docx|xlsx|pptx|d|raw|wiff2?)$", re.I)
 
@@ -429,9 +442,10 @@ def _preview(title: str, exps: list[Experiment], folder_of: dict[int, str]) -> b
 
 
 def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, name: str,
-           description: str = "", with_comments: bool = True) -> dict[str, Any]:
+           description: str = "", with_comments: bool = True, licence: Optional[str] = None) -> dict[str, Any]:
     """Write a .eln file with these experiments to `out`. The caller has checked the user may read each of them.
-    with_comments=False leaves the discussion out (publishing on Zenodo, unless the author chooses to include it)."""
+    with_comments=False leaves the discussion out (publishing on Zenodo, unless the author chooses to include it).
+    licence: a key of LICENCES when the file is published under that licence; otherwise all rights are reserved."""
     exps = list(exps)
     root = _safe(name, 120)
     folders = _Unique()
@@ -448,6 +462,7 @@ def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, 
                    "description": "Open-source electronic lab notebook for chemistry"})
         crate.add({"@id": f"{SOFTWARE}/releases/tag/v{__version__}", "@type": "SoftwareApplication",
                    "name": "Benchtop ELN", "version": __version__, "url": SOFTWARE})
+        lic = crate.add(LICENCES[licence] if licence else NO_LICENCE)
         parts = [_ref(_experiment(session, crate, e, folders, folder_of, with_comments)) for e in exps]
         crate.add({"@id": "#export", "@type": "CreateAction", "name": "Export from Benchtop", "endTime": now,
                    "agent": _ref(crate.person(session, user.id)), "instrument": _ref(f"{SOFTWARE}/releases/tag/v{__version__}"),
@@ -456,7 +471,7 @@ def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, 
         crate.write_bytes("ro-crate-preview.html", preview)
         root_node = {"@id": "./", "@type": "Dataset", "conformsTo": [_ref(CRATE), _ref(ELN_SPEC)], "name": f"{root}.eln",
                      "description": description or f"{len(exps)} experiment{'s' if len(exps) != 1 else ''} exported from Benchtop ELN",
-                     "datePublished": now, "license": None, "hasPart": parts,
+                     "datePublished": now, "license": _ref(lic), "hasPart": parts,
                      "mentions": _ref("#export")}  # how this export was made (RO-Crate: the root mentions its actions)
         graph = [crate.graph.pop("ro-crate-metadata.json"), _clean(root_node), *crate.graph.values()]
         meta = json.dumps({"@context": CONTEXT, "@graph": graph}, ensure_ascii=False, indent=1).encode()
