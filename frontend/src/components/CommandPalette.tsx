@@ -31,7 +31,7 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
   onClose: () => void; onNewExperiment: () => void; onNewNotebook: () => void
 }) {
   const nav = useNavigate()
-  const { notebooks, user, logout, canWrite } = useApp()
+  const { notebooks, archivedNotebooks = [], user, logout, canWrite } = useApp()
   const [q, setQ] = useState('')
   const [exps, setExps] = useState<(ExperimentSummary & { sample_codes?: string[] })[]>([])
   const [mats, setMats] = useState<Material[]>([])
@@ -66,10 +66,11 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
       .map(([k, label]) => ({ key: `p-admin-${k || 'users'}`, group: 'Go to', label: `Admin → ${label}`, run: go(k ? `/admin/${k}` : '/admin') })) : []),
     { key: 'a-out', group: 'Actions', label: 'Sign out', run: () => { onClose(); logout() } },
     ...notebooks.map(n => ({ key: `n${n.id}`, group: 'Notebooks', label: n.name, hint: `${n.experiment_count} experiments`, run: go(`/notebooks/${n.id}`) })),
+    ...archivedNotebooks.map(n => ({ key: `n${n.id}`, group: 'Notebooks', label: n.name, hint: `archived · ${n.experiment_count} experiments`, run: go(`/notebooks/${n.id}`) })),
     ...exps.map(e => ({ key: `e${e.id}`, group: 'Experiments', label: `${e.eid} ${e.title}`, codes: e.sample_codes,
       hint: [...(e.sample_codes || []), e.status].join(' · '), run: go(`/experiments/${e.id}`) })),
     ...mats.map(m => ({ key: `m${m.id}`, group: 'Materials', label: `${m.name}${m.cas ? ` (${m.cas})` : ''}`, hint: m.mid, run: go(`/materials/${m.id}`) })),
-  ], [exps, mats, notebooks, user.role, canWrite]) // eslint-disable-line react-hooks/exhaustive-deps
+  ], [exps, mats, notebooks, archivedNotebooks, user.role, canWrite]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const results = useMemo(() => {
     // every word must match somewhere (any order): "bromo suzuki" finds "Suzuki coupling of 4-bromoanisole"

@@ -428,7 +428,7 @@ export default function ExperimentPage() {
         <div style={{ minWidth: 0 }}>
           <div className="row" style={{ gap: 8 }}>
             <span className="eid">{exp.eid}</span>
-            {exp.notebook_id && <Link className="faint" to={`/notebooks/${exp.notebook_id}`}>{exp.notebook_name}</Link>}
+            {exp.notebook_id && <Link className="faint" to={`/notebooks/${exp.notebook_id}`}>{exp.notebook_name}{exp.notebook_archived ? ' (archived)' : ''}</Link>}
             {exp.is_template && <span className="tag">Template</span>}
           </div>
           <h1 className="vh">{exp.eid} {exp.title}</h1>
@@ -559,8 +559,8 @@ export default function ExperimentPage() {
               <button className="btn sm" onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export?format=json`, `${exp.eid}.json`)}>Download JSON</button>
               {!exp.is_template && <button className="btn sm" title="The shared format of electronic lab notebooks: opens in eLabFTW, RSpace, Kadi4Mat or another Benchtop"
                 onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export.eln`, `${exp.eid} - ${exp.title.replace(/[\\/:*?"<>|#^[\]{}%]+/g, ' ').slice(0, 70)}.eln`).catch(e => toast(e.message))}>Download .eln</button>}
-              {canWrite && <button className="btn sm" onClick={() => clone(false)}>Duplicate</button>}
-              {canWrite && !exp.is_template && <button className="btn sm" onClick={() => setScaling(true)}>Repeat at another scale…</button>}
+              {canWrite && !exp.notebook_archived && <button className="btn sm" onClick={() => clone(false)}>Duplicate</button>}
+              {canWrite && !exp.is_template && !exp.notebook_archived && <button className="btn sm" onClick={() => setScaling(true)}>Repeat at another scale…</button>}
               {canWrite && !exp.is_template && <button className="btn sm" onClick={() => clone(true)}>Save as template</button>}
               {canWrite && (isOwner || user.role === 'admin') && exp.status !== 'voided' && !exp.is_template &&
                 <button className="btn ghost sm danger" onClick={() => setDialog('void')}>Void…</button>}

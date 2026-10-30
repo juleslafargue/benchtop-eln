@@ -29,7 +29,10 @@ import { Shortcuts } from './components/Shortcuts'
 export interface ToastAction { label: string; run: () => void }
 interface Ctx {
   user: User
+  /** the notebooks this person can open, archived ones left out (the sidebar's list, and where new experiments can go) */
   notebooks: Notebook[]
+  /** archived notebooks: out of the main list, found under Archived at the bottom of it */
+  archivedNotebooks: Notebook[]
   refreshNotebooks: () => Promise<void>
   groups: Group[]
   refreshGroups: () => Promise<void>
@@ -47,6 +50,7 @@ export default function App() {
   const [handoffErr, setHandoffErr] = useState('')
   const loc = useLocation()
   const [notebooks, setNotebooks] = useState<Notebook[]>([])
+  const [archivedNotebooks, setArchivedNotebooks] = useState<Notebook[]>([])
   const [groups, setGroups] = useState<Group[]>([])
   const [toastMsg, setToastMsg] = useState<{ msg: string; action?: ToastAction } | null>(null)
 
@@ -80,7 +84,8 @@ export default function App() {
   }, [])
 
   const refreshNotebooks = useCallback(async () => {
-    setNotebooks(await api.get<Notebook[]>('/api/notebooks'))
+    const all = await api.get<Notebook[]>('/api/notebooks?include_archived=true')
+    setNotebooks(all.filter(n => !n.archived)); setArchivedNotebooks(all.filter(n => n.archived))
   }, [])
   const refreshGroups = useCallback(async () => {
     try { setGroups(await api.get<Group[]>('/api/groups')) } catch { /* older server */ }
@@ -108,7 +113,7 @@ export default function App() {
 
   // an admin set this password: choose your own before anything else loads
   if (user.must_change_password) return (
-    <AppCtx.Provider value={{ user, notebooks, refreshNotebooks, groups, refreshGroups, toast, logout, canWrite: user.role !== 'viewer', setUser }}>
+    <AppCtx.Provider value={{ user, notebooks, archivedNotebooks, refreshNotebooks, groups, refreshGroups, toast, logout, canWrite: user.role !== 'viewer', setUser }}>
       <div className="login" />
       <PasswordDialog onClose={() => {}} />
       {toastEl}
@@ -116,7 +121,7 @@ export default function App() {
   )
 
   return (
-    <AppCtx.Provider value={{ user, notebooks, refreshNotebooks, groups, refreshGroups, toast, logout, canWrite: user.role !== 'viewer', setUser }}>
+    <AppCtx.Provider value={{ user, notebooks, archivedNotebooks, refreshNotebooks, groups, refreshGroups, toast, logout, canWrite: user.role !== 'viewer', setUser }}>
       {loc.pathname.startsWith('/bench/') ? <ErrorBoundary page label="the bench view" resetKey={loc.pathname}><Routes><Route path="/bench/:id" element={<BenchPage />} /></Routes></ErrorBoundary> : <>
       <Layout>
         <ErrorBoundary page label="this page" resetKey={loc.pathname}>

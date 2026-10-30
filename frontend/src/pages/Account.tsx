@@ -31,7 +31,8 @@ function UsernameDialog({ current, onDone, onClose }: { current: string; onDone:
 }
 
 export default function Account() {
-  const { user, setUser, notebooks, toast } = useApp()
+  const { user, setUser, notebooks, archivedNotebooks = [], toast } = useApp()
+  const archivedDefault = archivedNotebooks.find(n => n.id === user.preferences?.default_notebook_id)
   const [name, setName] = useState(user.full_name)
   const [email, setEmail] = useState(user.email)
   const [orcid, setOrcid] = useState(user.orcid || '')
@@ -145,6 +146,7 @@ export default function Account() {
               <select className="select" value={user.preferences?.default_notebook_id ?? ''} onChange={e => setPref({ default_notebook_id: e.target.value ? Number(e.target.value) : null })}>
                 <option value="">First in the list</option>
                 {notebooks.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
+                {archivedDefault && <option value={archivedDefault.id}>{archivedDefault.name} (archived, so not used)</option>}
               </select>
             </label>
           </div>

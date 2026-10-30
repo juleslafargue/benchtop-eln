@@ -46,6 +46,10 @@ export default function Guide() {
         {canWrite ? <>; <b>+ New</b> beside the heading makes another</> : null}.{nb && <> <Link to={`/notebooks/${nb.id}`}>Open {nb.name}</Link></>}</p>
       <p>Start by making a notebook of your own, and choose who can open it: everyone, your group, or only you. Group
         notebooks stay out of sight until you're in the group, so ask your Benchtop admin to add you to it.</p>
+      <p>A notebook's owner can delete it with <b>Delete notebook</b> on its page while it has no experiments (a test
+        notebook, say). One with experiments can't be deleted; <b>Archive notebook</b> takes it out of the sidebar's list
+        and stops new experiments going into it, and everything in it stays readable and searchable. Archived notebooks
+        are under <b>Archived</b> at the bottom of the list; <b>Unarchive</b> brings one back.</p>
       <p>Each experiment gets a number, such as EXP-00042, that stays with it for good. Press <kbd>N</kbd> anywhere, or
         click <b>New experiment</b>, to start one: give it a title, choose the notebook and, if you like,
         a <Link to="/templates">template</Link> to start from. An experiment can't be deleted, only voided, so check

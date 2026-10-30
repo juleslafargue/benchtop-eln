@@ -1445,3 +1445,13 @@ table.rxn-grid input.text { min-width: 92px; }
 table.rxn-grid .fill-toggle { white-space: normal; line-height: 1.2; padding: 0 4px; }
 table.rxn-grid .fill-toggle input { min-width: 0; width: auto; padding: 0; }
 table.rxn-grid .used { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 2px; font-size: 12px; }
+
+/* ---------- archived notebooks (0.30) */
+.side-toggle.archived-toggle { margin: 6px 0 0 4px; align-self: flex-start; font-size: 12.5px; }
+.archived-list .nb-link { color: var(--ink-3); font-weight: 400; }
+.archived-list .nb-link.active { color: var(--ink); }
+.badge-archived { display: inline-block; vertical-align: middle; margin-left: 10px; font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 2px 8px; border-radius: 99px; background: var(--paper-2); color: var(--ink-2); border: 1px solid var(--rule); }
+.notice.archived-note { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; border-left-color: var(--ink-3); }
+.notice.archived-note > span { flex: 1 1 320px; min-width: 0; }
+.archive-points { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }

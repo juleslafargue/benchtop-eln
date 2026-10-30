@@ -16,7 +16,7 @@ import { useCollapsed } from '../collapse'
 export const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const { user, notebooks, logout, canWrite } = useApp()
+  const { user, notebooks, archivedNotebooks = [], logout, canWrite } = useApp()
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [palette, setPalette] = useState(false)
@@ -44,8 +44,11 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [nbHidden, setNbHidden] = useCollapsed('side.notebooks')
   useEffect(() => setOpen(false), [loc.pathname])
   // N on a notebook's page starts the experiment in that notebook
-  const hereNb = (() => { const m = /^\/notebooks\/(\d+)/.exec(loc.pathname); const id = m ? Number(m[1]) : NaN
-    return notebooks.some(n => n.id === id && !n.archived) ? id : undefined })()
+  const hereId = (() => { const m = /^\/notebooks\/(\d+)/.exec(loc.pathname); return m ? Number(m[1]) : NaN })()
+  const hereNb = notebooks.some(n => n.id === hereId && !n.archived) ? hereId : undefined
+  // archived notebooks: a small list under the others, shut unless asked for (or one of them is open)
+  const [archOpen, setArchOpen] = useState(false)
+  const showArch = archOpen || archivedNotebooks.some(n => n.id === hereId)
 
   return (
     <BackProvider>
@@ -76,6 +79,21 @@ export default function Layout({ children }: { children: ReactNode }) {
               </NavLink>
             ))}
             {notebooks.length === 0 && <p className="faint" style={{ padding: '0 8px' }}>No notebooks yet.{canWrite && ' Click + New to make one.'}</p>}
+            {archivedNotebooks.length > 0 && <>
+              <button className="side-toggle archived-toggle" onClick={() => setArchOpen(!showArch)} aria-expanded={showArch} aria-controls="side-archived"
+                title={showArch ? 'Hide archived notebooks' : 'Show archived notebooks'}>
+                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4" /></svg>
+                Archived ({archivedNotebooks.length})
+              </button>
+              <div className="nav archived-list" id="side-archived" hidden={!showArch}>
+                {archivedNotebooks.map(nb => (
+                  <NavLink key={nb.id} to={`/notebooks/${nb.id}`} className="nb-link">
+                    <span className="nb-name">{nb.name}</span>
+                    <span className="count">{nb.experiment_count}</span>
+                  </NavLink>
+                ))}
+              </div>
+            </>}
           </div>
         </div>
         <div className="side-foot">

@@ -141,12 +141,20 @@ def _check_audience(session, user: User, group_id: int | None, visibility: str |
     return group_id, vis
 
 
-def notebook_out(session, nb: Notebook, exps: list[Experiment] | None = None) -> dict[str, Any]:
+def _holds_experiments(session, nb_id: int) -> bool:
+    """Whether any experiment at all is in this notebook now (drafts, signed, witnessed, voided, locked, templates),
+    whoever can see it. Experiments moved out to another notebook don't count."""
+    return session.exec(select(Experiment.id).where(Experiment.notebook_id == nb_id).limit(1)).first() is not None
+
+
+def notebook_out(session, nb: Notebook, exps: list[Experiment] | None = None, empty: bool | None = None) -> dict[str, Any]:
     from ..models import LabGroup
     g = session.get(LabGroup, nb.group_id) if nb.group_id else None
     out = {"id": nb.id, "name": nb.name, "description": nb.description, "archived": nb.archived,
            "owner": user_brief(session, nb.owner_id), "created_at": nb.created_at.isoformat() + "Z",
-           "visibility": nb.visibility or "everyone", "group": {"id": g.id, "name": g.name} if g else None}
+           "visibility": nb.visibility or "everyone", "group": {"id": g.id, "name": g.name} if g else None,
+           # only an empty notebook can be deleted (DELETE /api/notebooks/{id}); others can be archived
+           "empty": (not _holds_experiments(session, nb.id)) if empty is None else empty}
     if exps is not None:
         out["experiment_count"] = len(exps)
         out["status_counts"] = {s.value: sum(1 for e in exps if e.status == s) for s in ExperimentStatus}
@@ -160,10 +168,12 @@ def list_notebooks(user: CurrentUser, session: DB, include_archived: bool = Fals
     q = acc.filter_notebooks(select(Notebook).order_by(Notebook.name))
     if not include_archived:
         q = q.where(Notebook.archived == False)  # noqa: E712
+    from sqlalchemy import func
+    held = {nid for nid, _ in session.exec(select(Experiment.notebook_id, func.count()).group_by(Experiment.notebook_id))}
     out = []
     for nb in session.exec(q):
         exps = session.exec(acc.filter(select(Experiment).where(Experiment.notebook_id == nb.id))).all()
-        out.append(notebook_out(session, nb, exps))
+        out.append(notebook_out(session, nb, exps, empty=nb.id not in held))
     return out
 
 
@@ -175,7 +185,7 @@ def create_notebook(body: NotebookIn, user: Writer, session: DB):
     session.flush()
     audit.record(session, user, "create", "notebook", nb.id, name=nb.name, group_id=gid, visibility=vis)
     session.commit()
-    return notebook_out(session, nb, [])
+    return notebook_out(session, nb, [], empty=True)
 
 
 class NotebookPatch(BaseModel):
@@ -202,9 +212,40 @@ def update_notebook(nb_id: int, body: NotebookPatch, user: Writer, session: DB):
     for k, v in changes.items():
         setattr(nb, k, v)
     session.add(nb)
-    audit.record(session, user, "update", "notebook", nb.id, before=before, changes=changes)
+    audit.record(session, user, "update", "notebook", nb.id, name=nb.name, before=before, changes=changes)
     session.commit()
     return notebook_out(session, nb)
+
+
+@router.delete("/notebooks/{nb_id}")
+def delete_notebook(nb_id: int, user: Writer, session: DB):
+    """Delete a notebook that holds no experiments (a test notebook, one made by mistake). Records are never deleted,
+    so a notebook with any experiment in it, of any status, can only be archived. The audit trail keeps its history."""
+    from ..access import access_for
+    nb = get_or_404(session, Notebook, nb_id)
+    if not access_for(session, user).can_read_notebook(nb):
+        raise HTTPException(404, f"Notebook {nb_id} not found")  # don't confirm that a hidden notebook exists
+    if nb.owner_id != user.id and user.role != Role.admin:
+        raise HTTPException(403, "Only the notebook's owner or an admin can delete it")
+    # hold the write lock before looking, so no experiment can be added between the check and the delete
+    audit._take_write_lock(session)
+    if _holds_experiments(session, nb.id):
+        session.rollback()
+        raise HTTPException(409, "This notebook has experiments, so it can't be deleted. Archive it instead.")
+    # nothing else may point at it: people's default notebook for new experiments is cleared
+    cleared = []
+    for u in session.exec(select(User)):
+        prefs = u.preferences or {}
+        if prefs.get("default_notebook_id") == nb.id:
+            u.preferences = {k: v for k, v in prefs.items() if k != "default_notebook_id"}
+            session.add(u)
+            cleared.append(u.username)
+    audit.record(session, user, "delete", "notebook", nb.id, name=nb.name, group_id=nb.group_id,
+                 visibility=nb.visibility or "everyone", archived=nb.archived,
+                 **({"default_cleared_for": cleared} if cleared else {}))
+    session.delete(nb)
+    session.commit()
+    return {"ok": True, "id": nb_id}
 
 
 # ====================================================================== experiments
@@ -355,11 +396,18 @@ def _new_entry(session, exp_id: int, kind: EntryKind, title: str, content: dict,
 
 
 def _require_notebook(session, user: User, nb_id: int) -> Notebook:
+    """A notebook this person can put a new experiment in: one they can open, and not archived."""
     from ..access import access_for
     nb = get_or_404(session, Notebook, nb_id)
     if not access_for(session, user).can_read_notebook(nb):
         raise HTTPException(404, f"Notebook {nb_id} not found")
+    if nb.archived:
+        raise HTTPException(409, archived_message(nb))
     return nb
+
+
+def archived_message(nb: Notebook) -> str:
+    return f"“{nb.name}” is archived, so no new experiments can go into it. Choose another notebook, or unarchive it first."
 
 
 @router.post("/experiments", status_code=201)
@@ -427,6 +475,9 @@ def _access_info(session, user: User, exp: Experiment) -> dict[str, Any]:
         "audience": {"visibility": (nb.visibility or "everyone") if nb else ("everyone" if exp.is_template else "private"),
                      "group": {"id": g.id, "name": g.name} if g else None},
         "open_comments": len(open_threads),
+        # its notebook is archived: it stays readable and editable (a draft can still be signed), but copies of it
+        # can't go there
+        "notebook_archived": bool(nb and nb.archived),
     }
 
 
@@ -467,6 +518,9 @@ def clone_experiment(exp_id: int, user: Writer, session: DB, as_template: bool =
     nb = session.get(Notebook, src.notebook_id) if src.notebook_id else None
     if not as_template and src.notebook_id is not None and (nb is None or not access_for(session, user).can_read_notebook(nb)):
         raise HTTPException(403, "You can copy this experiment as a template, but not into a notebook you can't open")
+    if not as_template and nb is not None and nb.archived:  # the copy would go into the archived notebook
+        raise HTTPException(409, f"{src.eid} is in “{nb.name}”, which is archived, so a copy can't go there. "
+                                 "Save it as a template and start a new experiment from that, or unarchive the notebook.")
     prefix = "Template: " if as_template else (f"×{scale:g} scale: " if scale else "Copy of ")
     exp = Experiment(
         title=prefix + src.title,

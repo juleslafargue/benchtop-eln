@@ -30,7 +30,7 @@ function Hl({ text, terms }: { text: string; terms: string[] }) {
 }
 
 export default function Search() {
-  const { notebooks } = useApp()
+  const { notebooks, archivedNotebooks = [] } = useApp()
   const nav = useNavigate()
   const [params, setParams] = useSearchParams()
   const [q, setQ] = useState(params.get('q') || '')
@@ -143,6 +143,7 @@ export default function Search() {
           </select>
           <select className="select" value={nb} onChange={e => setNb(e.target.value)} aria-label="Notebook">
             <option value="">All notebooks</option>{notebooks.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
+            {archivedNotebooks.length > 0 && <optgroup label="Archived">{archivedNotebooks.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}</optgroup>}
           </select>
           <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={mine} onChange={e => setMine(e.target.checked)} /> Only my experiments</label>
           {filtersOn && <button type="button" className="btn ghost sm" onClick={() => { setStatus(''); setNb(''); setMine(false) }}>Clear filters</button>}

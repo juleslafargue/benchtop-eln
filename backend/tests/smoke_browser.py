@@ -198,6 +198,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += demo_never_publishes(browser, tok["slaurent"])
         problems += getting_started(browser, tok["hweiss"])
         problems += first_time_review(browser, tok["slaurent"])
+        problems += notebook_delete_archive(browser, tok["slaurent"])
         browser.close()
     return problems
 
@@ -772,6 +773,85 @@ def first_time_review(browser, token: str) -> list[tuple[str, str, str, str]]:
                 bad("reaction table", str(e).splitlines()[0][:160])
         ctx.close()
     httpx.patch(B + "/api/auth/me", headers=H, json={"preferences": {"palette": "benchtop"}})
+    return found
+
+
+def notebook_delete_archive(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """0.30: an empty notebook is deleted from its page (after a confirm) and is gone; one with an experiment can't be
+    deleted, only archived: it leaves the sidebar's list, is found under Archived, says so on its page, takes no new
+    experiments, and Unarchive brings it back."""
+    print("Notebooks: deleting an empty one, archiving and unarchiving one with an experiment…", flush=True)
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": ""}
+
+    def bad(kind: str, what: str) -> None:
+        found.append(("notebooks", where["path"], kind, what[:200]))
+    empty = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Scratch notebook to delete"}).json()
+    full = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Finished project to archive"}).json()
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Kept after archiving", "notebook_id": full["id"]}).json()
+    main_list = "() => [...document.querySelectorAll('#side-notebooks > a.nb-link .nb-name')].map(a => a.textContent)"
+    archived_list = "() => [...document.querySelectorAll('#side-archived a.nb-link .nb-name')].map(a => a.textContent)"
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    try:
+        # delete the empty one: confirm, back on the dashboard, gone from the sidebar and the server
+        where["path"] = f"/notebooks/{empty['id']}"
+        pg.goto(B + where["path"])
+        pg.wait_for_selector("button:has-text('Delete notebook')", timeout=15000)
+        if pg.query_selector("button:has-text('Archive notebook')"):
+            bad("buttons", "an empty notebook offers Archive as well as Delete")
+        pg.click("button:has-text('Delete notebook')")
+        pg.wait_for_selector("dialog.modal >> text=Scratch notebook to delete")
+        pg.click("dialog.modal button:has-text('Delete notebook')")
+        pg.wait_for_url(B + "/", timeout=15000)
+        pg.wait_for_timeout(500)
+        if "Scratch notebook to delete" in pg.evaluate(main_list):
+            bad("delete", "the deleted notebook is still in the sidebar")
+        if any(n["id"] == empty["id"] for n in httpx.get(B + "/api/notebooks?include_archived=true", headers=H).json()):
+            bad("delete", "the server still has the notebook")
+
+        # one with an experiment: no Delete, Archive (with a confirm) instead
+        where["path"] = f"/notebooks/{full['id']}"
+        pg.goto(B + where["path"])
+        pg.wait_for_selector("button:has-text('Archive notebook')", timeout=15000)
+        if pg.query_selector("button:has-text('Delete notebook')"):
+            bad("buttons", "a notebook with an experiment offers Delete")
+        pg.click("button:has-text('Archive notebook')")
+        pg.wait_for_selector("dialog.modal >> text=No new experiments")
+        pg.click("dialog.modal button:has-text('Archive notebook')")
+        pg.wait_for_selector(".archived-note", timeout=15000)
+        if pg.query_selector(".page button:has-text('New experiment')"):
+            bad("archived page", "an archived notebook's page offers New experiment")
+        # the sidebar: out of the main list, in the Archived list
+        where["path"] = "/"
+        pg.goto(B + "/")
+        pg.wait_for_selector(".archived-toggle", timeout=15000)
+        if "Finished project to archive" in pg.evaluate(main_list):
+            bad("archive", "the archived notebook is still in the sidebar's main list")
+        pg.click(".archived-toggle")
+        if "Finished project to archive" not in pg.evaluate(archived_list):
+            bad("archive", "the archived notebook isn't under Archived")
+        pg.click("#side-archived a.nb-link:has-text('Finished project to archive')")
+        pg.wait_for_selector(".archived-note >> text=This notebook is archived.", timeout=15000)
+        # its experiment still opens, says where it is, and offers no copy into the archived notebook
+        where["path"] = f"/experiments/{exp['id']}"
+        pg.goto(B + where["path"])
+        pg.wait_for_selector(".exp-head >> text=(archived)", timeout=15000)
+        if pg.query_selector("button:has-text('Duplicate')"):
+            bad("archived record", "Duplicate is offered, but the copy can't go into an archived notebook")
+        # Unarchive brings it back
+        where["path"] = f"/notebooks/{full['id']}"
+        pg.goto(B + where["path"])
+        pg.click(".archived-note button:has-text('Unarchive')")
+        pg.wait_for_selector(".archived-note", state="detached", timeout=15000)
+        pg.wait_for_selector(".page button:has-text('New experiment')", timeout=15000)
+        if "Finished project to archive" not in pg.evaluate(main_list):
+            bad("unarchive", "the notebook isn't back in the sidebar's list")
+    except Exception as e:  # noqa: BLE001
+        bad("error", str(e).splitlines()[0][:160])
+    ctx.close()
     return found
 
 

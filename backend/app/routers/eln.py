@@ -102,7 +102,8 @@ def import_run(token: str, body: ImportIn, user: Writer, session: DB):
     if not access_for(session, user).can_read_notebook(nb):
         raise HTTPException(404, f"Notebook {body.notebook_id} not found")
     if nb.archived:
-        raise HTTPException(409, f"\"{nb.name}\" is archived; choose another notebook")
+        from .experiments import archived_message
+        raise HTTPException(409, archived_message(nb))
     try:
         return eln_import.import_items(session, user, token, nb, body.items)
     except eln_import.ElnImportError as e:

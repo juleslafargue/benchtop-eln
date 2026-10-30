@@ -13,6 +13,8 @@ export interface Notebook {
   id: number; name: string; description: string; archived: boolean; owner: UserBrief
   experiment_count: number; status_counts: Record<Status, number>; created_at: string
   visibility: Visibility; group: { id: number; name: string } | null
+  /** no experiment of any kind is in it, so its owner or an admin can delete it (otherwise only archive it) */
+  empty: boolean
 }
 export interface Group {
   id: number; name: string; description: string; created_at: string; notebook_count: number
@@ -55,6 +57,7 @@ export interface WitnessCandidate extends UserBrief { has_email: boolean }
 export interface Experiment extends ExperimentSummary {
   entries: Entry[]; attachments: Attachment[]; signatures: Signature[]; witness_request?: WitnessRequest | null
   can_edit: boolean; shared_with_me: 'view' | 'edit' | null; audience: Audience; open_comments: number
+  notebook_archived?: boolean
   follows?: LinkedExperiment | { hidden: true } | null; follow_ups?: LinkedExperiment[]
   samples?: SampleCode[]
   origin?: ElnOrigin | null

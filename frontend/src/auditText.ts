@@ -60,6 +60,13 @@ export function auditSentence(e: AuditLike, n: AuditNames): string | null {
     case 'restore entry': return `${who} put back the section ${q(d.title)} in ${exp}`
     case 'upload attachment': return `${who} added the file ${d.filename} to ${exp}`
     case 'create notebook': return `${who} made the notebook ${q(d.name)}`
+    case 'update notebook': {  // the name is recorded from 0.30 on
+      const c = d.changes || {}, nb = d.name ? `the notebook ${q(d.name)}` : `notebook #${e.object_id}`
+      if (Object.keys(c).length === 1 && c.archived === true) return `${who} archived ${nb}`
+      if (Object.keys(c).length === 1 && c.archived === false) return `${who} unarchived ${nb}`
+      return null
+    }
+    case 'delete notebook': return `${who} deleted the empty notebook ${q(d.name)}`
     case 'create group': return `${who} made the group ${q(d.name)}`
     case 'group_member group': return `${who} added ${person(d.member)} to ${e.object_id != null && n.groups[e.object_id] ? n.groups[e.object_id] : 'a group'}${d.role === 'lead' ? ' as a lead' : ''}`
     case 'group_member_remove group': return `${who} took ${person(d.member)} out of ${e.object_id != null && n.groups[e.object_id] ? n.groups[e.object_id] : 'a group'}`
