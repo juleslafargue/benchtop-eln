@@ -176,6 +176,12 @@ h2 { font-family: var(--serif); font-weight: 500; font-size: clamp(30px, 3.6vw, 
 .cmd pre { margin: 0; padding: 10px 14px; font-family: var(--mono); font-size: 14px; overflow-x: auto; flex: 1; min-width: 0; }
 .cmd button { font: inherit; font-size: 13px; font-weight: 600; border: 0; border-left: 1px solid var(--rule); background: var(--paper); color: var(--ink-2); padding: 0 14px; cursor: pointer; }
 .cmd button:hover { color: var(--ink); }
+.panel .home { grid-column: 1 / -1; border-top: 1px solid var(--rule); padding-top: 28px; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px 40px; }
+.panel .home > div { display: grid; gap: 12px; align-content: start; min-width: 0; }
+.panel .home h3 { font-size: 18px; font-weight: 600; }
+.panel .home p { color: var(--ink-2); }
+.panel .home ol { gap: 12px; font-size: 15px; }
+.panel .home .mono { overflow-wrap: anywhere; }
 
 /* ---------- footer */
 footer { border-top: 1px solid var(--rule); background: var(--paper); }
@@ -186,7 +192,7 @@ footer .links { display: flex; gap: 20px; margin-left: auto; flex-wrap: wrap; }
   .hero .wrap, .feature, .feature.flip, .panel { grid-template-columns: minmax(0, 1fr); gap: 32px; }
   .feature.flip .text { order: 0; }
   .facts dl, .grid3, .ledger { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pair, .grid3 .wide { grid-template-columns: minmax(0, 1fr); }
+  .pair, .grid3 .wide, .panel .home { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 620px) {
   .hero .wrap { padding-block: 40px 48px; }
@@ -326,10 +332,31 @@ footer .links { display: flex; gap: 20px; margin-left: auto; flex-wrap: wrap; }
             <p>Two-factor screens as a heatmap, with the best conditions picked out and each cell linked to its experiment.</p>
           </figure>
           <figure style="margin:0">
-            <div class="shot"><img src="img/dashboard.png" width="1600" height="1025" loading="lazy" alt="The dashboard: witness queue, yield trend, inventory alerts and recent spectra"></div>
+            <div class="shot"><img src="img/dashboard.png" width="1600" height="1025" loading="lazy" alt="The dashboard: the New to Benchtop? card, records to witness, the yield trend and inventory alerts"></div>
             <h3>A dashboard you arrange</h3>
-            <p>What's waiting for your signature, the lab's yields over time, low or expiring stock and recent spectra.</p>
+            <p>What you've been asked to witness, what's been returned to you, the lab's yields over time, low or expiring stock
+              and recent spectra.</p>
           </figure>
+        </div>
+      </div>
+
+      <div class="grid3">
+        <div>
+          <h3>A Getting started guide</h3>
+          <p>Eleven short parts on the everyday steps, from making your own notebook to signing and witnessing, with links
+            into the app. It's in the menu and the <span class="mono">Ctrl K</span> (<span class="mono">⌘K</span>) box, and a newcomer's dashboard points
+            to it. Empty pages say what goes there.</p>
+        </div>
+        <div>
+          <h3>Keyboard and screen readers</h3>
+          <p><em>Skip to content</em> is the first Tab stop, and closing a dialog puts the focus back where it was. Every
+            text box and amount cell has a name a screen reader can read out ("Mass (mg), benzyl azide"), and the
+            experiment page has headings to jump between.</p>
+        </div>
+        <div>
+          <h3>Five colour themes, light and dark</h3>
+          <p>Benchtop, Lab notebook, Fume hood, Litmus and High contrast, each in light and dark. Text meets the WCAG AA
+            contrast minimum in all of them, checked with axe-core. Your choice follows you between computers.</p>
         </div>
       </div>
     </div>
@@ -356,7 +383,8 @@ footer .links { display: flex; gap: 20px; margin-left: auto; flex-wrap: wrap; }
         <div>
           <h3>An audit trail that can't be quietly edited</h3>
           <p>Every change, sign-in and failed signature attempt goes into a log where each entry carries the fingerprint of the one
-            before. <em>Verify</em> finds anything altered, removed or reordered.</p>
+            before. <em>Verify</em> finds anything altered, removed or reordered. Admins read it in plain sentences, with each
+            event as stored underneath.</p>
         </div>
         <div>
           <h3>Backups that are tested</h3>
@@ -380,6 +408,16 @@ footer .links { display: flex; gap: 20px; margin-left: auto; flex-wrap: wrap; }
           <p>If Benchtop stops, the Wi-Fi goes or your sign-in runs out, what you typed stays in your browser until it's
             saved. Close the tab, or let the browser crash, and the section offers to put it back next time.</p>
         </div>
+        <div>
+          <h3>A reminder before signing</h3>
+          <p>The sign dialog lists anything still empty: a section, the isolated mass, hazards not recorded. It's only a
+            reminder: it never stops you signing or changes what the signature covers.</p>
+        </div>
+        <div>
+          <h3>Old notebooks archived, not deleted</h3>
+          <p>An archived notebook leaves the sidebar and takes no new experiments; its records stay readable, searchable
+            and signed, and <em>Unarchive</em> brings it back. Only a notebook with no experiments in it can be deleted.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -398,7 +436,8 @@ footer .links { display: flex; gap: 20px; margin-left: auto; flex-wrap: wrap; }
         <div>
           <h3>Moving records in and out</h3>
           <p>Import from and export to the .eln format that other lab notebooks share. Each record travels with its report, every
-            file with its fingerprint, structures as MOL/RXN and its signature history.</p>
+            file with its fingerprint, structures as MOL/RXN and its signature history. Each export states its licence: all
+            rights reserved, or CC BY or CC0 when it's published on Zenodo.</p>
           <div class="tagline"><span class="tag">eLabFTW</span><span class="tag">RSpace</span><span class="tag">Kadi4Mat</span><span class="tag">Chemotion</span><span class="tag">Zenodo</span></div>
         </div>
         <div>
@@ -505,8 +544,8 @@ cd ~/benchtop &amp;&amp; ./benchtop</pre><button type="button" data-copy="c-linu
       <div class="panel" role="tabpanel" id="panel-server" aria-labelledby="tab-server" hidden>
         <ol>
           <li><p><b>Same network:</b> run <span class="mono">./benchtop lab</span> on a Mac or Linux computer that stays on. Labmates open the address it prints.</p></li>
-          <li><p><b>From anywhere:</b> the same computer with Tailscale, or a small Linux server with HTTPS, single sign-on and
-            off-site backups using the included Docker setup.</p>
+          <li><p><b>From anywhere:</b> the same computer with Tailscale (see <a href="#from-home">Working from home</a> below), or a
+            small Linux server with HTTPS, single sign-on and off-site backups using the included Docker setup.</p>
             <div class="cmd"><pre id="c-srv">docker compose -f deploy/docker-compose.server.yml --env-file deploy/.env up -d --build</pre><button type="button" data-copy="c-srv">Copy</button></div></li>
           <li><p>Give each person their own account and put them in a group. Updates are one command: <span class="mono">deploy/update-server.sh</span>.</p></li>
         </ol>
@@ -515,6 +554,22 @@ cd ~/benchtop &amp;&amp; ./benchtop</pre><button type="button" data-copy="c-linu
           <p><a href="https://github.com/juleslafargue/benchtop-eln/blob/main/docs/SERVER.md">docs/SERVER.md</a> walks through all three
             options, including instrument shares and backups.</p>
         </aside>
+        <div class="home" id="from-home">
+          <div>
+            <h3>Working from home</h3>
+            <p>Labmates can use the lab's Benchtop from home through <a href="https://tailscale.com">Tailscale</a>, a free app
+              that joins their laptop or phone to a private network with the lab computer. Benchtop stays off the public
+              internet: only people the lab invites can reach it, and they still sign in with their own Benchtop account.</p>
+            <p>The full guide, for labmates and for the admin who sets it up:
+              <a href="https://github.com/juleslafargue/benchtop-eln/blob/main/docs/FROM-HOME.md">Using Benchtop from home</a>.</p>
+          </div>
+          <ol>
+            <li><p>The admin sets up Tailscale on the lab computer once (about 20 minutes) and invites each labmate.</p></li>
+            <li><p>Each labmate installs Tailscale, accepts the invite and turns it on (about 5 minutes).</p></li>
+            <li><p>They open the lab's Benchtop address, like <span class="mono">https://lab-mac.tail1234.ts.net</span>, and
+              sign in as usual. Signing still asks for their password.</p></li>
+          </ol>
+        </div>
       </div>
     </div>
   </section>
@@ -540,7 +595,7 @@ cd ~/benchtop &amp;&amp; ./benchtop</pre><button type="button" data-copy="c-linu
   function show(n) { for (var i = 0; i < steps.length; i++) steps[i].classList.toggle('on', i <= n); }
   if (still) show(2); else { setTimeout(function () { show(1); }, 700); setTimeout(function () { show(2); }, 1500); }
 
-  // install tabs: one per computer, remembered in the address (#mac, #linux, #windows, #server)
+  // install tabs: one per computer, remembered in the address (#mac, #linux, #windows, #server; #from-home opens Lab server)
   var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
   function pick(name, focus) {
     tabs.forEach(function (t) {
@@ -560,6 +615,7 @@ cd ~/benchtop &amp;&amp; ./benchtop</pre><button type="button" data-copy="c-linu
   });
   var h = (location.hash || '').slice(1);
   if (['mac', 'linux', 'windows', 'server'].indexOf(h) >= 0) { pick(h); document.getElementById('start').scrollIntoView(); }
+  else if (h === 'from-home') { pick('server'); document.getElementById('from-home').scrollIntoView(); }
   else if (/Win/.test(navigator.platform || '')) pick('windows');
   else if (/Linux/.test(navigator.platform || '') && !/Android/.test(navigator.userAgent)) pick('linux');
 
