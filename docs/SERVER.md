@@ -6,7 +6,7 @@ works for you; you can move up later (back up, then restore the backup on the ne
 | | Who can reach it | Needs | Effort |
 |---|---|---|---|
 | **1. A lab Mac** (`./benchtop lab`) | People on the same Wi-Fi / network | A Mac that stays on | 2 minutes |
-| **2. A lab Mac + Tailscale** | Group members anywhere | Free Tailscale accounts | 15 minutes |
+| **2. A lab Mac + Tailscale** | Group members anywhere | Free Tailscale accounts | 20 minutes |
 | **3. A server with HTTPS** | Anyone you give an account, anywhere | A small Linux server or VM, a domain name | An afternoon |
 
 Whatever you choose, everyone gets their **own account** (Admin → Users → Add user, or single sign-on),
@@ -42,15 +42,17 @@ BENCHTOP_BACKUP_DIR=/Users/you/Library/Mobile Documents/com~apple~CloudDocs/Benc
 ## 2. Reaching the lab Mac from anywhere with Tailscale
 
 [Tailscale](https://tailscale.com) makes a private network between your own devices; nothing is
-exposed to the internet.
+exposed to the internet. In short, on the lab Mac:
 
-1. Install Tailscale on the lab Mac and sign in.
-2. Each group member installs Tailscale and is invited to your tailnet (Tailscale admin console → Users → Invite).
-3. Run `./benchtop lab` on the lab Mac. People open `http://<mac-name>:8000` (the Mac's Tailscale name),
-   from home or the bench.
+1. Install Tailscale, sign in, and turn on *MagicDNS* and *HTTPS certificates* in the Tailscale admin
+   console (DNS). Invite each group member (Users → Invite users); they install Tailscale too.
+2. Run `./benchtop lab`, then, in a second Terminal window, `tailscale serve --bg localhost:8000`. It prints
+   the address people open, `https://<mac-name>.<tailnet>.ts.net`, and keeps serving after restarts.
+3. Put `BENCHTOP_PUBLIC_URL=https://<mac-name>.<tailnet>.ts.net` in `backend/data/settings.env` and start
+   `./benchtop lab` again, so phone QR codes and email links use the Tailscale address.
 
-For HTTPS on top (recommended), turn on HTTPS certificates in the Tailscale admin console and run
-`tailscale serve --bg 8000` on the lab Mac; the address becomes `https://<mac-name>.<tailnet>.ts.net`.
+[FROM-HOME.md](FROM-HOME.md) has the full step-by-step. It is also the page to hand labmates: how to set
+up Tailscale on their laptop and phone, and what to check when it doesn't load.
 
 ## 3. A server with HTTPS (and optionally single sign-on)
 

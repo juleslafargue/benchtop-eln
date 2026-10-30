@@ -111,6 +111,7 @@ and kept out of the integrals:
 | A Linux computer | [Quick start (Linux)](#quick-start-linux) |
 | A Windows PC | [On Windows](#on-windows) |
 | Labmates who should use your Benchtop | Nothing to install for them: they open it in their browser, on any computer or phone. See [docs/SERVER.md](docs/SERVER.md) |
+| Labmates working from home | [docs/FROM-HOME.md](docs/FROM-HOME.md): the lab's Benchtop over Tailscale, and how the admin sets it up |
 
 ## Quick start (Mac)
 
