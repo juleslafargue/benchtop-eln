@@ -637,6 +637,9 @@ that work.
 - Plate/sample-set entities and a sample-tracking view
 - Viewing Varian/JEOL raw FIDs (stored today, not yet opened in the viewer), 2D NMR, and mzML for MS
 - PDF/A archiving with an embedded signature manifest (today's PDF export is a regular PDF)
+- Two-factor sign-in with an authenticator app (codes at sign-in, backup codes, an admin reset; required for
+  admins or everyone). Worth it once Benchtop is on the public internet without single sign-on; until then,
+  single sign-on (the university's own two-factor) or Tailscale ([docs/FROM-HOME.md](docs/FROM-HOME.md)) covers it
 
 ## Licence
 
