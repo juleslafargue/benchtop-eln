@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../App'
 import { api, displayName, type ExperimentSummary, type Notebook } from '../api'
@@ -24,30 +24,39 @@ export default function NewExperimentDialog({ notebookId, onClose }: { notebookI
   const [templates, setTemplates] = useState<ExperimentSummary[]>([])
   const [err, setErr] = useState('')
   const [making, setMaking] = useState(false)
+  // one experiment per click: Create is off while it's being made (0.30.1: a double click made two, and experiments
+  // can't be deleted). The ref also stops a second click that arrives before the button has redrawn.
+  const [creating, setCreating] = useState(false)
+  const busy = useRef(false)
 
   useEffect(() => { api.get<ExperimentSummary[]>('/api/experiments?templates=true').then(setTemplates) }, [])
 
   const mine = notebooks.filter(n => n.owner?.id === user.id)
   const others = notebooks.filter(n => n.owner?.id !== user.id)
 
+  const ready = !!title.trim() && !!nb
   const create = async () => {
+    if (busy.current || !ready) return
+    busy.current = true; setCreating(true); setErr('')
+    let e: ExperimentSummary
     try {
-      const e = await api.post<ExperimentSummary>('/api/experiments', {
+      e = await api.post<ExperimentSummary>('/api/experiments', {
         title, notebook_id: nb || null, template_id: tpl || null,
       })
-      await refreshNotebooks()
-      onClose()
-      nav(`/experiments/${e.id}`)
-    } catch (e: any) { setErr(e.message) }
+    } catch (x: any) { setErr(x.message); busy.current = false; setCreating(false); return }
+    await refreshNotebooks().catch(() => {})  // the counts beside the notebooks: the experiment is made either way
+    onClose()
+    nav(`/experiments/${e.id}`)
   }
 
   return (
     <Modal title="New experiment" onClose={onClose} footer={<>
       <button className="btn" onClick={onClose}>Cancel</button>
-      <button className="btn primary" disabled={!title.trim() || !nb} onClick={create}>Create experiment</button>
+      <button className="btn primary" disabled={!ready || creating} onClick={create}>{creating ? 'Creating…' : 'Create experiment'}</button>
     </>}>
       <div className="stack">
-        <label className="field">Title<input className="input" autoFocus maxLength={300} value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Boc protection of 4-aminopiperidine" /></label>
+        <label className="field">Title<input className="input" autoFocus maxLength={300} value={title} onChange={e => setTitle(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); create() } }} placeholder="e.g. Boc protection of 4-aminopiperidine" /></label>
         <label className="field">Notebook
           <select className="select" value={nb} onChange={e => setNb(e.target.value ? Number(e.target.value) : '')}>
             {nb === '' && <option value="">Choose a notebook</option>}

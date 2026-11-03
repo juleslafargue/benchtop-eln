@@ -30,6 +30,17 @@ def group_out(session, g: LabGroup, me: User) -> dict[str, Any]:
     }
 
 
+def _group_now(session, gid: int) -> LabGroup:
+    """The group as it is now, read once this request holds the write lock, so nothing can delete it (or add someone
+    to it) before this request is done (0.30.1: deleting a group while someone was added to it, or a notebook was
+    made in it, gave "Internal Server Error"). 404 if it's gone."""
+    audit._take_write_lock(session)
+    g = session.get(LabGroup, gid, populate_existing=True)
+    if g is None:
+        raise HTTPException(404, "That group no longer exists (it may have just been deleted).")
+    return g
+
+
 def _manage(session, user: User, g: LabGroup) -> None:
     if user.role != Role.admin and access_for(session, user).groups.get(g.id) != "lead":
         raise HTTPException(403, "Only an admin or a lead of this group can change it")
@@ -65,7 +76,7 @@ class GroupPatch(BaseModel):
 
 @router.patch("/groups/{gid}")
 def update_group(gid: int, body: GroupPatch, user: CurrentUser, session: DB):
-    g = get_or_404(session, LabGroup, gid)
+    g = _group_now(session, gid)
     _manage(session, user, g)
     changes = cleaned(g, body.model_dump(exclude_unset=True))
     if "name" in changes:
@@ -85,7 +96,7 @@ def update_group(gid: int, body: GroupPatch, user: CurrentUser, session: DB):
 def delete_group(gid: int, user: Admin, session: DB):
     """The group goes; its notebooks stay with their owners. Group-only notebooks become private,
     never more visible than they were."""
-    g = get_or_404(session, LabGroup, gid)
+    g = _group_now(session, gid)
     moved = []
     for nb in session.exec(select(Notebook).where(Notebook.group_id == gid)):
         if (nb.visibility or "everyone") == "group":
@@ -107,7 +118,7 @@ class MemberIn(BaseModel):
 
 @router.put("/groups/{gid}/members/{uid}")
 def set_member(gid: int, uid: int, body: MemberIn, user: CurrentUser, session: DB):
-    g = get_or_404(session, LabGroup, gid)
+    g = _group_now(session, gid)
     _manage(session, user, g)
     target = get_or_404(session, User, uid)
     if body.role not in ("member", "lead"):
@@ -128,7 +139,7 @@ def set_member(gid: int, uid: int, body: MemberIn, user: CurrentUser, session: D
 
 @router.delete("/groups/{gid}/members/{uid}")
 def remove_member(gid: int, uid: int, user: CurrentUser, session: DB):
-    g = get_or_404(session, LabGroup, gid)
+    g = _group_now(session, gid)
     if uid != user.id:  # anyone may leave a group; removing others needs a lead or admin
         _manage(session, user, g)
     m = session.exec(select(GroupMember).where(GroupMember.group_id == gid, GroupMember.user_id == uid)).first()

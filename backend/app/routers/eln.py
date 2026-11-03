@@ -1,6 +1,7 @@
 """The .eln format: export records (one, a notebook, or everything you can see) and import them from other ELNs."""
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,8 @@ from ..access import access_for
 from ..models import Experiment, Notebook
 from ..security import DB, CurrentUser, Writer
 from ..services import get_or_404, read_experiment
+
+log = logging.getLogger("benchtop.eln")
 
 router = APIRouter(prefix="/api", tags=["eln"])
 
@@ -87,6 +90,12 @@ def import_preview(user: Writer, session: DB, file: UploadFile = File(...)):
         if diskspace.is_disk_full(e):
             raise HTTPException(507, diskspace.message(e, file=True)) from None
         raise HTTPException(500, f"Couldn't read the file: {e}") from None
+    except Exception:  # noqa: BLE001 - a file shaped in a way nobody foresaw: say so plainly, and don't keep it
+        log.exception("Previewing %s failed", file.filename)
+        if "token" in locals():
+            eln_import.discard(token, user)
+        raise HTTPException(422, "Benchtop couldn't make sense of this .eln file, so nothing was imported. If it opens in "
+                                 "the program that made it, try exporting it again from there.") from None
 
 
 class ImportIn(BaseModel):

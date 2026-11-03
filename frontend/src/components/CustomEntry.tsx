@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { EntryEditorProps } from './EntryCard'
+import { amountProblem } from './bits'
 
 /** A section whose layout comes from a plugin file. The definition travels with the record
  *  (content.schema), so it renders the same way even if the plugin later changes or is removed. */
@@ -42,11 +43,14 @@ function NumInput({ f, v, set, compact, common }: { f: CField; v: any; set: (v: 
   const [text, setText] = useState(v == null ? '' : String(v))
   const [focus, setFocus] = useState(false)
   useEffect(() => { if (!focus) setText(v == null ? '' : String(v)) }, [v, focus])
+  const problem = amountProblem(text)  // "1,000": one thousand, or one? (0.30.1: it was kept as 1)
   return (
     <span className="cf-num">
-      <input className="input" inputMode="decimal" value={text} placeholder={f.placeholder} onFocus={() => setFocus(true)} onBlur={() => setFocus(false)}
-        onChange={e => { const t = e.target.value; setText(t); const n = Number(t.replace(',', '.')); set(t.trim() === '' ? null : Number.isFinite(n) ? n : null) }} {...common} />
+      <input className={`input${problem ? ' num-bad' : ''}`} inputMode="decimal" value={text} placeholder={f.placeholder} onFocus={() => setFocus(true)}
+        onBlur={() => setFocus(false)} aria-invalid={problem ? true : undefined}
+        onChange={e => { const t = e.target.value; setText(t); const n = Number(t.replace(',', '.')); set(t.trim() === '' || amountProblem(t) ? null : Number.isFinite(n) ? n : null) }} {...common} />
       {f.unit && !compact && <span className="cf-unit">{f.unit}</span>}
+      {problem && !focus && <span className="num-problem" role="alert">{problem}</span>}
     </span>)
 }
 

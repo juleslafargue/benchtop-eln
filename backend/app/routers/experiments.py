@@ -133,7 +133,8 @@ def _check_audience(session, user: User, group_id: int | None, visibility: str |
     if vis not in VISIBILITIES:
         raise HTTPException(422, f"visibility must be one of {', '.join(VISIBILITIES)}")
     if group_id is not None:
-        get_or_404(session, LabGroup, group_id)
+        if session.get(LabGroup, group_id, populate_existing=True) is None:
+            raise HTTPException(404, "That group no longer exists (it may have just been deleted). Choose another.")
         if user.role != Role.admin and group_id not in access_for(session, user).groups:
             raise HTTPException(403, "You can only put a notebook in a group you belong to")
     elif vis == "group":
@@ -179,6 +180,7 @@ def list_notebooks(user: CurrentUser, session: DB, include_archived: bool = Fals
 
 @router.post("/notebooks", status_code=201)
 def create_notebook(body: NotebookIn, user: Writer, session: DB):
+    audit._take_write_lock(session)  # the group can't be deleted between the check and the new notebook (0.30.1)
     gid, vis = _check_audience(session, user, body.group_id, body.visibility)
     nb = Notebook(name=body.name, description=body.description, owner_id=user.id, group_id=gid, visibility=vis)
     session.add(nb)

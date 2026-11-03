@@ -123,6 +123,11 @@ async def lifespan(_: FastAPI):
         log.error("\n\n  Benchtop can't open this data.\n  %s\n", exc)
         raise
     ensure_admin()
+    try:  # imports and exports cut off when Benchtop last stopped (0.30.1)
+        from . import eln_import
+        eln_import.clear_leftovers()
+    except Exception:  # noqa: BLE001 - never stop Benchtop starting over a scratch file
+        log.exception("Clearing what an interrupted import or export left failed")
     task = asyncio.create_task(_housekeeping_loop())
     from . import instruments
     instruments.start()  # watches the instrument folders (Admin → Instruments) about once a minute

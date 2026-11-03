@@ -53,6 +53,7 @@ BOMB_MIN = 100 * 1024**2   # …and to more than 100 MB is treated as a zip bomb
 LOCK_WORDS = {"signed", "witnessed", "locked", "timestamped", "final", "finalised", "finalized", "voided"}
 TRUE = {"1", "true", "yes", "on", "y"}
 KEEP_HOURS = 24
+MAX_FOLDER_DEPTH = 50  # folders inside folders inside one experiment
 
 
 class ElnImportError(ValueError):
@@ -340,16 +341,29 @@ class Crate:
                          folder=folder, content_type=content_type(_str(n.get("encodingFormat"), 200)))
 
     def _collect(self, it: Item, node_id: str, folder: str, importable: set[str], claimed: set[str], seen: set[str]) -> None:
-        if node_id in seen:
-            return
+        """The files and links of an experiment, in the folders inside it. Walked with a list rather than by calling
+        itself (0.30.1: a chain of a thousand folders ran Python out of stack, "Internal Server Error")."""
         seen.add(node_id)
-        for child in _refs(self.by_id.get(node_id, {}).get("hasPart")):
+        stack = [(iter(_refs(self.by_id.get(node_id, {}).get("hasPart"))), folder)]
+        too_deep = False
+        while stack:
+            children, folder = stack[-1]
+            child = next(children, None)
+            if child is None:
+                stack.pop()
+                continue
             types = _types(self.by_id.get(child, {}))
             if "Dataset" in types and child in importable:
                 it.children.append(child)
             elif "Dataset" in types:
+                if child in seen:
+                    continue
+                seen.add(child)
+                if len(stack) > MAX_FOLDER_DEPTH:
+                    too_deep = True
+                    continue
                 sub = self.name_of(child) if not self.folder(child) else PurePosixPath(self.folder(child).rstrip("/")).name
-                self._collect(it, child, f"{folder}/{sub}".strip("/"), importable, claimed, seen)
+                stack.append((iter(_refs(self.by_id.get(child, {}).get("hasPart"))), f"{folder}/{sub}".strip("/")))
             elif re.match(r"^https?://", child, re.I):
                 it.links.append((_str(self.by_id.get(child, {}).get("name"), 200) or PurePosixPath(child).name, child))
             else:
@@ -357,6 +371,8 @@ class Crate:
                 if f.info is not None:
                     claimed.add(f.info.filename)
                 it.files.append(f)
+        if too_deep:
+            it.warnings.append(f"Folders nested more than {MAX_FOLDER_DEPTH} deep were left out.")
 
     def _benchtop_record(self, it: Item) -> None:
         rec = next((f for f in it.files if f.info is not None and PurePosixPath(f.info.filename).name == RECORD_FILE
@@ -851,20 +867,89 @@ def _new_entry(session: Session, exp: Experiment, kind: EntryKind, title: str, c
     return e
 
 
+# ---------------------------------------------------------------------------------------------------- what a crash leaves
+
+_RUN = secrets.token_hex(6)  # this run of Benchtop: a marker left by an earlier one is stale even if the process number is the same
+_MARKING = threading.Lock()
+
+
+def _running(pid: int) -> bool:
+    if os.name == "nt":  # there os.kill would end the process: assume it's running (the day-old sweep still applies)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
+
+
+def _left_behind(pid: int, run: str | None = None) -> bool:
+    """Whether a file made by process `pid` (in run `run`) was left by a Benchtop that has stopped."""
+    if run is not None and run == _RUN:
+        return False
+    return pid == os.getpid() or not _running(pid)  # same number, earlier run (Docker restarts as process 1 again)
+
+
+def _stale_marker(busy: Path) -> bool:
+    """An ".importing" marker whose import isn't running any more (Benchtop stopped in the middle of it). 0.30.1: the
+    file then said "already being imported" for a day."""
+    try:
+        pid, run = busy.read_text().split()[:2]
+        return _left_behind(int(pid), run)
+    except (OSError, ValueError):  # written by 0.30.0 (empty), or cut off while it was being written
+        try:
+            return busy.stat().st_mtime < time.time() - 60
+        except OSError:
+            return False
+
+
+def clear_leftovers() -> None:
+    """At start-up: the markers and half-written files of imports and exports cut off when Benchtop last stopped.
+    The uploaded files themselves stay (for a day, as always), so the import can simply be tried again."""
+    d = scratch_dir()
+    for p in list((d / "imports").glob("*.importing")) if (d / "imports").is_dir() else []:
+        if _stale_marker(p):
+            p.unlink(missing_ok=True)
+    for p in [*d.glob("export-*.eln"), *d.glob("import-*.part")]:
+        m = re.match(r"(?:export|import)-(\d+)-", p.name)
+        try:
+            if m and _left_behind(int(m.group(1))):
+                p.unlink()
+        except OSError:
+            continue
+
+
 def import_items(session: Session, user: User, token: str, notebook: Notebook, keys: list[str]) -> dict[str, Any]:
     path, meta = staged(token, user)
     # one import per upload at a time: a double click, a second tab or a retried request mustn't make the records twice
     busy = path.with_suffix(".importing")
-    try:
-        fd = os.open(busy, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        raise ElnImportError("This file is already being imported; its experiments will appear in the notebook when it's done.") from None
-    os.close(fd)
+    with _MARKING:
+        if busy.exists() and _stale_marker(busy):
+            busy.unlink(missing_ok=True)
+        try:
+            fd = os.open(busy, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            raise ElnImportError("This file is already being imported; its experiments will appear in the notebook when it's done.") from None
+        os.write(fd, f"{os.getpid()} {_RUN}".encode())
+        os.close(fd)
     try:
         path, meta = staged(token, user)  # the import just before this one may have finished (and tidied the file away)
         return _import_items(session, user, path, meta, token, notebook, keys)
     finally:
         busy.unlink(missing_ok=True)
+
+
+def _remember(path: Path, meta: dict[str, Any], done: dict[str, int]) -> None:
+    """Note beside the upload which of its records are in (each one is saved before the next starts)."""
+    meta["done"] = done
+    tmp = path.with_suffix(".json.part")
+    try:
+        tmp.write_text(json.dumps(meta))
+        os.replace(tmp, path.with_suffix(".json"))
+    except OSError:  # only a retry is affected: it would bring that record in again
+        tmp.unlink(missing_ok=True)
 
 
 def _import_items(session: Session, user: User, path: Path, meta: dict[str, Any], token: str, notebook: Notebook,
@@ -877,11 +962,22 @@ def _import_items(session: Session, user: User, path: Path, meta: dict[str, Any]
         items = [it for it in everything if it.key in set(keys)]
         titles = {it.node_id: it.title for it in everything}
         new_of: dict[str, Experiment] = {}
+        # what this upload already brought in (0.30.1): importing it again after Benchtop stopped half-way, or after
+        # some of its records failed, adds only the rest, not a second copy of those that went in
+        done: dict[str, int] = dict(meta.get("done") or {})
         for it in items:
+            before = session.get(Experiment, done[it.key]) if it.key in done else None
+            if before is not None:
+                new_of[it.node_id] = before
+                created.append({"id": before.id, "eid": before.eid, "title": before.title,
+                                "locked": before.status == ExperimentStatus.locked, "warnings": (before.origin or {}).get("warnings", [])})
+                continue
             _added.files = []
             try:
                 exp = _import_one(session, user, crate, it, nb_id, titles, meta)
                 new_of[it.node_id] = exp
+                done[it.key] = exp.id
+                _remember(path, meta, done)
                 created.append({"id": exp.id, "eid": exp.eid, "title": exp.title, "locked": exp.status == ExperimentStatus.locked,
                                 "warnings": (exp.origin or {}).get("warnings", [])})
             except Exception as e:  # noqa: BLE001 - one bad record mustn't stop the others; say which and why

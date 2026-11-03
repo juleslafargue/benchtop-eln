@@ -23,36 +23,42 @@ export default function NotebookPage() {
   const [confirm, setConfirm] = useState<'delete' | 'archive' | null>(null)
   const [busy, setBusy] = useState(false)
   const [audEdit, setAudEdit] = useState<AudienceValue | null>(null)
+  // What the action did is said apart from the refreshed lists that follow it: archived or deleted is done, even if
+  // the network drops right after (0.30.1: the page said it had failed).
+  const refreshAfter = (done: string) => refreshNotebooks().then(() => toast(done),
+    () => toast(`${done}. The notebook list couldn't be refreshed: reload the page when you're back online.`))
   const saveAudience = async () => {
     try {
       await api.patch(`/api/notebooks/${id}`, audEdit)
-      await refreshNotebooks(); setAudEdit(null); toast('Updated who can open this notebook')
-    } catch (e: any) { toast(e.message) }
+    } catch (e: any) { toast(e.message); return }
+    setAudEdit(null)
+    await refreshAfter('Updated who can open this notebook')
   }
   const setArchived = async (n: Notebook, archived: boolean) => {
     setBusy(true)
     try {
       await api.patch(`/api/notebooks/${n.id}`, { archived })
-      await refreshNotebooks(); setConfirm(null)
-      toast(archived ? `Archived ${n.name}` : `${n.name} is back in the notebook list`)
-    } catch (e: any) { toast(e.message) } finally { setBusy(false) }
+    } catch (e: any) { toast(e.message); setBusy(false); return }
+    setConfirm(null)
+    await refreshAfter(archived ? `Archived ${n.name}` : `${n.name} is back in the notebook list`)
+    setBusy(false)
   }
   const remove = async (n: Notebook) => {
     setBusy(true)
     try {
       await api.del(`/api/notebooks/${n.id}`)
-      setConfirm(null); nav('/')
-      await refreshNotebooks()
-      toast(`Deleted ${n.name}`)
-    } catch (e: any) { toast(e.message); await refreshNotebooks() } finally { setBusy(false) }
+    } catch (e: any) { toast(e.message); setBusy(false); refreshNotebooks().catch(() => {}); return }
+    setConfirm(null); nav('/')
+    await refreshAfter(`Deleted ${n.name}`)
   }
 
   const PAGE = 200
   const [more, setMore] = useState(false)
+  const [loadErr, setLoadErr] = useState('')  // the list couldn't be loaded: said, with Retry (not "No experiments here yet")
   const load = (offset: number) =>
     api.get<ExperimentSummary[]>(`/api/experiments?notebook_id=${id}${filter ? `&status=${filter}` : ''}&limit=${PAGE}&offset=${offset}`).then(xs => {
-      setItems(old => (offset ? [...old, ...xs] : xs)); setMore(xs.length === PAGE)
-    })
+      setItems(old => (offset ? [...old, ...xs] : xs)); setMore(xs.length === PAGE); setLoadErr('')
+    }, (e: Error) => { if (!offset) setItems([]); setLoadErr(e.message) })
   useEffect(() => { load(0) }, [id, filter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // an import whose notebook was deleted meanwhile still shows what happened (0.30.1)
@@ -96,10 +102,14 @@ export default function NotebookPage() {
           </button>
         ))}
       </div>
-      <div className="panel"><ExperimentList items={items} showNotebook={false}
+      {loadErr && !items.length ? <div className="panel panel-pad load-error" role="alert">
+        <p style={{ margin: 0 }}><b>Couldn't load the experiments.</b> {loadErr}</p>
+        <button className="btn sm" onClick={() => load(0)}>Retry</button>
+      </div> : <div className="panel"><ExperimentList items={items} showNotebook={false}
         empty={filter ? `No ${filter} experiments in this notebook.`
-          : canWrite && !nb.archived ? 'No experiments here yet. Press N or click New experiment to start one.' : 'No experiments here yet.'} /></div>
-      {more && <div style={{ textAlign: 'center' }}><button className="btn" onClick={() => load(items.length)}>Show older experiments</button></div>}
+          : canWrite && !nb.archived ? 'No experiments here yet. Press N or click New experiment to start one.' : 'No experiments here yet.'} /></div>}
+      {loadErr && items.length > 0 && <p className="error" role="alert">Couldn't load the older experiments. {loadErr} <button className="btn sm" onClick={() => load(items.length)}>Retry</button></p>}
+      {more && !loadErr && <div style={{ textAlign: 'center' }}><button className="btn" onClick={() => load(items.length)}>Show older experiments</button></div>}
       {creating && <NewExperimentDialog notebookId={nb.id} onClose={() => setCreating(false)} />}
       {audEdit && <Modal title={`Who can open ${nb.name}`} onClose={() => setAudEdit(null)} footer={<>
         <button className="btn" onClick={() => setAudEdit(null)}>Cancel</button>

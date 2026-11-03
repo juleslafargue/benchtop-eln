@@ -267,6 +267,32 @@ def _r(v: Optional[float], nd: int = 4) -> Optional[float]:
     return round(v, min(digits, 12))
 
 
+TYPED = {"mass": ("mass_mg", "the mass"), "volume": ("volume_ml", "the volume"), "mmol": ("mmol", "the amount in mmol"),
+         "equiv": ("equiv", "the equivalents")}
+
+
+def _odd_numbers(rows: list[dict[str, Any]]) -> list[str]:
+    """Numbers no reaction can have, said plainly (0.30.1: a minus sign or a purity of 150 % was taken without a word).
+    Only what was typed: a number worked out from a wrong one isn't listed as well."""
+    out = []
+    for r in rows:
+        name = row_label(r, rows)
+        typed = [TYPED[r["basis"]]] if r["role"] != "solvent" and r["basis"] in TYPED else []
+        if r["role"] == "product":
+            typed = [("actual_mass_mg", "the isolated mass")]
+        elif r["role"] == "solvent":
+            typed = [("volume_ml", "the volume")]
+        neg = [word for key, word in typed if (_f(r.get(key)) or 0) < 0]
+        if neg:
+            out.append(f"Check {name}: {neg[0]} can't be negative")
+        purity, dens = _f(r.get("purity")), _f(r.get("density"))
+        if purity is not None and not 0 < purity <= 100:
+            out.append(f"Check {name}: a purity of {purity:g} % isn't possible; use a number above 0 and up to 100")
+        if dens is not None and dens <= 0:
+            out.append(f"Check {name}: a density of {dens:g} g/mL isn't possible; use a number above 0")
+    return out
+
+
 def compute_stoichiometry(rows_in: list[dict[str, Any]], target_conc_m: Any = None) -> dict[str, Any]:
     """Fill in derived quantities for a reaction table.
 
@@ -296,6 +322,7 @@ def compute_stoichiometry(rows_in: list[dict[str, Any]], target_conc_m: Any = No
                 r["smiles"] = p["smiles"]
             except ChemError:
                 warnings.append(f"Could not read the structure of {row_label(r, rows)}")
+    warnings += _odd_numbers(rows)
 
     limiting = [r for r in rows if r["limiting"] and r["role"] != "product"]
     if len(limiting) > 1:
@@ -423,41 +450,53 @@ def compute_stoichiometry(rows_in: list[dict[str, Any]], target_conc_m: Any = No
     return {"rows": rows, "totals": totals, "warnings": warnings}
 
 
+def _pos(v: Any) -> Optional[float]:
+    """A molecular weight or mass that can be used in a metric: a finite number above zero, else missing."""
+    x = _f(v)
+    return x if x is not None and x > 0 else None
+
+
 def green_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Atom economy, reaction mass efficiency, E-factor, PMI and volume efficiency for the reaction
     as written (work-up and purification solvents are not in the table, so they're not counted)."""
-    prod = next((r for r in rows if r["role"] == "product" and _f(r["mw"])), None)
+    prod = next((r for r in rows if r["role"] == "product" and _pos(r["mw"])), None)
     reactants = [r for r in rows if r["role"] == "reactant"]
     inputs = [r for r in rows if r["role"] != "product"]
     out: dict[str, Any] = {"scope": "reaction only (work-up and purification not included)"}
     # Only rows marked Reactant count in atom economy and RME. Over 100 % is impossible: usually a co-reactant
     # (acetic anhydride, say) is marked as Reagent. Then no number is given, and "impossible" says which.
+    # 0.30.1: a molecular weight or mass of 0 or below counts as missing, and a number that can't be worked out
+    # (too big, too small) isn't given: they gave "Internal Server Error", or a negative atom economy.
     impossible: list[str] = []
-    if prod and reactants and all(_f(r["mw"]) for r in reactants):
+    if prod and reactants and all(_pos(r["mw"]) for r in reactants):
         # one of each reactant, as in the balanced equation for most couplings and condensations
-        ae = _r(100.0 * _f(prod["mw"]) / sum(_f(r["mw"]) for r in reactants), 1)
-        if ae > 100:
+        ae = _r(100.0 * _pos(prod["mw"]) / sum(_pos(r["mw"]) for r in reactants), 1)
+        if ae is not None and not 0 <= ae <= 100:
             impossible.append("atom_economy")
-        else:
+        elif ae is not None:
             out["atom_economy_pct"] = ae
-    missing = [row_label(r, rows) for r in inputs if _f(r["mass_mg"]) is None]
+    missing = [row_label(r, rows) for r in inputs if _f(r["mass_mg"]) is None or _f(r["mass_mg"]) < 0]
     out["missing_mass"] = missing
-    actual = _f(prod["actual_mass_mg"]) if prod else None
+    actual = _pos(prod["actual_mass_mg"]) if prod else None
     if actual:
         inputs_mg = sum(_f(r["mass_mg"]) or 0 for r in inputs)
-        if inputs_mg and not missing:
-            out["pmi"] = _r(inputs_mg / actual, 1)
-            out["e_factor"] = _r((inputs_mg - actual) / actual, 1)
-        rmass = [_f(r["mass_mg"]) for r in reactants]
+        if inputs_mg > 0 and not missing:
+            pmi, e_factor = _r(inputs_mg / actual, 1), _r((inputs_mg - actual) / actual, 1)
+            if inputs_mg < actual:  # more product than everything that went in: PMI under 1, E-factor under 0
+                impossible.append("pmi")
+            elif pmi is not None and e_factor is not None:
+                out["pmi"], out["e_factor"] = pmi, e_factor
+        rmass = [_pos(r["mass_mg"]) for r in reactants]
         if rmass and all(rmass):
             rme = _r(100.0 * actual / sum(rmass), 1)
-            if rme > 100:
+            if rme is not None and not 0 <= rme <= 100:
                 impossible.append("rme")
-            else:
+            elif rme is not None:
                 out["rme_pct"] = rme
-        solvent_ml = sum(_f(r["volume_ml"]) or 0 for r in rows if r["role"] == "solvent")
-        if solvent_ml:
-            out["solvent_l_per_kg"] = _r(solvent_ml / (actual / 1000.0), 0)  # mL/g == L/kg
+        solvent_ml = sum(_pos(r["volume_ml"]) or 0 for r in rows if r["role"] == "solvent")
+        litres = _r(solvent_ml / (actual / 1000.0), 0) if solvent_ml else None  # mL/g == L/kg
+        if litres is not None:
+            out["solvent_l_per_kg"] = litres
     if impossible:
         out["impossible"] = impossible
     return out

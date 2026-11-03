@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -102,6 +103,22 @@ def _clean_dashboard(d: Any) -> dict[str, Any] | None:
     return {"widgets": widgets}
 
 
+def _whole(v: Any) -> int | None:
+    """A record or notebook number from a preference: a finite number or a string of ASCII digits, else None
+    (0.30.1: NaN, Infinity, 1e400 and "²", which Python's isdigit() accepts, gave "Internal Server Error")."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    if isinstance(v, (int, float)):
+        n = int(v)
+    elif isinstance(v, str) and v.isascii() and v.isdigit() and len(v) < 19:
+        n = int(v)
+    else:
+        return None
+    return n if 0 < n < 2**63 else None  # what the database can hold
+
+
 def _clean_prefs(p: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in p.items():
@@ -110,7 +127,7 @@ def _clean_prefs(p: dict[str, Any]) -> dict[str, Any]:
             out[k] = cleaned
             continue
         if k == "pinned":
-            out[k] = [int(i) for i in (v or [])[:100] if isinstance(i, (int, float))] if isinstance(v, list) else []
+            out[k] = [n for n in (_whole(i) for i in v[:100] if not isinstance(i, str)) if n is not None] if isinstance(v, list) else []
             continue
         if k == "email_notify":  # which emails this person gets
             out[k] = {t: bool(v[t]) for t in ("witness", "results", "system") if isinstance(v, dict) and t in v}
@@ -126,7 +143,7 @@ def _clean_prefs(p: dict[str, Any]) -> dict[str, Any]:
             continue
         allowed = PREF_KEYS[k]
         if allowed is None:
-            out[k] = int(v) if isinstance(v, (int, float)) or (isinstance(v, str) and v.isdigit()) else None
+            out[k] = _whole(v)
         elif v in allowed:
             out[k] = v
     return out
@@ -465,12 +482,32 @@ class UserPatch(BaseModel):
     password: str | None = None
 
 
+def _keeps_an_admin(session, actor: User, u: User, changes: dict[str, Any]) -> None:
+    """Benchtop always keeps an active admin (0.30.1: the last one could make themselves a scientist, and nobody could
+    then add people, restore a backup or change a setting). Run under the write lock, so two admins demoting each
+    other at the same moment can't both succeed."""
+    stops = ("role" in changes and changes["role"] != Role.admin) or changes.get("active") is False
+    if not stops:
+        return
+    if u.id == actor.id:
+        raise HTTPException(409, "You can't disable your own account. Another admin can." if changes.get("active") is False
+                            else "You can't change your own role. Another admin can.")
+    if u.role != Role.admin or not u.active:
+        return
+    others = session.exec(select(User.id).where(User.role == Role.admin, User.active == True, User.id != u.id)).first()  # noqa: E712
+    if others is None:
+        raise HTTPException(409, f"{u.full_name or u.username} is the only active admin left, and Benchtop needs one. "
+                            "Make someone else an admin first.")
+
+
 @router.patch("/users/{uid}")
 def update_user(uid: int, body: UserPatch, actor: Admin, session: DB):
-    u = session.get(User, uid)
+    audit._take_write_lock(session)  # the admin check below must see every other change to accounts
+    u = session.get(User, uid, populate_existing=True)
     if not u:
         raise HTTPException(404, "User not found")
     changes = cleaned(u, body.model_dump(exclude_unset=True))
+    _keeps_an_admin(session, actor, u, changes)
     if "username" in changes:
         changes["username"] = _check_username(session, changes["username"], u.id)
     if "email" in changes and changes["email"] is not None:

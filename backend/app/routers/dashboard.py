@@ -114,22 +114,24 @@ def dashboard(user: CurrentUser, session: DB):
     asked_me = [e for e in others if e.id in reqs and reqs[e.id].witness_id == user.id]
     asked_me.sort(key=lambda e: not (reqs[e.id].due_at and reqs[e.id].due_at < now))
     nobody_asked = [e for e in others if e.id not in reqs] if user.role != Role.viewer else []  # a read-only account can't witness
-    awaiting = [with_request(e) for e in asked_me[:10]]
-    could_witness = [with_request(e) for e in nobody_asked[:10]]
-    waiting = [with_request(e) for e in [e for e in mine if e.status == ExperimentStatus.signed][:10]]
+    open_list = [e for e in mine if e.status == ExperimentStatus.open]
+    waiting_list = [e for e in mine if e.status == ExperimentStatus.signed]
+    # drafts nobody has touched for two weeks (returned ones are already listed above)
+    stale = [e for e in open_list if e.updated_at < now - timedelta(days=STALE_DAYS) and e.id not in returned_ids]
     return {
         "lists": {
             "recent": [summ(e) for e in mine[:8]],
-            "open": [summ(e) for e in [e for e in mine if e.status == ExperimentStatus.open][:10]],
-            "awaiting": awaiting,
-            "could_witness": could_witness,
-            "waiting": waiting,
+            "open": [summ(e) for e in open_list[:10]],
+            "awaiting": [with_request(e) for e in asked_me[:10]],
+            "could_witness": [with_request(e) for e in nobody_asked[:10]],
+            "waiting": [with_request(e) for e in waiting_list[:10]],
             "returned": returned[:10],
             "pinned": pinned,
-            # drafts nobody has touched for two weeks (returned ones are already listed above)
-            "stale": [summ(e) for e in [e for e in mine if e.status == ExperimentStatus.open and e.updated_at < now - timedelta(days=STALE_DAYS)
-                      and e.id not in returned_ids][:10]],
+            "stale": [summ(e) for e in stale[:10]],
         },
+        # how many there are in all: the lists stop at 10 (0.30.1: the dashboard said "10" for 23 waiting)
+        "totals": {"open": len(open_list), "awaiting": len(asked_me), "could_witness": len(nobody_asked),
+                   "waiting": len(waiting_list), "returned": len(returned), "stale": len(stale)},
         "stale_days": STALE_DAYS,
         "stats": {"this_month": this_month, "last_month": last_month, "witnessed_this_month": witnessed_month,
                   "yields": yields[:200]},

@@ -1,10 +1,10 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
 import { PictureViewer } from './components/editorExtras'
 import { applyPalette, syncThemeColor } from './theme'
 import ErrorBoundary from './components/ErrorBoundary'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
-import { api, getToken, setToken, setUnauthorizedHandler, type Group, type Notebook, type User } from './api'
+import { api, ApiError, getToken, isUnreachable, setToken, setUnauthorizedHandler, unreachable, type Group, type Notebook, type User } from './api'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -48,6 +48,8 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [booting, setBooting] = useState(!!getToken())
   const [handoffErr, setHandoffErr] = useState('')
+  const [bootProblem, setBootProblem] = useState('')
+  const bootTry = useRef<{ n: number; timer?: number }>({ n: 0 })
   const loc = useLocation()
   const [notebooks, setNotebooks] = useState<Notebook[]>([])
   const [archivedNotebooks, setArchivedNotebooks] = useState<Notebook[]>([])
@@ -59,6 +61,23 @@ export default function App() {
     setToken(null); setUser(null)
   }, [])
   useEffect(() => setUnauthorizedHandler(logout), [logout])
+
+  // Who is signed in. Only Benchtop saying the session has ended (401) signs the person out: a dropped connection or a
+  // server error at that moment is said, and tried again (0.30.1: one failed request at start-up signed people out).
+  const whoAmI = useCallback(() => {
+    const t = bootTry.current
+    window.clearTimeout(t.timer)
+    api.get<User>('/api/auth/me').then(u => { setUser(u); setBootProblem(''); setBooting(false) }).catch(e => {
+      if (e instanceof ApiError && e.status === 401) { setToken(null); setBootProblem(''); setBooting(false); return }
+      setBootProblem(isUnreachable(e) ? unreachable(true) : `Benchtop couldn't open your account just now (${e.message}). It'll try again.`)
+      t.timer = window.setTimeout(whoAmI, Math.min(30_000, 2000 * 2 ** t.n++))
+    })
+  }, [])
+  useEffect(() => {
+    if (!bootProblem) return
+    window.addEventListener('online', whoAmI)
+    return () => window.removeEventListener('online', whoAmI)
+  }, [bootProblem, whoAmI])
 
   useEffect(() => {
     // coming back from single sign-on: the token arrives in the URL fragment (never sent to a server)
@@ -75,13 +94,12 @@ export default function App() {
       setBooting(true)
       api.post<{ token: string; user: User }>('/api/auth/handoff', { code: decodeURIComponent(h[1]) })
         .then(r => { setToken(r.token); setUser(r.user) })
-        .catch(e => { setHandoffErr(e.message); if (getToken()) api.get<User>('/api/auth/me').then(setUser).catch(() => setToken(null)) })
-        .finally(() => setBooting(false))
+        .then(() => setBooting(false), e => { setHandoffErr(e.message); if (getToken()) whoAmI(); else setBooting(false) })
       return
     }
     if (!getToken()) return
-    api.get<User>('/api/auth/me').then(setUser).catch(() => setToken(null)).finally(() => setBooting(false))
-  }, [])
+    whoAmI()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshNotebooks = useCallback(async () => {
     const all = await api.get<Notebook[]>('/api/notebooks?include_archived=true')
@@ -108,7 +126,15 @@ export default function App() {
   }, [user?.preferences?.theme])
   useEffect(() => { if (user) applyPalette(user.preferences?.palette ?? null) }, [user, user?.preferences?.palette])
 
-  if (booting) return null
+  if (booting) return bootProblem ? (
+    <main className="login">
+      <div className="panel panel-pad login-card stack boot-problem" role="alert">
+        <p style={{ margin: 0 }}><b>{bootProblem}</b></p>
+        <p className="faint" style={{ margin: 0 }}>You're still signed in. Nothing you've saved is affected.</p>
+        <div><button className="btn" onClick={whoAmI}>Try again now</button></div>
+      </div>
+    </main>
+  ) : null
   if (!user) return <>{handoffErr && <div className="handoff-err" role="alert">{handoffErr}</div>}<Login onLogin={(t, u) => { setToken(t); setUser(u) }} /></>
 
   // an admin set this password: choose your own before anything else loads

@@ -20,6 +20,8 @@ type DashItem = ExperimentSummary & { reason?: string; returned_by?: string; ass
 interface DashData {
   // could_witness: signed records nobody was asked to witness, shown apart under "Asked to witness"
   lists: Record<ListKind, DashItem[]> & { could_witness?: DashItem[] }
+  // how many there are in all (0.30.1); the lists stop at 10. Older servers don't send it: then the lists' lengths
+  totals?: Partial<Record<ListKind | 'could_witness', number>>
   stats: { this_month: number; last_month: number; witnessed_this_month: number; yields: YieldPoint[] }
   spectra: { id: number; filename: string; experiment_id: number; eid: string; title: string; created_at: string }[]
   stale_days?: number
@@ -65,13 +67,18 @@ export const DEFAULT_WIDGETS: Widget[] = [
   { i: 'spectra', type: 'spectra', x: 6, y: 11, w: 6, h: 5 },
 ]
 
-function ExpList({ items, empty, kind, also }: { items: DashItem[]; empty: string; kind: ListKind; also?: DashItem[] }) {
+/** How many there are in all, where the server says (its lists stop at 10). */
+export const totalOf = (d: Pick<DashData, 'lists' | 'totals'>, k: ListKind | 'could_witness') =>
+  d.totals?.[k] ?? (d.lists[k]?.length || 0)
+
+function ExpList({ items, empty, kind, also, total, alsoTotal }: { items: DashItem[]; empty: string; kind: ListKind; also?: DashItem[]; total?: number; alsoTotal?: number }) {
   if (also?.length) return <>
-    {items.length ? <ExpList items={items} empty={empty} kind={kind} /> : <p className="w-empty">{empty}</p>}
+    {items.length ? <ExpList items={items} empty={empty} kind={kind} total={total} /> : <p className="w-empty">{empty}</p>}
     <p className="w-sub">Others you could witness <span className="faint">· nobody was asked</span></p>
-    <ExpList items={also} empty="" kind={kind} />
+    <ExpList items={also} empty="" kind={kind} total={alsoTotal} />
   </>
   if (!items.length) return <p className="w-empty">{empty}</p>
+  const more = (total ?? items.length) - items.length
   return (
     <ul className="w-list">
       {items.map(e => (
@@ -86,6 +93,7 @@ function ExpList({ items, empty, kind, also }: { items: DashItem[]; empty: strin
           <StatusDot status={e.status} />
         </Link></li>
       ))}
+      {more > 0 && <li className="w-more faint">and {more.toLocaleString()} more</li>}
     </ul>
   )
 }
@@ -119,7 +127,7 @@ export default function Dashboard() {
   const showWelcome = !user.preferences?.guide_dismissed && !welcomeGone
   const dismissWelcome = async () => {
     setWelcomeGone(true)
-    try { setUser(await api.patch<User>('/api/auth/me', { preferences: { guide_dismissed: true } })) } catch (e: any) { toast(e.message) }
+    try { setUser(await api.patch<User>('/api/auth/me', { preferences: { guide_dismissed: true } })) } catch (e: any) { setWelcomeGone(false); toast(e.message) }  // back, to dismiss again
   }
 
   const persist = useCallback(async (ws: Widget[]) => {
@@ -142,7 +150,8 @@ export default function Dashboard() {
   const body = (w: Widget) => {
     if (!data) return <p className="w-empty">Loading…</p>
     switch (w.type) {
-      case 'list': { const k = w.list || 'recent'; return <ExpList kind={k} items={data.lists[k]} empty={LIST_EMPTY[k]} also={k === 'awaiting' ? data.lists.could_witness : undefined} /> }
+      case 'list': { const k = w.list || 'recent'; return <ExpList kind={k} items={data.lists[k]} empty={LIST_EMPTY[k]} total={totalOf(data, k)}
+        also={k === 'awaiting' ? data.lists.could_witness : undefined} alsoTotal={totalOf(data, 'could_witness')} /> }
       case 'actions': return (
         <div className="w-actions">
           {canWrite && <button className="btn primary" onClick={() => setNewExp(true)}>New experiment <kbd>N</kbd></button>}
@@ -196,7 +205,7 @@ export default function Dashboard() {
     }
   }
   const title = (w: Widget) => w.title || (w.type === 'list' ? LIST_TITLES[w.list || 'recent'] : ({ actions: 'Quick actions', note: 'Note', header: '', yield: 'Yield trend', month: 'This month', spectra: 'Recent spectra', inventory: 'Inventory alerts' } as const)[w.type as Exclude<WType, 'list'>])
-  const count = (w: Widget) => (w.type === 'list' && data ? data.lists[w.list || 'recent'].length : null)
+  const count = (w: Widget) => (w.type === 'list' && data ? totalOf(data, w.list || 'recent') : null)
 
   const card = (w: Widget) => (
     <div key={w.i} className={`widget wt-${w.type}${editing ? ' editing' : ''}`}>
@@ -213,7 +222,7 @@ export default function Dashboard() {
     <div className="stack" style={{ gap: 14 }}>
       <div className="spread">
         <div><h1 className="page-title">{greeting}, {user.full_name.split(' ')[0] || user.username}</h1>
-          {data && <p className="lede" style={{ margin: 0 }}>{data.lists.awaiting.length} you've been asked to witness · {data.lists.returned.length} returned to you · {data.lists.open.length} open</p>}</div>
+          {data && <p className="lede" style={{ margin: 0 }}>{totalOf(data, 'awaiting').toLocaleString()} you've been asked to witness · {totalOf(data, 'returned').toLocaleString()} returned to you · {totalOf(data, 'open').toLocaleString()} open</p>}</div>
         {!narrow && (editing ? (
           <div className="row">
             <button className="btn" onClick={() => setAdding(true)}>Add widget</button>
@@ -230,9 +239,9 @@ export default function Dashboard() {
         <b>Disk space:</b> {data!.system!.disk_warnings!.join(' ')} <Link to="/admin/backups">Open Admin → Backups</Link></div>}
       {data?.system?.update && <UpdateNotice info={data.system.update} />}
       {(data?.lists.stale?.length ?? 0) > 0 && !quietDismissed && <div className="notice stale-note" role="status">
-        <span><b>{data!.lists.stale.length} draft{data!.lists.stale.length === 1 ? '' : 's'}</b> untouched for {data!.stale_days ?? 14}+ days: {data!.lists.stale.slice(0, 3).map((e, i) =>
+        <span><b>{totalOf(data!, 'stale').toLocaleString()} draft{totalOf(data!, 'stale') === 1 ? '' : 's'}</b> untouched for {data!.stale_days ?? 14}+ days: {data!.lists.stale.slice(0, 3).map((e, i) =>
           <span key={e.id}>{i > 0 && ', '}<Link to={`/experiments/${e.id}`}>{e.eid}</Link> <span className="faint">{e.title.length > 40 ? e.title.slice(0, 40) + '…' : e.title}</span></span>)}
-          {data!.lists.stale.length > 3 && ` and ${data!.lists.stale.length - 3} more`}. Finish and sign them, or void the ones that went nowhere.</span>
+          {totalOf(data!, 'stale') > 3 && ` and ${(totalOf(data!, 'stale') - 3).toLocaleString()} more`}. Finish and sign them, or void the ones that went nowhere.</span>
         <button className="btn ghost sm" onClick={() => { setQuietDismissed(true); try { sessionStorage.setItem('benchtop.quiet-dismissed', '1') } catch { /* ok */ } }}>Not now</button>
       </div>}
       {showWelcome && <div className="notice welcome-note" role="status">

@@ -111,6 +111,11 @@ textarea.input { width: 100%; resize: vertical; }
 .field .input, .field .select { font-size: 15px; color: var(--ink); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .error { color: var(--danger); font-size: 14px; }
+/* a number box holding text it can't take as it is ("1,000"): the text stays, with why, just below it (0.30.1);
+   in the reaction table, why is said under the table */
+input.num-bad, .input.num-bad { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+.num-problem { display: block; margin-top: 3px; color: var(--danger); font-size: 12.5px; font-weight: 500; line-height: 1.35; }
+p.num-problem-line { margin: 0; }
 .notice { background: var(--paper-2); border-left: 3px solid var(--signed); padding: 8px 12px; border-radius: 4px; font-size: 14px; }
 
 /* ---------- surfaces */
@@ -597,6 +602,7 @@ kbd { font: 11px var(--sans); border: 1px solid var(--rule-strong); border-botto
 .w-list li a { display: flex; gap: 10px; align-items: center; padding: 7px 12px; text-decoration: none; border-top: 1px solid var(--rule); font-size: 14px; }
 .w-list li:first-child a { border-top: 0; }
 .w-list li a:hover { background: var(--paper-2); }
+.w-list li.w-more { padding: 7px 12px; border-top: 1px solid var(--rule); font-size: 13px; }
 .w-sub { margin: 0; padding: 8px 12px 4px; border-top: 1px solid var(--rule); font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
 .w-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .w-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

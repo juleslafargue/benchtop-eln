@@ -200,6 +200,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += first_time_review(browser, tok["slaurent"])
         problems += notebook_delete_archive(browser, tok["slaurent"])
         problems += slow_network(browser, tok["slaurent"])
+        problems += numbers_and_network(browser, tok["hweiss"])
         browser.close()
     return problems
 
@@ -1035,6 +1036,205 @@ def slow_network(browser, token: str) -> list[tuple[str, str, str, str]]:
     except Exception as e:  # noqa: BLE001
         found.append(("slow network", "", "signing", str(e).splitlines()[0][:160]))
     slow.release()
+    ctx.close()
+    return found
+
+
+def numbers_and_network(browser, admin_token: str) -> list[tuple[str, str, str, str]]:
+    """0.30.1, wrong numbers and error pages (found by the 0.30 stress test), as a new scientist sees them:
+    - "1,000" in a mass box isn't taken as 1 mg: it stays, with a short message, and nothing is saved;
+    - the dashboard says how many there are in all ("12 open"), and its lists end "and 2 more";
+    - Create experiment / Create notebook make one each however often they're clicked ("Creating…"), and Enter in the
+      new experiment's title creates it;
+    - one failed request at start-up doesn't sign the person out: it says Benchtop can't be reached, and tries again;
+    - a section that couldn't be saved says Benchtop can't be reached (not "Failed to fetch"), and saves by itself
+      when it can (Ctrl+S tries at once, and so does coming back online);
+    - a notebook whose experiments couldn't be loaded says so, with Retry (not "No experiments here yet"), and
+      deleting one is reported as done even if the refreshed list fails to load."""
+    print("Numbers and network trouble: “1,000”, dashboard totals, double clicks, start-up and saving offline…", flush=True)
+    A = {"Authorization": "Bearer " + admin_token}
+    found: list[tuple[str, str, str, str]] = []
+
+    def bad(kind: str, what: str) -> None:
+        found.append(("numbers & network", kind, "", what[:200]))
+    r = httpx.post(B + "/api/users", headers=A, json={"username": "nnumbers", "password": "a-long-smoke-password", "must_change": False,
+                                                       "full_name": "Nora Numbers", "role": "scientist"})
+    token = httpx.post(B + "/api/auth/login", json={"username": "nnumbers", "password": "a-long-smoke-password"}).json()["token"]
+    H = {"Authorization": "Bearer " + token}
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Nora's notebook"}).json()
+    httpx.patch(B + "/api/auth/me", headers=H, json={"preferences": {"guide_dismissed": True, "default_notebook_id": nb["id"]}})
+    exps = [httpx.post(B + "/api/experiments", headers=H, json={"title": f"Draft {i}", "notebook_id": nb["id"]}).json() for i in range(12)]
+    exp = exps[0]
+    rows = [{"role": "reactant", "name": "Benzoic acid", "smiles": "OC(=O)c1ccccc1", "limiting": True, "basis": "mass", "mass_mg": 122.12}]
+    httpx.post(f"{B}/api/experiments/{exp['id']}/entries", headers=H, json={"kind": "reaction", "title": "Amounts", "content": {"rows": rows}})
+    entries = httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"]
+    rxn = next(e for e in entries if e["title"] == "Amounts")
+    aim = next(e for e in entries if e["title"] == "Aim")
+
+    def count(path: str, title: str, key: str = "title") -> int:
+        return sum(1 for x in httpx.get(B + path, headers=H).json() if x[key] == title)
+
+    def page(**kw):
+        ctx = browser.new_context(viewport={"width": 1300, "height": 900}, **kw)
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+        return ctx, ctx.new_page()
+
+    # "1,000" in a mass box
+    ctx, pg = page()
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        box = f"#entry-{rxn['id']} input[aria-label='Mass (mg), Benzoic acid']"
+        pg.wait_for_selector(box)
+        pg.fill(box, "1,000")
+        pg.keyboard.press("Tab")
+        pg.wait_for_timeout(2500)
+        stored = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["id"] == rxn["id"])
+        mass = stored["content"]["rows"][0]["mass_mg"]
+        msg = " ".join(pg.locator(f"#entry-{rxn['id']} .num-problem-line").all_inner_texts())
+        if mass != 122.12 or pg.input_value(box) != "1,000" or "1000 or 1?" not in msg:
+            bad("1,000", f"typed 1,000 in a mass box: the record holds {mass} mg, the box shows {pg.input_value(box)!r}, it says {msg!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("1,000", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # the dashboard's totals; double clicks and Enter in the New experiment and New notebook dialogs (on a slow network)
+    ctx, pg = page()
+    try:
+        pg.goto(B + "/")
+        pg.wait_for_selector(".lede", timeout=15000)
+        pg.wait_for_selector(".w-list", timeout=15000)
+        lede, more = pg.inner_text(".lede"), " ".join(pg.locator(".w-more").all_inner_texts())
+        if "12 open" not in lede or "and 2 more" not in more:
+            bad("dashboard", f"12 open experiments: the dashboard says {lede!r}, and its list ends {more!r} (not “and 2 more”)")
+    except Exception as e:  # noqa: BLE001
+        bad("dashboard", str(e).splitlines()[0][:160])
+    try:
+        slow = Slow(pg, "**/api/experiments", 2.0, "POST")
+        pg.keyboard.press("n")
+        pg.fill("dialog[open] input.input >> nth=0", "Clicked twice")
+        pg.dblclick("dialog[open] button.primary")
+        label = pg.inner_text("dialog[open] button.primary")
+        if label != "Creating…" or not pg.is_disabled("dialog[open] button.primary"):
+            bad("double click", f"while the experiment is being made, Create says {label!r}")
+        slow.pump(10, until=lambda: "/experiments/" in pg.url)
+        slow.pump(1.0)
+        if count("/api/experiments?limit=500", "Clicked twice") != 1:
+            bad("double click", f"a double click on Create experiment made {count('/api/experiments?limit=500', 'Clicked twice')} experiments")
+        pg.goto(B + "/")
+        pg.wait_for_selector(".lede")
+        pg.keyboard.press("n")
+        pg.fill("dialog[open] input.input >> nth=0", "Made with Enter")
+        pg.keyboard.press("Enter")
+        slow.pump(8, until=lambda: "/experiments/" in pg.url)
+        if count("/api/experiments?limit=500", "Made with Enter") != 1:
+            bad("enter", "Enter in the new experiment's title didn't create it")
+        slow.release()
+        pg.goto(B + "/")
+        slow = Slow(pg, "**/api/notebooks", 2.0, "POST")
+        pg.click(".w-actions button:has-text('New notebook')")
+        pg.fill("dialog[open] input.input >> nth=0", "Notebook clicked twice")
+        pg.dblclick("dialog[open] button.primary")
+        slow.pump(10, until=lambda: "/notebooks/" in pg.url)
+        slow.pump(1.0)
+        n = count("/api/notebooks", "Notebook clicked twice", "name")
+        if n != 1:
+            bad("double click", f"a double click on Create notebook made {n} notebooks")
+        slow.release()
+    except Exception as e:  # noqa: BLE001
+        bad("dashboard & dialogs", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # one failed request at start-up
+    ctx, pg = page()
+    try:
+        failed = {"n": 0}
+
+        def once(route):
+            if failed["n"] == 0:
+                failed["n"] += 1
+                return route.abort("internetdisconnected")
+            return route.continue_()
+        pg.route("**/api/auth/me", once)
+        pg.goto(B + "/")
+        pg.wait_for_selector(".boot-problem >> text=Can't reach Benchtop", timeout=5000)
+        if not pg.evaluate("localStorage.getItem('benchtop.token')"):
+            bad("start-up", "one failed request at start-up signed the person out")
+        pg.wait_for_selector(".lede", timeout=15000)  # it tried again by itself, and got in
+    except Exception as e:  # noqa: BLE001
+        bad("start-up", f"one failed request at start-up: {str(e).splitlines()[0][:120]}; the page says {pg.inner_text('body')[:80]!r}")
+    ctx.close()
+
+    # saving while Benchtop can't be reached
+    ctx, pg = page()
+    sec = f"#entry-{aim['id']}"
+    state = lambda: pg.inner_text(f"{sec} .save-state").strip()  # noqa: E731
+    down = lambda route: route.abort("internetdisconnected") if route.request.method == "PUT" else route.continue_()  # noqa: E731
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        pg.wait_for_selector(f"{sec} .ProseMirror")
+        pg.route("**/api/entries/**", down)
+        pg.click(f"{sec} .ProseMirror")
+        pg.keyboard.type("Typed offline.", delay=10)
+        pg.wait_for_selector(f"{sec} .save-state.err", timeout=8000)
+        said = pg.inner_text(f"{sec} p.error")
+        if "Can't reach Benchtop" not in said:
+            bad("saving offline", f"a section that couldn't be saved says {said!r}")
+        pg.unroute("**/api/entries/**")
+        pg.keyboard.press("Control+s")
+        pg.wait_for_timeout(1500)
+        if not re.fullmatch(r"v\d+", state()):
+            bad("saving offline", f"Ctrl+S didn't try the failed save again (the section says {state()!r})")
+        pg.wait_for_function(f"/^v\\d+$/.test(document.querySelector('{sec} .save-state').textContent.trim())", timeout=8000)
+        pg.route("**/api/entries/**", down)
+        pg.keyboard.type(" And again.", delay=10)
+        pg.wait_for_selector(f"{sec} .save-state.err", timeout=8000)
+        pg.unroute("**/api/entries/**")
+        try:  # nothing pressed: it tries again by itself
+            pg.wait_for_function(f"/^v\\d+$/.test(document.querySelector('{sec} .save-state').textContent.trim())", timeout=9000)
+        except Exception:  # noqa: BLE001
+            bad("saving offline", f"once Benchtop could be reached again, the section still says {state()!r}")
+        ctx.set_offline(True)
+        pg.keyboard.type(" Third.", delay=10)
+        pg.wait_for_selector(f"{sec} .save-state.err", timeout=8000)
+        ctx.set_offline(False)
+        pg.wait_for_timeout(1500)
+        if not re.fullmatch(r"v\d+", state()):
+            bad("saving offline", f"back online, the section wasn't saved at once (it says {state()!r})")
+        html = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["id"] == aim["id"])["content"]["html"]
+        if "Typed offline. And again. Third." not in html:
+            bad("saving offline", f"the record has {html[:80]!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("saving offline", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # a notebook page whose list fails to load; deleting a notebook while the network drops
+    ctx, pg = page()
+    try:
+        listing = lambda url: "/api/experiments?notebook_id=" in url  # noqa: E731
+        pg.route(listing, lambda route: route.fulfill(status=500, body='{"detail": "Database busy"}', content_type="application/json"))
+        pg.goto(f"{B}/notebooks/{nb['id']}")
+        pg.wait_for_timeout(2000)
+        text = pg.inner_text("main")
+        if "Couldn't load the experiments" not in text or "No experiments here yet" in text:
+            bad("notebook page", "its experiments couldn't be loaded, and the page says " + ("“No experiments here yet”" if "No experiments here yet" in text else "nothing"))
+        pg.unroute(listing)
+        pg.click("main button:has-text('Retry')", timeout=5000)
+        pg.wait_for_selector("main >> text=Draft 11", timeout=10000)
+    except Exception as e:  # noqa: BLE001
+        bad("notebook page", str(e).splitlines()[0][:160])
+    try:
+        empty = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Deleted while the network drops"}).json()
+        pg.goto(f"{B}/notebooks/{empty['id']}")
+        pg.click("button:has-text('Delete notebook')")
+        pg.wait_for_selector("dialog.modal >> text=Deleted while the network drops")
+        pg.route(lambda url: "/api/notebooks?include_archived=true" in url, lambda route: route.abort("internetdisconnected"))
+        pg.click("dialog.modal button:has-text('Delete notebook')")
+        pg.wait_for_selector(".toast", timeout=10000)
+        toast = pg.inner_text(".toast")
+        if not toast.startswith("Deleted Deleted while the network drops"):
+            bad("notebook delete", f"deleted, but the list didn't load after it: the page says {toast!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("notebook delete", str(e).splitlines()[0][:160])
     ctx.close()
     return found
 

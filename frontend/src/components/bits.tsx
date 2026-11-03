@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ComponentProps } from 'react'
+import { lazy, Suspense, useEffect, useId, useState, type ComponentProps } from 'react'
 import { depictUrl } from '../api'
 
 const StructureEditorLazy = lazy(() => import('./StructureEditor'))
@@ -20,8 +20,20 @@ const UNITS: Record<string, Record<string, number>> = {
   M: { m: 1, mm: 1e-3, 'µm': 1e-6, 'μm': 1e-6, um: 1e-6 },
 }
 
-/** Parse "1.2 g" → 1200 for unit "mg". Returns undefined if the text isn't a number (with an optional known unit). */
+/** "1,000" is one thousand in English and one in French or German, so Benchtop doesn't guess (0.30.1: it was taken as
+ *  1 mg). A comma followed by exactly three digits, and no other separator, is ambiguous; "0,5" and "1,25" are not.
+ *  Returns what to tell the person, or null. */
+export function amountProblem(text: string): string | null {
+  const m = text.trim().match(/^([-+]?)([1-9]\d{0,2}),(\d{3})\s*[a-zA-Zµμ]*$/)
+  if (!m) return null
+  const thousands = `${m[1]}${m[2]}${m[3]}`, decimal = String(Number(`${m[1]}${m[2]}.${m[3]}`))
+  return `Did you mean ${thousands} or ${decimal}? Type it without the comma.`
+}
+
+/** Parse "1.2 g" → 1200 for unit "mg". Returns undefined if the text isn't a number (with an optional known unit),
+ *  or could be read two ways (see amountProblem). */
 export function parseAmount(text: string, unit?: keyof typeof UNITS): number | null | undefined {
+  if (amountProblem(text)) return undefined
   const t = text.trim().replace(',', '.')
   if (t === '') return null
   const m = t.match(/^([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*([a-zA-Zµμ]*)$/i)
@@ -37,11 +49,13 @@ export function parseAmount(text: string, unit?: keyof typeof UNITS): number | n
  *  Leaving the box saves only what you typed in it since you entered it: a box you only passed through (Tab, Enter,
  *  a click elsewhere) shows and keeps the value recalculated meanwhile, instead of saving the old one it showed.
  *  With `unit`, a typed unit is converted (e.g. "1.2 g" into a mg field). */
-export function NumInput({ value, onCommit, disabled, className, label, nd = 4, unit, sig }: {
+export function NumInput({ value, onCommit, disabled, className, label, nd = 4, unit, sig, onProblem }: {
   value: number | null | undefined; onCommit: (v: number | null) => void
   disabled?: boolean; className?: string; label: string; nd?: number; unit?: keyof typeof UNITS
   /** show at most this many significant figures (whole numbers stay whole): the value kept is unchanged */
   sig?: number
+  /** where a table shows why a box's text wasn't taken ('' once it's fixed); without it, it's said just below the box */
+  onProblem?: (label: string, problem: string) => void
 }) {
   // tiny amounts (after a big scale-down) keep 3 significant figures instead of rounding to 0.00
   const shown = value === null || value === undefined ? ''
@@ -50,8 +64,17 @@ export function NumInput({ value, onCommit, disabled, className, label, nd = 4, 
         : String(Number(Number(value).toFixed(sig ? 0 : nd)))
   // null: not typed in since entering the box. Otherwise the typed text, and what the box showed when typing began.
   const [draft, setDraft] = useState<{ text: string; from: string } | null>(null)
+  // text that can't be taken as it is ("1,000"): it stays in the box, with why, until it's changed
+  const [problem, setProblem] = useState('')
+  const problemId = useId()
+  useEffect(() => {  // and cleared when the box goes (its row removed)
+    onProblem?.(label, problem)
+    return () => { if (problem) onProblem?.(label, '') }
+  }, [problem]) // eslint-disable-line react-hooks/exhaustive-deps
   const commit = () => {
     if (!draft) return
+    const bad = amountProblem(draft.text)
+    if (bad) { setProblem(bad); return }
     setDraft(null)
     const t = draft.text.trim()
     if (t === draft.from || t === shown) return  // typed, but back to what was there: nothing to save
@@ -59,16 +82,18 @@ export function NumInput({ value, onCommit, disabled, className, label, nd = 4, 
     if (n === undefined || (n !== null && Number.isNaN(n))) return  // not a number: the stored value comes back
     onCommit(n)
   }
-  return (
+  return (<>
     <input
-      aria-label={label} inputMode={unit ? 'text' : 'decimal'} className={className} disabled={disabled} value={draft ? draft.text : shown}
+      aria-label={label} inputMode={unit ? 'text' : 'decimal'} className={[className, problem && 'num-bad'].filter(Boolean).join(' ') || undefined}
+      disabled={disabled} value={draft ? draft.text : shown} aria-invalid={problem ? true : undefined} aria-describedby={problem && !onProblem ? problemId : undefined}
       title={unit ? `Number in ${unit}, or type a unit (e.g. ${({ mg: '1.2 g', mL: '250 µL', mmol: '0.5 mol', h: '30 min', M: '500 mM' })[unit]})` : undefined}
-      onFocus={() => setDraft(null)}
+      onFocus={() => { if (!problem) setDraft(null) }}
       onBlur={commit}
       onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-      onChange={e => { const text = e.target.value; setDraft(d => ({ text, from: d ? d.from : shown })) }}
+      onChange={e => { const text = e.target.value; setProblem(''); setDraft(d => ({ text, from: d ? d.from : shown })) }}
     />
-  )
+    {problem && !onProblem && <span className="num-problem" id={problemId} role="alert">{problem}</span>}
+  </>)
 }
 
 export function Mol({ smiles, w = 220, h = 130, className, rxn, highlight, alt }: { smiles: string; w?: number; h?: number; className?: string; rxn?: boolean; highlight?: string; alt?: string }) {

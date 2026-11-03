@@ -48,6 +48,14 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // what a box in the table holds that couldn't be taken ("1,000"), said under the table: { "Mass (mg), Benzoic acid": why }
+  const [boxProblems, setBoxProblems] = useState<Record<string, string>>({})
+  const boxProblem = (label: string, problem: string) => setBoxProblems(p => {
+    if ((p[label] || '') === problem) return p
+    const next = { ...p }
+    if (problem) next[label] = problem; else delete next[label]
+    return next
+  })
   const [pasting, setPasting] = useState(false)
   const [deducting, setDeducting] = useState<StoichRow[] | null>(null)
   const [pasteText, setPasteText] = useState('')
@@ -215,7 +223,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
   const UNIT_OF: Partial<Record<keyof StoichRow, 'mg' | 'mL' | 'mmol' | 'M'>> = { mass_mg: 'mg', actual_mass_mg: 'mg', volume_ml: 'mL', mmol: 'mmol', conc_m: 'M' }
   const n = (r: StoichRow, i: number, k: keyof StoichRow, basis?: StoichRow['basis'], nd = 4) => (
     <td><NumInput label={`${COL_LABEL[k] || String(k)}, ${rowLabel(r, rows)}`} nd={nd} sig={5} disabled={readOnly} value={r[k] as number | null} unit={UNIT_OF[k]}
-      className={basis && r.basis === basis ? 'basis' : ''} onCommit={v => setField(i, { [k]: v } as Partial<StoichRow>, basis)} /></td>
+      className={basis && r.basis === basis ? 'basis' : ''} onCommit={v => setField(i, { [k]: v } as Partial<StoichRow>, basis)} onProblem={boxProblem} /></td>
   )
 
   return (
@@ -304,6 +312,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
           </table>
         </div>
       )}
+      {Object.entries(boxProblems).map(([label, problem]) => <p className="error num-problem-line" role="alert" key={label}>{label}: {problem}</p>)}
 
       {rows.length > 0 && (
         <div className="spread">
@@ -321,18 +330,20 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
         const items: [string, string, string][] = [
           ['Atom economy', g.ae != null ? `${fmt(g.ae, 1)}%` : '', 'Product MW ÷ sum of the MWs of the rows marked Reactant (one of each). Reagents, catalysts and solvents don\'t count. Independent of yield.'],
           ['RME', g.rme != null ? `${fmt(g.rme, 1)}%` : '', 'Reaction mass efficiency: isolated product ÷ mass of the rows marked Reactant.'],
-          ['E-factor', m.e_factor != null ? fmt(m.e_factor, 1) : '', 'kg of waste per kg of product: everything in the table except the product.'],
-          ['PMI', m.pmi != null ? fmt(m.pmi, 1) : '', 'Process mass intensity: total mass in ÷ mass of product (= E-factor + 1).'],
-          ['Solvent', m.solvent_l_per_kg != null ? `${fmt(m.solvent_l_per_kg, 0)} L/kg` : '', 'Reaction solvent volume per kg of product.'],
+          ['E-factor', g.eFactor != null ? fmt(g.eFactor, 1) : '', 'kg of waste per kg of product: everything in the table except the product.'],
+          ['PMI', g.pmi != null ? fmt(g.pmi, 1) : '', 'Process mass intensity: total mass in ÷ mass of product (= E-factor + 1).'],
+          ['Solvent', g.solvent != null ? `${fmt(g.solvent, 0)} L/kg` : '', 'Reaction solvent volume per kg of product.'],
         ]
         const shown = items.filter(i => i[1])
         const impossible = [g.aeImpossible && 'atom economy', g.rmeImpossible && 'RME'].filter(Boolean).join(' and ')
-        if (!shown.length && !impossible) return null
+        if (!shown.length && !impossible && !g.pmiImpossible) return null
         return <div className="metrics" aria-label="Green chemistry metrics">
           <span className="fld-cap" style={{ alignSelf: 'center' }}>Green metrics</span>
           {shown.map(([k, v, t]) => <span key={k} title={t}>{k} <b>{v}</b></span>)}
-          {impossible && <span className="warn-text metrics-roles">{impossible[0].toUpperCase() + impossible.slice(1)} would be over 100 %.
+          {impossible && <span className="warn-text metrics-roles">{impossible[0].toUpperCase() + impossible.slice(1)} would be outside 0–100 %.
             Check {g.aeImpossible ? '' : 'the isolated mass and '}the roles: a co-reactant may be marked as Reagent (only Reactants count).</span>}
+          {g.pmiImpossible && <span className="warn-text metrics-roles">No E-factor or PMI: the isolated mass is more than everything that
+            went in. Check the masses and their units.</span>}
           <span className="faint" title={m.scope}>reaction only{m.missing_mass?.length ? ` · E-factor/PMI need a mass for ${m.missing_mass.map((x: string) => {
             const r = rows.find(r => r.smiles && r.smiles === x)  // saved before 0.29, which named unnamed rows by their SMILES
             return r ? rowLabel(r, rows) : x

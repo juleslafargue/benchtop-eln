@@ -105,7 +105,7 @@ export default function Reactions() {
                   <div className="faint">{r.product}</div>
                   {(() => {
                     const g = greenOk(r.metrics)
-                    const parts = [g.ae != null ? `AE ${fmt(g.ae, 0)}%` : g.aeImpossible ? 'AE: check roles' : '', r.metrics?.pmi != null ? `PMI ${fmt(r.metrics.pmi, 0)}` : ''].filter(Boolean)
+                    const parts = [g.ae != null ? `AE ${fmt(g.ae, 0)}%` : g.aeImpossible ? 'AE: check roles' : '', g.pmi != null ? `PMI ${fmt(g.pmi, 0)}` : ''].filter(Boolean)
                     return parts.length > 0 && <div className="faint" style={{ fontSize: 12 }} title={g.aeImpossible
                       ? 'Atom economy would be over 100 %: a co-reactant may be marked as Reagent. Only Reactants count.'
                       : 'Atom economy (only Reactants count) and process mass intensity, reaction only'}>{parts.join(' · ')}</div>

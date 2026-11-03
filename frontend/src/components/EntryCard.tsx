@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ErrorBoundary from './ErrorBoundary'
 import { KindIcon } from './AddSection'
-import { api, type Attachment, type Entry } from '../api'
+import { api, isUnreachable, unreachable, type Attachment, type Entry } from '../api'
 import TextEntry from './TextEntry'
 import ReactionEntry from './ReactionEntry'
 import TableEntry from './TableEntry'
@@ -82,6 +82,8 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
 
   const savedAt = useRef(0)  // edits.current when the server last had everything
   const lastError = useRef('')
+  const [offline, setOffline] = useState(false)  // the last save got no answer: it's tried again by itself
+  const retries = useRef(0)
   const saveOnce = useCallback(async (): Promise<boolean> => {
     const mark = edits.current
     setState('saving')
@@ -98,11 +100,12 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
         if (!offerRef.current) clearDraft(STORE, user.id, entry.id)  // the server has it: the kept copy isn't needed
         if (entry.kind === 'reaction') window.dispatchEvent(new CustomEvent('benchtop:reaction-saved', { detail: { experimentId: entry.experiment_id } }))
       } else setState('dirty')
-      setError(''); lastError.current = ''
+      setError(''); lastError.current = ''; setOffline(false); retries.current = 0
       return true
     } catch (e: any) {
-      setState('error')
-      setError(e.message); lastError.current = e.message
+      const away = isUnreachable(e)
+      setState('error'); setOffline(away)
+      setError(away ? unreachable(true) : e.message); lastError.current = away ? unreachable() : e.message
       return false
     }
   }, [entry.id, user.id])
@@ -142,6 +145,15 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
     const t = setTimeout(save, 900)
     return () => clearTimeout(t)
   }, [state, content, title, save])
+
+  // Benchtop couldn't be reached (0.30.1: the section then stayed "Not saved" until the next keystroke): try again after
+  // a few seconds, a little longer each time, and at once when the browser says it's back online
+  useEffect(() => {
+    if (state !== 'error' || !offline) return
+    const t = setTimeout(save, Math.min(30_000, 3000 * 2 ** retries.current++))
+    window.addEventListener('online', save)
+    return () => { clearTimeout(t); window.removeEventListener('online', save) }
+  }, [state, offline, save])
 
   useEffect(() => {
     if (state === 'saved') return
@@ -229,9 +241,9 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
     }
   }, [entry.version]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ⌘S: save now instead of waiting for the pause
+  // ⌘S: save now instead of waiting for the pause (or try a save that failed again)
   useEffect(() => {
-    const now = () => { if (state === 'dirty') save() }
+    const now = () => { if (state === 'dirty' || state === 'error') save() }
     window.addEventListener('benchtop:save-now', now)
     return () => window.removeEventListener('benchtop:save-now', now)
   }, [state, save])

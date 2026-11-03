@@ -133,14 +133,24 @@ export interface ReactionSummary {
   metrics?: GreenMetrics
 }
 export interface GreenMetrics { scope?: string; atom_economy_pct?: number; rme_pct?: number; e_factor?: number; pmi?: number; solvent_l_per_kg?: number; missing_mass?: string[]
-  impossible?: ('atom_economy' | 'rme')[] }  // came out over 100 %, so not given (usually a co-reactant marked as Reagent)
-/** Atom economy and RME as they can be shown: over 100 % is impossible (records saved before 0.29 may hold such a number). */
-export const greenOk = (m: GreenMetrics | undefined) => ({
-  ae: m?.atom_economy_pct != null && m.atom_economy_pct <= 100 ? m.atom_economy_pct : null,
-  rme: m?.rme_pct != null && m.rme_pct <= 100 ? m.rme_pct : null,
-  aeImpossible: !!(m?.impossible?.includes('atom_economy') || (m?.atom_economy_pct ?? 0) > 100),
-  rmeImpossible: !!(m?.impossible?.includes('rme') || (m?.rme_pct ?? 0) > 100),
-})
+  // came out impossible, so not given: atom economy or RME over 100 % (usually a co-reactant marked as Reagent), or
+  // PMI under 1 and E-factor under 0 (more product than everything that went in)
+  impossible?: ('atom_economy' | 'rme' | 'pmi')[] }
+/** The green metrics as they can be shown. Atom economy and RME outside 0-100 %, a PMI under 1 and an E-factor under 0
+ *  are impossible: records saved before 0.29 (and 0.30.1) may hold such numbers, and they're not shown. */
+export const greenOk = (m: GreenMetrics | undefined) => {
+  const pct = (v: number | undefined) => (v != null && v >= 0 && v <= 100 ? v : null)
+  const odd = (v: number | undefined) => v != null && (v < 0 || v > 100)
+  const massOk = !(m?.impossible?.includes('pmi') || (m?.pmi != null && m.pmi < 1) || (m?.e_factor != null && m.e_factor < 0))
+  return {
+    ae: pct(m?.atom_economy_pct), rme: pct(m?.rme_pct),
+    pmi: massOk && m?.pmi != null ? m.pmi : null, eFactor: massOk && m?.e_factor != null ? m.e_factor : null,
+    solvent: m?.solvent_l_per_kg != null && m.solvent_l_per_kg >= 0 ? m.solvent_l_per_kg : null,
+    aeImpossible: !!(m?.impossible?.includes('atom_economy') || odd(m?.atom_economy_pct)),
+    rmeImpossible: !!(m?.impossible?.includes('rme') || odd(m?.rme_pct)),
+    pmiImpossible: !massOk,
+  }
+}
 export const PURIFICATION_LABELS: Record<string, string> = {
   column: 'Flash column', prep_tlc: 'Prep TLC', prep_hplc: 'Prep HPLC', recrystallization: 'Recrystallisation',
   trituration: 'Trituration', distillation: 'Distillation', extraction: 'Extraction only', none: 'Used crude',
@@ -157,6 +167,13 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
 }
 
+/** What to say when Benchtop can't be reached (the network dropped, the server is restarting), the same everywhere,
+ *  instead of the browser's "Failed to fetch" (0.30.1). `retrying`: Benchtop will try again by itself. */
+export const unreachable = (retrying = false) =>
+  retrying ? "Can't reach Benchtop. Check your connection; it'll try again." : "Can't reach Benchtop. Check your connection and try again."
+/** The request got no answer from Benchtop: offline, or only a proxy's "it's down" (502, 503, 504 without Benchtop's own message). */
+export const isUnreachable = (e: unknown) => e instanceof ApiError && e.status === 0
+
 let onUnauthorized: () => void = () => {}
 export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn }
 
@@ -167,20 +184,35 @@ async function request<T>(method: string, path: string, body?: unknown, raw = fa
   let payload: BodyInit | undefined
   if (body instanceof FormData) payload = body
   else if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body) }
-  const res = await fetch(path, { method, headers, body: payload })
+  let res: Response
+  try {
+    res = await fetch(path, { method, headers, body: payload })
+  } catch {
+    throw new ApiError(0, unreachable())  // no answer at all: offline, or Benchtop stopped
+  }
   if (res.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/logout' && !/\/(sign|witness|reject|withdraw|void)$/.test(path)) onUnauthorized()
   if (!res.ok) {
-    let msg = res.statusText
+    let msg = res.statusText, said = false
     try {
       const j = await res.json()
+      said = typeof j.detail === 'string' || Array.isArray(j.detail)
       msg = typeof j.detail === 'string' ? j.detail : Array.isArray(j.detail) ? j.detail.map((d: any) => d.msg).join('; ') : msg
     } catch { /* not json */ }
+    if (!said && [502, 503, 504].includes(res.status)) throw new ApiError(0, unreachable())  // a proxy in front: Benchtop is down
     throw new ApiError(res.status, msg)
   }
-  if (raw) return res as unknown as T
+  // the connection can also drop while the answer is arriving (a TypeError, as for fetch itself)
+  const dropped = (e: unknown) => { throw e instanceof TypeError ? new ApiError(0, unreachable()) : e }
+  if (raw) {
+    for (const k of ['arrayBuffer', 'blob', 'text', 'json'] as const) {
+      const read = res[k].bind(res) as () => Promise<unknown>
+      Object.defineProperty(res, k, { value: () => read().catch(dropped) })
+    }
+    return res as unknown as T
+  }
   if (res.status === 204) return undefined as T
   const ct = res.headers.get('content-type') || ''
-  return (ct.includes('json') ? res.json() : res.text()) as Promise<T>
+  return (ct.includes('json') ? res.json() : res.text()).catch(dropped) as Promise<T>
 }
 
 export const api = {
