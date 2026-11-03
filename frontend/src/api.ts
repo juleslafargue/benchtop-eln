@@ -70,6 +70,8 @@ export interface ElnOrigin {
   authors: string[]; imported_at: string; imported_by: string; locked_reason: string; warnings: string[]
   signatures: { meaning: string; signer: string; signed_at: string; comment: string; matches: boolean; timestamp: boolean }[]
   files: { imported: number; matched: number; mismatched: number }
+  /** 0.30.1: its sections are exactly as signed (false: some had to be changed; missing: imported before 0.30.1) */
+  as_signed?: boolean
 }
 export interface ElnPreview {
   token: string; filename: string; size: number; source: string; source_url: string; exported: string | null

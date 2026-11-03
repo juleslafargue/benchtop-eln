@@ -15,6 +15,7 @@ import hashlib
 import os
 import secrets
 import threading
+import time
 from pathlib import Path
 from typing import BinaryIO
 
@@ -75,8 +76,17 @@ def put(tmp: Path) -> tuple[str, int]:
     sha, size = sha256_of(tmp), tmp.stat().st_size
     dst = blob_path(sha)
     if dst.is_file() and intact(dst, sha, size):
-        tmp.unlink()
-        return sha, size
+        gone = False
+        try:  # marked as used again, so an import that stored it a moment ago and failed leaves it (eln_import)
+            now = time.time_ns()
+            os.utime(dst, ns=(now, now))
+        except FileNotFoundError:
+            gone = True  # removed by that import just now: this copy takes its place
+        except OSError:
+            pass  # not allowed to touch it (another owner): it's there, which is what matters
+        if not gone:
+            tmp.unlink()
+            return sha, size
     dst.parent.mkdir(parents=True, exist_ok=True)
     os.replace(tmp, dst)
     _sync_dir(dst.parent)

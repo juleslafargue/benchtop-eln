@@ -36,12 +36,12 @@ export default function SignDialog({ exp, action, onDone, onClose }: {
   }, [action, exp.id])
   const chosen = people?.find(p => p.id === witnessId)
   // a reminder only: it doesn't stop signing, and nothing of it is sent (the server alone decides what a signature covers).
-  // Read afresh: the page's copy doesn't follow what was typed into the sections since it opened.
+  // Read afresh, from what's saved (every section was saved before this opened): the page's copy doesn't follow what was
+  // typed into the sections since it opened, so it isn't shown even for a moment (0.30.1)
   const [empty, setEmpty] = useState('')
   useEffect(() => {
     if (action !== 'sign') return
     let live = true
-    setEmpty(reminderText(exp.entries))
     api.get<Experiment>(`/api/experiments/${exp.id}`).then(x => { if (live) setEmpty(reminderText(x.entries)) }).catch(() => {})
     return () => { live = false }
   }, [action, exp.id]) // eslint-disable-line react-hooks/exhaustive-deps

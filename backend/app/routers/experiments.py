@@ -196,9 +196,21 @@ class NotebookPatch(BaseModel):
     visibility: str | None = None
 
 
+def _notebook_now(session, user: User, nb_id: int) -> Notebook:
+    """The notebook as it is now, read once this request holds the write lock: until it commits, nothing else can
+    delete, archive or change it, and whatever an earlier request did to it is seen (0.30.1: a request that read it
+    first and then waited could act on a notebook that had been deleted meanwhile). 404 if it's gone, or hidden."""
+    from ..access import access_for
+    audit._take_write_lock(session)
+    nb = session.get(Notebook, nb_id, populate_existing=True)
+    if nb is None or not access_for(session, user).can_read_notebook(nb):
+        raise HTTPException(404, f"Notebook {nb_id} not found")  # don't confirm that a hidden notebook exists
+    return nb
+
+
 @router.patch("/notebooks/{nb_id}")
 def update_notebook(nb_id: int, body: NotebookPatch, user: Writer, session: DB):
-    nb = get_or_404(session, Notebook, nb_id)
+    nb = _notebook_now(session, user, nb_id)
     if nb.owner_id != user.id and user.role != Role.admin:
         raise HTTPException(403, "Only the notebook owner can change it")
     changes = cleaned(nb, body.model_dump(exclude_unset=True))
@@ -221,14 +233,11 @@ def update_notebook(nb_id: int, body: NotebookPatch, user: Writer, session: DB):
 def delete_notebook(nb_id: int, user: Writer, session: DB):
     """Delete a notebook that holds no experiments (a test notebook, one made by mistake). Records are never deleted,
     so a notebook with any experiment in it, of any status, can only be archived. The audit trail keeps its history."""
-    from ..access import access_for
-    nb = get_or_404(session, Notebook, nb_id)
-    if not access_for(session, user).can_read_notebook(nb):
-        raise HTTPException(404, f"Notebook {nb_id} not found")  # don't confirm that a hidden notebook exists
+    # the write lock before looking, so no experiment can be added between the check and the delete, and a second
+    # click (or a late request) finds the notebook already gone
+    nb = _notebook_now(session, user, nb_id)
     if nb.owner_id != user.id and user.role != Role.admin:
         raise HTTPException(403, "Only the notebook's owner or an admin can delete it")
-    # hold the write lock before looking, so no experiment can be added between the check and the delete
-    audit._take_write_lock(session)
     if _holds_experiments(session, nb.id):
         session.rollback()
         raise HTTPException(409, "This notebook has experiments, so it can't be deleted. Archive it instead.")
@@ -396,11 +405,9 @@ def _new_entry(session, exp_id: int, kind: EntryKind, title: str, content: dict,
 
 
 def _require_notebook(session, user: User, nb_id: int) -> Notebook:
-    """A notebook this person can put a new experiment in: one they can open, and not archived."""
-    from ..access import access_for
-    nb = get_or_404(session, Notebook, nb_id)
-    if not access_for(session, user).can_read_notebook(nb):
-        raise HTTPException(404, f"Notebook {nb_id} not found")
+    """A notebook this person can put a new experiment in: one they can open, and not archived. Checked under the write
+    lock, just before the experiment goes in, so it can't be deleted or archived in between (0.30.1)."""
+    nb = _notebook_now(session, user, nb_id)
     if nb.archived:
         raise HTTPException(409, archived_message(nb))
     return nb
@@ -515,7 +522,9 @@ def clone_experiment(exp_id: int, user: Writer, session: DB, as_template: bool =
     if scale is not None and not (0.001 <= scale <= 1000):
         raise HTTPException(400, "Scale factor must be between 0.001 and 1000")
     from ..access import access_for
-    nb = session.get(Notebook, src.notebook_id) if src.notebook_id else None
+    if not as_template and src.notebook_id is not None:
+        audit._take_write_lock(session)  # until the copy is in, its notebook can't be archived or deleted (0.30.1)
+    nb = session.get(Notebook, src.notebook_id, populate_existing=True) if src.notebook_id else None
     if not as_template and src.notebook_id is not None and (nb is None or not access_for(session, user).can_read_notebook(nb)):
         raise HTTPException(403, "You can copy this experiment as a template, but not into a notebook you can't open")
     if not as_template and nb is not None and nb.archived:  # the copy would go into the archived notebook
@@ -1136,8 +1145,16 @@ def verify_experiment(exp_id: int, user: CurrentUser, session: DB):
         s["matches_current"] = s["content_hash"] == current
     attestations = [s for s in sigs if s["meaning"] in ("author", "witness")]
     latest = attestations[-1] if attestations else None
-    return {"content_hash": current, "signatures": sigs,
-            "intact": latest is None or exp.status == ExperimentStatus.open or latest["matches_current"]}
+    # what it was checked against, so the page never claims a match it didn't check (0.30.1): the latest signature;
+    # for a read-only import, the fingerprint it had when imported; a draft, or an import from before 0.30.1, nothing
+    imported = (exp.origin or {}).get("content_hash") if exp.origin else None
+    if latest is not None and exp.status != ExperimentStatus.open:
+        against, intact = "signature", latest["matches_current"]
+    elif imported and exp.status != ExperimentStatus.open:
+        against, intact = "import", imported == current
+    else:
+        against, intact = "nothing", True
+    return {"content_hash": current, "signatures": sigs, "intact": intact, "against": against}
 
 
 @router.get("/experiments/{exp_id}/writeup")

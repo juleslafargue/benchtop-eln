@@ -103,6 +103,8 @@ class UserIdentity(SQLModel, table=True):
 
 
 class Notebook(SQLModel, table=True):
+    # 0.30.1: a deleted notebook's number is never given to another one (database step 6 rebuilds older tables so)
+    __table_args__ = {"sqlite_autoincrement": True}
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     description: str = ""

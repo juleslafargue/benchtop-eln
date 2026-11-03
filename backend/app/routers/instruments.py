@@ -395,14 +395,15 @@ def create_follow_up(session: Session, user: User, original: Experiment, body: F
     if original.is_template or original.status not in (ExperimentStatus.signed, ExperimentStatus.witnessed, ExperimentStatus.locked):
         raise HTTPException(409, "Follow-ups are for signed, witnessed or locked records; a draft can simply be edited")
     acc = access_for(session, user)
+    audit._take_write_lock(session)  # until the follow-up is in, its notebook can't be archived or deleted (0.30.1)
     nb_id = body.notebook_id
     if nb_id is None:
-        nb = session.get(Notebook, original.notebook_id) if original.notebook_id else None
+        nb = session.get(Notebook, original.notebook_id, populate_existing=True) if original.notebook_id else None
         if nb is None or not acc.can_read_notebook(nb) or nb.archived:
             raise HTTPException(400, f"You can't add experiments to {original.eid}'s notebook. Choose one of your notebooks.")
         nb_id = nb.id
     else:
-        nb = session.get(Notebook, nb_id)
+        nb = session.get(Notebook, nb_id, populate_existing=True)
         if nb is None or not acc.can_read_notebook(nb):
             raise HTTPException(404, f"Notebook {nb_id} not found")
         if nb.archived:

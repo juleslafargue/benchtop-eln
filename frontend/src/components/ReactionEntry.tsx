@@ -9,6 +9,7 @@ import Modal from './Modal'
 import type { EntryEditorProps } from './EntryCard'
 import ConditionsBar, { type Conditions } from './ConditionsBar'
 import SimilarReactions from './SimilarReactions'
+import { mergeStoich } from '../stoichMerge'
 
 const ROLE_ORDER: StoichRow['role'][] = ['reactant', 'reagent', 'catalyst', 'solvent', 'product']
 const ROLE_LABEL: Record<StoichRow['role'], string> = {
@@ -52,15 +53,22 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
   const [pasteText, setPasteText] = useState('')
   const reqId = useRef(0)
   const conditions: Conditions = content.conditions || {}
+  const now = useRef(content)  // the section as it is now, for answers that arrive later
+  now.current = content
 
   /** Push edited rows to the server engine, then store the recomputed table. */
   const recompute = async (next: StoichRow[], extra: Record<string, any> = {}) => {
-    onChange({ ...content, ...extra, rows: next }) // optimistic
+    const sent = { ...now.current, ...extra, rows: next }
+    onChange(sent) // optimistic
     const my = ++reqId.current
-    const target = (extra.conditions ?? conditions).target_conc_m ?? null
+    const target = (sent.conditions || {}).target_conc_m ?? null
     try {
       const r = await api.post<{ rows: StoichRow[]; totals: any; warnings: string[] }>('/api/chem/stoichiometry', { rows: next, target_conc_m: target })
-      if (my === reqId.current) onChange({ ...content, ...extra, rows: r.rows, totals: r.totals, warnings: r.warnings })
+      if (my !== reqId.current) return
+      // into the section as it is now: names, notes and conditions typed while it was calculating stay (0.30.1)
+      const merged = mergeStoich(sent, now.current, r)
+      if (merged) onChange(merged)
+      else recompute(now.current.rows || [])  // rows changed meanwhile: work out the table as it is now
     } catch (e: any) { setErr(e.message) }
   }
 

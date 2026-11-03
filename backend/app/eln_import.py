@@ -22,10 +22,12 @@ import bisect
 import hashlib
 import html
 import json
+import logging
 import os
 import re
 import secrets
 import stat
+import threading
 import time
 import zipfile
 import zlib
@@ -41,6 +43,8 @@ from . import audit, diskspace
 from .config import settings
 from .eln import RECORD_FILE, RECORD_FORMAT, scratch_dir
 from .models import (Attachment, Entry, EntryKind, EntryVersion, Experiment, ExperimentStatus, Notebook, User, utcnow)
+
+log = logging.getLogger("benchtop.eln_import")
 
 MAX_MEMBERS = 200_000
 MAX_METADATA = 200 * 1024 * 1024
@@ -522,13 +526,63 @@ def preview(session: Session, user: User, token: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------------------------------- importing
 
+_added = threading.local()  # files the record being imported added to the store: [(sha256, mtime_ns)], see _forget_added
+
+
+def _put(tmp: Path, sha: str) -> tuple[str, int]:
+    """Move a finished temporary file into the attachment store, noting it if the store didn't have it yet."""
+    from . import storage
+    from .instruments import _store as store_tmp
+    new = not storage.blob_path(sha).is_file()
+    sha, size = store_tmp(tmp)
+    if new and isinstance(getattr(_added, "files", None), list):
+        try:
+            _added.files.append((sha, storage.blob_path(sha).stat().st_mtime_ns))
+        except OSError:
+            pass
+    return sha, size
+
+
+def _forget_added(session: Session, added: list[tuple[str, int]]) -> None:
+    """A record that couldn't be imported leaves none of its files behind (0.30.1): the ones it added to the store go,
+    unless something now uses them (another record, an instrument's inbox, a publication). Checked under the write
+    lock; a file stored again meanwhile (an upload of the same file touches it, storage.put) stays."""
+    from sqlalchemy import String, cast
+
+    from . import storage
+    from .models import InstrumentFile, Publication
+    if not added:
+        return
+    try:
+        audit._take_write_lock(session)
+        for sha, mtime in dict(added).items():
+            if (session.exec(select(Attachment.id).where(Attachment.sha256 == sha).limit(1)).first() is not None
+                    or session.exec(select(InstrumentFile.id).where(cast(InstrumentFile.files, String).contains(sha)).limit(1)).first() is not None
+                    or session.exec(select(Publication.id).where(cast(Publication.files, String).contains(sha)).limit(1)).first() is not None):
+                continue
+            p = storage.blob_path(sha)
+            going = p.with_name(f".{p.name}.removing")
+            try:
+                os.replace(p, going)  # at once: from here on, storing the same file puts a new copy in place
+                if going.stat().st_mtime_ns != mtime:
+                    os.replace(going, p)  # used again just before: it stays
+                else:
+                    going.unlink()
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001 - tidying up mustn't turn one failed record into a failed import
+        log.warning("Couldn't remove the files a failed import left in the store", exc_info=True)
+    finally:
+        session.rollback()
+
+
 def _store(crate: Crate, f: CrateFile) -> tuple[str, int]:
     """Copy one file out of the archive into the attachment store, without holding the database. Returns (sha256, size)."""
-    from .instruments import _store as store_tmp
     diskspace.require_room(f.info.file_size, what=f"“{f.name}”")
     tmp = scratch_dir() / f"import-{os.getpid()}-{secrets.token_hex(6)}.part"
     limit = settings.instrument_max_mb * 1024 * 1024
     n = 0
+    h = hashlib.sha256()
     try:
         with crate.z.open(f.info) as src, open(tmp, "wb") as out:
             for chunk in iter(lambda: src.read(1 << 20), b""):
@@ -536,7 +590,8 @@ def _store(crate: Crate, f: CrateFile) -> tuple[str, int]:
                 if n > limit:
                     raise ElnImportError(f"{f.name} is larger than it said")
                 out.write(chunk)
-        return store_tmp(tmp)
+                h.update(chunk)
+        return _put(tmp, h.hexdigest())
     except (zipfile.BadZipFile, zlib.error, EOFError):
         raise ElnImportError(f"{f.name} is damaged inside the .eln file (it doesn't match the zip's own check), "
                              "so this experiment wasn't imported. Export it again, or copy the file over again.") from None
@@ -733,6 +788,39 @@ def _remap(content: Any, ids: dict[int, int]) -> Any:
     return content
 
 
+HTML_FIELDS = {EntryKind.text: ("html",), EntryKind.purification: ("notes_html",), EntryKind.safety: ("notes_html",)}
+
+
+def _as_signed(kind: EntryKind, content: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """A section of a record whose signature checked out, kept as it was signed: nothing recalculated, filled in or
+    tidied (0.30.1). Only re-pointed at its files here, and away from the other lab's inventory and records (_remap),
+    which are numbers in that lab's database, not content. None when it can't be kept exactly: its rich text isn't as
+    Benchtop's cleaner leaves it (so it might not be safe to show), or it isn't in the shape Benchtop writes (a file put
+    together by hand can carry a fingerprint that matches; the fingerprint is a check, not a seal)."""
+    from fastapi import HTTPException
+
+    from .routers.experiments import _clean_content
+    try:
+        cleaned = _clean_content(kind, content)
+    except (HTTPException, ValueError, TypeError):
+        return None
+    if any(k in content and content[k] != cleaned.get(k) for k in HTML_FIELDS.get(kind, ())):
+        return None
+    return content if _same_shape(content, cleaned) else None
+
+
+def _same_shape(a: Any, b: Any) -> bool:
+    """The same kinds of values in the same places: a number may differ or be missing, but text, a list or an object
+    must be text, a list or an object there too (raw first, as Benchtop's cleaner would have it second)."""
+    def kind(v):
+        return "none" if v is None else "bool" if isinstance(v, bool) else "num" if isinstance(v, (int, float)) else type(v).__name__
+    if isinstance(a, dict) and isinstance(b, dict):
+        return all(_same_shape(a[k], b[k]) for k in a.keys() & b.keys())
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_same_shape(x, y) for x, y in zip(a, b))
+    return kind(a) == kind(b) or {kind(a), kind(b)} == {"none", "num"}
+
+
 def _benchtop_checks(it: Item, stored: dict[str, str]) -> list[dict[str, Any]]:
     """For a record from another Benchtop: does the exported content match the fingerprint each signature carries?"""
     from .audit import canonical
@@ -783,23 +871,33 @@ def _import_items(session: Session, user: User, path: Path, meta: dict[str, Any]
                   keys: list[str]) -> dict[str, Any]:
     crate = Crate(path)
     created, failed = [], []
+    nb_id = notebook.id  # by number: the notebook may be deleted meanwhile (then each record says so)
     try:
         everything = crate.items()
         items = [it for it in everything if it.key in set(keys)]
         titles = {it.node_id: it.title for it in everything}
         new_of: dict[str, Experiment] = {}
         for it in items:
+            _added.files = []
             try:
-                exp = _import_one(session, user, crate, it, notebook, titles, meta)
+                exp = _import_one(session, user, crate, it, nb_id, titles, meta)
                 new_of[it.node_id] = exp
                 created.append({"id": exp.id, "eid": exp.eid, "title": exp.title, "locked": exp.status == ExperimentStatus.locked,
                                 "warnings": (exp.origin or {}).get("warnings", [])})
             except Exception as e:  # noqa: BLE001 - one bad record mustn't stop the others; say which and why
                 session.rollback()
-                msg = str(e) if isinstance(e, (ElnImportError, OSError)) else f"{type(e).__name__}: {e}"
+                if isinstance(e, (ElnImportError, OSError)):
+                    msg = str(e)
+                else:  # said plainly; what went wrong exactly is in the log
+                    log.exception("Importing “%s” from %s failed", it.title, meta.get("filename"))
+                    msg = ("something unexpected went wrong while saving it, so nothing of it was kept (the details are in "
+                           "Benchtop's log). Try importing it again.")
                 if isinstance(e, OSError) and e.errno == 28 and not isinstance(e, diskspace.DiskFull):
                     msg = "the disk is full"
                 failed.append({"title": it.title, "error": msg[:300]})
+                _forget_added(session, _added.files)
+            finally:
+                _added.files = None
         # a Benchtop follow-up whose original came in the same import is linked to it again
         by_eid = {it.record["experiment"]["eid"]: new_of[it.node_id]
                   for it in items if it.record and it.node_id in new_of and it.record["experiment"]["eid"]}
@@ -816,7 +914,7 @@ def _import_items(session: Session, user: User, path: Path, meta: dict[str, Any]
     return {"created": created, "failed": failed}
 
 
-def _import_one(session: Session, user: User, crate: Crate, it: Item, notebook: Notebook, titles: dict[str, str],
+def _import_one(session: Session, user: User, crate: Crate, it: Item, nb_id: int, titles: dict[str, str],
                 meta: dict[str, Any]) -> Experiment:
     from fastapi import HTTPException
 
@@ -846,13 +944,20 @@ def _import_one(session: Session, user: User, crate: Crate, it: Item, notebook: 
     original = _original(crate, it) if it.node and not it.record else b""  # a Benchtop record maps across completely
     orig_sha = None
     if original:
-        from .instruments import _store as store_tmp
         tmp = scratch_dir() / f"import-{os.getpid()}-{secrets.token_hex(6)}.part"
         tmp.write_bytes(original)
-        orig_sha, _ = store_tmp(tmp)
+        orig_sha, _ = _put(tmp, hashlib.sha256(original).hexdigest())
 
-    # 2. one short transaction for the record itself
+    # 2. one short transaction for the record itself, into the notebook as it is now (0.30.1: it may have been
+    # deleted or archived while the files were copied)
     audit._take_write_lock(session)
+    notebook = session.get(Notebook, nb_id, populate_existing=True)
+    if notebook is None:
+        raise ElnImportError("the notebook it was going into was deleted meanwhile, so it wasn't imported. "
+                             "Choose another notebook and import it again.")
+    if notebook.archived:
+        from .routers.experiments import archived_message
+        raise ElnImportError(archived_message(notebook))
     rec = (it.record or {}).get("experiment") or {}
     node = it.node
     desc = _str(rec.get("description") if it.record else node.get("description"), 20000)
@@ -905,17 +1010,48 @@ def _import_one(session: Session, user: User, crate: Crate, it: Item, notebook: 
 
     pos = 0
     if it.record:
+        # its sections matched the signature in the file: they're kept exactly as signed (0.30.1; before, they were
+        # recalculated and tidied like anything typed, so the copy could differ from what was signed while saying it matched)
+        signed = any(s["matches"] for s in sig_checks)
+        not_as_signed = []
         for e in it.record.get("entries") or []:
             if not isinstance(e, dict):
                 continue
+            title = _str(e.get("title"), 300)
             try:
                 kind = EntryKind(e.get("kind"))
-                content = _clean_content(kind, _remap(e.get("content") or {}, old_ids))
+                raw = _remap(e.get("content") or {}, old_ids)
+                content = _as_signed(kind, raw) if signed else None
+                if content is None:
+                    content = _clean_content(kind, raw)
+                    if signed:
+                        not_as_signed.append(title or kind.value)
             except (ValueError, HTTPException):
                 kind, content = EntryKind.text, {"html": "<p><em>This section couldn't be brought across; its original is in "
                                                           "original-record.json.</em></p>"}
-            _new_entry(session, exp, kind, _str(e.get("title"), 300), content, pos, user)
+                if signed:
+                    not_as_signed.append(title or "a section")
+            _new_entry(session, exp, kind, title, content, pos, user)
             pos += 1
+        if signed:
+            origin["as_signed"] = not not_as_signed
+        if not_as_signed:  # said, and the record as signed is kept beside it
+            raw_file = next((f for f in it.files if f.info is not None and f.inner == RECORD_FILE), None)
+            if raw_file is not None:
+                from .storage import sha256_of
+                tmp = scratch_dir() / f"import-{os.getpid()}-{secrets.token_hex(6)}.part"
+                tmp.write_bytes(crate.z.read(raw_file.info))
+                sha, size = _put(tmp, sha256_of(tmp))
+                oa = Attachment(experiment_id=exp.id, filename="original-record.json", content_type="application/json",
+                                size=size, sha256=sha, uploaded_by=user.id)
+                session.add(oa)
+                session.flush()
+                _new_entry(session, exp, EntryKind.file, "Record as signed", {"attachment_ids": [oa.id], "caption":
+                           f"The record as it was signed in {crate.source}: its sections, the fingerprints of its files and its signatures."},
+                           pos, user)
+                pos += 1
+            warnings.append(f"Some sections ({', '.join(not_as_signed)}) had to be changed to be stored and shown safely here, so "
+                            "this copy isn't exactly what was signed. The record as signed is in original-record.json.")
         if len(desc) > 300:
             _new_entry(session, exp, EntryKind.text, "Description", {"html": _text_to_html(desc)}, pos, user)
             pos += 1
@@ -971,6 +1107,11 @@ def _import_one(session: Session, user: User, crate: Crate, it: Item, notebook: 
     if lock:
         exp.status = ExperimentStatus.locked
     exp.updated_at = utcnow()
+    # its fingerprint as imported (0.30.1): "Verify integrity" checks a read-only import against it, as it checks a
+    # signed record against its signature (the other system's signatures aren't Benchtop's to check against)
+    from .services import content_hash
+    session.flush()
+    exp.origin = {**origin, "content_hash": content_hash(session, exp)}
     session.add(exp)
     audit.record(session, user, "import_eln", "experiment", exp.id, eid=exp.eid, title=exp.title, source=crate.source,
                  original_id=origin["original_id"], file=meta.get("filename"), files=len(stored), locked=bool(lock),

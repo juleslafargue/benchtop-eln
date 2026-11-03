@@ -55,11 +55,14 @@ export default function NotebookPage() {
     })
   useEffect(() => { load(0) }, [id, filter]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!nb) return <p className="empty">Notebook not found.</p>
+  // an import whose notebook was deleted meanwhile still shows what happened (0.30.1)
+  const importDialog = importing && <ImportElnDialog notebookId={nb?.id ?? Number(id)} onClose={() => setImporting(false)}
+    onDone={() => { refreshNotebooks(); load(0) }} />
+  if (!nb) return <>{importDialog}<p className="empty">Notebook not found.</p></>
   const can = notebookActions(nb, user)
   const drafts = nb.status_counts.open ?? 0
   return (
-    <div className="stack" style={{ gap: 20 }}>
+    <>{importDialog}<div className="stack" style={{ gap: 20 }}>
       <div className="spread">
         <div>
           <h1 className="page-title">{nb.name}{nb.archived && <span className="badge-archived">Archived</span>}</h1>
@@ -98,7 +101,6 @@ export default function NotebookPage() {
           : canWrite && !nb.archived ? 'No experiments here yet. Press N or click New experiment to start one.' : 'No experiments here yet.'} /></div>
       {more && <div style={{ textAlign: 'center' }}><button className="btn" onClick={() => load(items.length)}>Show older experiments</button></div>}
       {creating && <NewExperimentDialog notebookId={nb.id} onClose={() => setCreating(false)} />}
-      {importing && <ImportElnDialog notebookId={nb.id} onClose={() => setImporting(false)} onDone={() => { refreshNotebooks(); load(0) }} />}
       {audEdit && <Modal title={`Who can open ${nb.name}`} onClose={() => setAudEdit(null)} footer={<>
         <button className="btn" onClick={() => setAudEdit(null)}>Cancel</button>
         <button className="btn primary" onClick={saveAudience}>Save</button></>}>
@@ -125,6 +127,6 @@ export default function NotebookPage() {
         </ul>
         <p className="faint" style={{ marginBottom: 0 }}>Notebooks with experiments can't be deleted; archive them instead.</p>
       </Modal>}
-    </div>
+    </div></>
   )
 }

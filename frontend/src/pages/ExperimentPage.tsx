@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../App'
 import { day, api, displayName, downloadAuthed, when, type AuditEvent, type EntryKind, type Experiment, type ExperimentSummary, type Signature, type WitnessCandidate } from '../api'
-import EntryCard from '../components/EntryCard'
+import EntryCard, { saveAllSections } from '../components/EntryCard'
 import { AddSection } from '../components/AddSection'
 import Discussion from '../components/Discussion'
 import ShareDialog from '../components/ShareDialog'
@@ -83,7 +83,10 @@ function OriginBanner({ exp, canFollowUp, onFollowUp }: { exp: Experiment; canFo
           : `${o.files.imported} file${o.files.imported === 1 ? '' : 's'} imported (${o.files.matched} with a fingerprint to check, all matching).`}</div>)}
       {o.signatures.length > 0 && <ul className="origin-sigs">
         {o.signatures.map((s, i) => <li key={i}>{s.meaning === 'witness' ? 'Witnessed' : s.meaning === 'void' ? 'Voided' : s.meaning === 'rejected' ? 'Returned' : 'Signed'} in {o.source} by {s.signer}
-          {s.signed_at ? ` on ${day(s.signed_at)}` : ''}{s.matches ? '. The content matches what was signed (checked on import)' : '. The content could not be matched to this signature'}
+          {s.signed_at ? ` on ${day(s.signed_at)}` : ''}{!s.matches ? '. The content could not be matched to this signature'
+            : o.as_signed ? '. The content matches what was signed (checked on import)'
+            : o.as_signed === false ? '. The file matched this signature, but this copy had to be changed in places (see below)'
+            : '. The file matched this signature on import, but an older Benchtop recalculated some sections on the way in, so this copy may not be exactly what was signed'}
           {s.timestamp ? '; its trusted-timestamp proof is attached' : ''}.</li>)}
       </ul>}
       {exp.status === 'locked' && <div>Read-only: {o.locked_reason || `it was signed or locked in ${o.source}`}. Signatures from another system are
@@ -243,8 +246,10 @@ export default function ExperimentPage() {
   const [err, setErr] = useState('')
   const [tab, setTab] = useState<'record' | 'history'>('record')
   const [dialog, setDialog] = useState<SignAction | null>(null)
+  const [savingFor, setSavingFor] = useState<SignAction | null>(null)  // saving every section before signing or voiding
+  const [saveErr, setSaveErr] = useState('')
   const [fresh, setFresh] = useState(false)
-  const [verify, setVerify] = useState<{ intact: boolean; content_hash: string } | null>(null)
+  const [verify, setVerify] = useState<{ intact: boolean; content_hash: string; against?: 'signature' | 'import' | 'nothing' } | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [writeup, setWriteup] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -311,6 +316,22 @@ export default function ExperimentPage() {
   const rxnRows: any[] = exp.entries.find(e => e.kind === 'reaction' && e.content?.rows?.length)?.content.rows || []
   const product = rxnRows.filter(r => r.role === 'product').sort((a, b) => (b.yield_pct ?? -1) - (a.yield_pct ?? -1))[0]
   const context = { productFormula: product?.formula || null, productSmiles: product?.smiles || null, productMW: product?.mw ?? null, openAttachmentId: justAdded }
+
+  /** Signing (or voiding) covers what the server has: every section's typing is saved first, and the dialog opens only
+   *  once all of it is in (0.30.1: a save still on its way was left out of the signed record). */
+  const openSaved = async (action: SignAction) => {
+    setSaveErr('')
+    if (exp.status !== 'open') { setDialog(action); return }
+    setSavingFor(action)
+    const unsaved = await saveAllSections(exp.id)
+    setSavingFor(null)
+    if (unsaved.length) {
+      setSaveErr(`Not everything is saved yet (${unsaved.join('; ')}), so it can't be ${action === 'void' ? 'voided' : 'signed'} now. `
+        + 'Try again in a moment.')
+      return
+    }
+    setDialog(action)
+  }
 
   /** Drop files anywhere: spectra become characterisation items (technique and conditions read from
    *  the file); everything else goes into a Files section. */
@@ -514,7 +535,9 @@ export default function ExperimentPage() {
           <aside className="rail">
             {!exp.is_template && canWrite && (
               <div className="stack" style={{ gap: 8 }}>
-                {exp.status === 'open' && isOwner && <button className="btn primary" onClick={() => setDialog('sign')}>Sign as author</button>}
+                {exp.status === 'open' && isOwner && <button className="btn primary" disabled={!!savingFor} onClick={() => openSaved('sign')}>
+                  {savingFor === 'sign' ? 'Saving…' : 'Sign as author'}</button>}
+                {saveErr && <p className="error" role="alert" style={{ margin: 0, fontSize: 13 }}>{saveErr}</p>}
                 {exp.status === 'signed' && !isOwner && <>
                   <button className="btn primary" onClick={() => setDialog('witness')}>Witness</button>
                   <button className="btn" onClick={() => setDialog('reject')}>Return to author</button>
@@ -528,7 +551,11 @@ export default function ExperimentPage() {
               <SignatureRail sigs={exp.signatures} eid={exp.eid} />
               <button className="btn ghost sm" onClick={runVerify}>Verify integrity</button>
               {verify && <p style={{ fontSize: 13, margin: '6px 0 0' }} className={verify.intact ? '' : 'error'}>
-                {verify.intact ? 'Content matches the latest signature.' : 'Content does not match the signature. The record may have been altered outside the app.'}
+                {verify.against === 'import'
+                  ? (verify.intact ? 'Content is unchanged since it was imported.' : 'Content has changed since it was imported. The record may have been altered outside the app.')
+                  : verify.against === 'nothing'
+                  ? (exp.status === 'open' ? 'Not signed, so there’s no signature to check it against yet.' : 'No Benchtop signature to check it against.')
+                  : verify.intact ? 'Content matches the latest signature.' : 'Content does not match the signature. The record may have been altered outside the app.'}
                 <span className="hash" style={{ display: 'block' }}>{verify.content_hash}</span></p>}
             </div>}
             {!exp.is_template && <PublishPanel exp={exp} onChange={load} />}
@@ -563,7 +590,7 @@ export default function ExperimentPage() {
               {canWrite && !exp.is_template && !exp.notebook_archived && <button className="btn sm" onClick={() => setScaling(true)}>Repeat at another scale…</button>}
               {canWrite && !exp.is_template && <button className="btn sm" onClick={() => clone(true)}>Save as template</button>}
               {canWrite && (isOwner || user.role === 'admin') && exp.status !== 'voided' && !exp.is_template &&
-                <button className="btn ghost sm danger" onClick={() => setDialog('void')}>Void…</button>}
+                <button className="btn ghost sm danger" disabled={!!savingFor} onClick={() => openSaved('void')}>{savingFor === 'void' ? 'Saving…' : 'Void…'}</button>}
             </div>
           </aside>
         </div>

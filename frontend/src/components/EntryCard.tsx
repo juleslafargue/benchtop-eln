@@ -28,6 +28,16 @@ function drafts(): BroadcastChannel | null {
   return channel
 }
 
+/** Each section on the page can be asked to save what's typed in it now (0.30.1: before signing). */
+const savers = new Map<number, { experimentId: number; flush: () => Promise<string | null> }>()
+
+/** Save every section of this record now, waiting for saves already on their way. Resolves to what couldn't be saved
+ *  ("Procedure: Can't reach Benchtop"), so nothing is signed while the server lacks the latest typing. */
+export async function saveAllSections(experimentId: number): Promise<string[]> {
+  const mine = [...savers.values()].filter(s => s.experimentId === experimentId)
+  return (await Promise.all(mine.map(s => s.flush()))).filter((x): x is string => !!x)
+}
+
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error'
 const KIND_LABEL = { text: 'Text', reaction: 'Reaction & stoichiometry', table: 'Data table', file: 'Files', purification: 'Work-up & purification', characterization: 'Characterisation', safety: 'Safety & risk assessment', screen: 'Screening grid', references: 'References', custom: 'Plugin section' }
 
@@ -70,7 +80,9 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
   offerRef.current = offer
   const [copied, setCopied] = useState(false)
 
-  const save = useCallback(async () => {
+  const savedAt = useRef(0)  // edits.current when the server last had everything
+  const lastError = useRef('')
+  const saveOnce = useCallback(async (): Promise<boolean> => {
     const mark = edits.current
     setState('saving')
     try {
@@ -79,18 +91,51 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
       })
       versionRef.current = r.version
       setVersion(r.version)
+      savedAt.current = mark
       if (edits.current === mark) {
         setContent(r.content) // adopt server-normalised content (sanitised HTML, recomputed stoichiometry)
         setState('saved')
         if (!offerRef.current) clearDraft(STORE, user.id, entry.id)  // the server has it: the kept copy isn't needed
         if (entry.kind === 'reaction') window.dispatchEvent(new CustomEvent('benchtop:reaction-saved', { detail: { experimentId: entry.experiment_id } }))
       } else setState('dirty')
-      setError('')
+      setError(''); lastError.current = ''
+      return true
     } catch (e: any) {
       setState('error')
-      setError(e.message)
+      setError(e.message); lastError.current = e.message
+      return false
     }
   }, [entry.id, user.id])
+
+  // one save at a time (0.30.1): typing while a save is on its way is sent once it's back, with the version it
+  // made, so a slow network never makes this tab's own saves collide ("changed elsewhere") or lose the last words
+  const running = useRef<Promise<boolean> | null>(null)
+  const again = useRef(false)
+  const save = useCallback((): Promise<boolean> => {
+    if (running.current) { again.current = true; return running.current }
+    const run = (async () => {
+      let ok: boolean
+      do { again.current = false; ok = await saveOnce() } while (ok && again.current && edits.current !== savedAt.current)
+      running.current = null
+      return ok
+    })()
+    running.current = run
+    return run
+  }, [saveOnce])
+
+  // asked to save now (before signing): wait for a save on its way, then send what's left. null when the server has it all
+  const flush = useCallback(async (): Promise<string | null> => {
+    for (let i = 0; i < 4; i++) {
+      if (running.current) await running.current
+      if (edits.current === savedAt.current) return null
+      if (!await save()) return `${latest.current.title || KIND_LABEL[entry.kind]}: ${lastError.current || 'not saved'}`
+    }
+    return edits.current === savedAt.current ? null : `${latest.current.title || KIND_LABEL[entry.kind]}: still being changed`
+  }, [save, entry.kind])
+  useEffect(() => {
+    savers.set(entry.id, { experimentId, flush })
+    return () => { if (savers.get(entry.id)?.flush === flush) savers.delete(entry.id) }
+  }, [entry.id, experimentId, flush])
 
   useEffect(() => {
     if (state !== 'dirty') return

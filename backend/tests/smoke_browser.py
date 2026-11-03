@@ -199,6 +199,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += getting_started(browser, tok["hweiss"])
         problems += first_time_review(browser, tok["slaurent"])
         problems += notebook_delete_archive(browser, tok["slaurent"])
+        problems += slow_network(browser, tok["slaurent"])
         browser.close()
     return problems
 
@@ -875,6 +876,165 @@ def demo_never_publishes(browser, token: str) -> list[tuple[str, str, str, str]]
             found.append(("demo publishing", "", "zenodo", "the demo lab offered to send a record to Zenodo"))
     except Exception as e:  # noqa: BLE001
         found.append(("demo publishing", "", "zenodo", str(e).splitlines()[0][:160]))
+    ctx.close()
+    return found
+
+
+class Slow:
+    """Holds the page's requests to `pattern` (of `method`) for `delay` seconds, as a slow network would; they go on
+    while the test waits through pump()."""
+
+    def __init__(self, pg, pattern: str, delay: float, method: str | None = None):
+        self.pg, self.delay, self.method, self.held, self.seen = pg, delay, method, [], 0
+        pg.route(pattern, self._hold)
+
+    def _hold(self, route) -> None:
+        if self.method and route.request.method != self.method:
+            route.continue_()
+            return
+        self.seen += 1
+        self.held.append((time.time(), route))
+
+    def pump(self, seconds: float = 0.0, until=None) -> bool:
+        """Let held requests go once they've waited long enough, for `seconds`, or until `until()` is true."""
+        end = time.time() + seconds
+        while True:
+            for item in list(self.held):
+                if time.time() - item[0] >= self.delay:
+                    self.held.remove(item)
+                    item[1].continue_()
+            if until is not None and until():
+                return True
+            if time.time() >= end:
+                return until is None
+            self.pg.wait_for_timeout(50)
+
+    def release(self) -> None:
+        """Let everything still held go (before the page closes)."""
+        for _, route in self.held:
+            try:
+                route.continue_()
+            except Exception:  # noqa: BLE001 - the page may be gone already
+                pass
+        self.held.clear()
+
+
+def slow_network(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """0.30.1, on a slow network (found by the 0.30 stress test):
+    - a recalculation of the reaction table that comes back late doesn't wipe a name, a note or the conditions typed
+      while it was calculating;
+    - typing while a save is on its way never makes the section's own saves collide ("changed elsewhere");
+    - Sign as author saves every section first ("Saving…"), so the signature covers the last typing, and the
+      reminder of empty sections is worked out from what's saved."""
+    print("Slow network: a late reaction recalculation, overlapping saves, signing straight after typing…", flush=True)
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Slow network check"}).json()
+
+    def stored(exp_id: int, entry_id: int) -> dict:
+        e = httpx.get(f"{B}/api/experiments/{exp_id}", headers=H).json()
+        return next(x for x in e["entries"] if x["id"] == entry_id)
+
+    def page():
+        ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+        pg = ctx.new_page()
+        conflicts: list[str] = []
+        pg.on("response", lambda r: r.status == 409 and "/api/entries/" in r.url and conflicts.append(r.url))
+        return ctx, pg, conflicts
+
+    saved = lambda pg, sec: bool(re.fullmatch(r"v\d+", pg.inner_text(f"{sec} .save-state").strip()))  # noqa: E731
+
+    # 1. the reaction table
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Late recalculation", "notebook_id": nb["id"]}).json()
+    rows = [{"role": "reactant", "name": "Benzoic acid", "smiles": "OC(=O)c1ccccc1", "limiting": True, "basis": "mass", "mass_mg": 122.12},
+            {"role": "reactant", "name": "Benzyl alcohol", "smiles": "OCc1ccccc1", "equiv": 1.1, "basis": "equiv"}]
+    httpx.post(f"{B}/api/experiments/{exp['id']}/entries", headers=H, json={"kind": "reaction", "title": "Amounts", "content": {"rows": rows}})
+    entry = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["title"] == "Amounts")
+    sec = f"#entry-{entry['id']}"
+    ctx, pg, _ = page()
+    slow = Slow(pg, "**/api/chem/stoichiometry", 2.5)
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        pg.wait_for_selector(f"{sec} input[aria-label='Equiv, Benzyl alcohol']")
+        pg.fill(f"{sec} input[aria-label='Equiv, Benzyl alcohol']", "1.3")
+        pg.keyboard.press("Tab")
+        name = pg.locator(f"{sec} input[aria-label='Name']").nth(1)
+        name.click()
+        name.press("End")
+        pg.keyboard.type(" (dry)", delay=30)
+        notes = pg.locator(f"{sec} .conditions input[placeholder^='e.g. degassed']")
+        notes.click()
+        pg.keyboard.type("degassed with argon", delay=30)
+        pg.select_option(f"{sec} .conditions select", "Ar")
+        slow.pump(20, until=lambda: slow.seen and not slow.held and saved(pg, sec))
+        slow.pump(3.0)  # a second recalculation, if one was needed
+        slow.pump(20, until=lambda: not slow.held and saved(pg, sec))
+        c = stored(exp["id"], entry["id"])["content"]
+        shown = (name.input_value(), notes.input_value(), pg.input_value(f"{sec} .conditions select"))
+        if shown != ("Benzyl alcohol (dry)", "degassed with argon", "Ar"):
+            found.append(("slow network", "", "reaction", f"typed while it was calculating, the section now shows {shown}"))
+        have = ([r.get("name") for r in c["rows"]], (c.get("conditions") or {}).get("notes"), (c.get("conditions") or {}).get("atmosphere"))
+        if "Benzyl alcohol (dry)" not in have[0] or have[1:] != ("degassed with argon", "Ar"):
+            found.append(("slow network", "", "reaction", f"typed while it was calculating, the record has {have}"))
+        if next(r for r in c["rows"] if r["smiles"] == "OCc1ccccc1").get("equiv") != 1.3:
+            found.append(("slow network", "", "reaction", "the equivalents typed weren't kept"))
+    except Exception as e:  # noqa: BLE001
+        found.append(("slow network", "", "reaction", str(e).splitlines()[0][:160]))
+    slow.release()
+    ctx.close()
+
+    # 2. typing in bursts while each save takes 2.5 s
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Overlapping saves", "notebook_id": nb["id"]}).json()
+    aim = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["title"] == "Aim")
+    sec = f"#entry-{aim['id']}"
+    ctx, pg, conflicts = page()
+    slow = Slow(pg, "**/api/entries/**", 2.5, "PUT")
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        pg.click(f"{sec} .ProseMirror")
+        for part in ("First part", ", second part", ", third."):
+            pg.keyboard.type(part, delay=20)
+            slow.pump(1.2)
+        slow.pump(20, until=lambda: not slow.held and saved(pg, sec))
+        html = stored(exp["id"], aim["id"])["content"]["html"]
+        if conflicts or "First part, second part, third." not in html or not saved(pg, sec):
+            found.append(("slow network", "", "saves", f"{len(conflicts)} save(s) collided with this tab's own; the section says "
+                          f"{pg.inner_text(sec + ' .save-state')!r}, the record has {html[:80]!r}"))
+    except Exception as e:  # noqa: BLE001
+        found.append(("slow network", "", "saves", str(e).splitlines()[0][:160]))
+    slow.release()
+    ctx.close()
+
+    # 3. signing straight after typing, while the save is on its way
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Signed straight after typing", "notebook_id": nb["id"]}).json()
+    aim = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["title"] == "Aim")
+    sec = f"#entry-{aim['id']}"
+    ctx, pg, _ = page()
+    slow = Slow(pg, "**/api/entries/**", 3.0, "PUT")
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        pg.click(f"{sec} .ProseMirror")
+        pg.keyboard.type("Make the triazole in one pot.", delay=10)
+        pg.click("button:has-text('Sign as author')")
+        if pg.query_selector("dialog[open]") or not pg.query_selector(".rail button:has-text('Saving…')"):
+            found.append(("slow network", "", "signing", "the sign dialog opened before the sections were saved (no “Saving…”)"))
+        slow.pump(15, until=lambda: bool(pg.query_selector("dialog[open]")))
+        slow.pump(1.0)
+        reminder = " ".join(pg.locator("dialog[open] .sign-reminder").all_inner_texts())
+        if "Aim" in reminder:
+            found.append(("slow network", "", "signing", f"the reminder lists a section that was just filled in: {reminder[:120]}"))
+        pg.keyboard.type(PW)
+        pg.keyboard.press("Enter")
+        slow.pump(10, until=lambda: httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["status"] == "signed")
+        slow.pump(1.0)
+        html = stored(exp["id"], aim["id"])["content"]["html"]
+        check = httpx.get(f"{B}/api/experiments/{exp['id']}/verify", headers=H).json()
+        if "Make the triazole in one pot." not in html or not check["intact"]:
+            found.append(("slow network", "", "signing", f"signed straight after typing: the signed record has {html[:80]!r}"))
+    except Exception as e:  # noqa: BLE001
+        found.append(("slow network", "", "signing", str(e).splitlines()[0][:160]))
+    slow.release()
     ctx.close()
     return found
 

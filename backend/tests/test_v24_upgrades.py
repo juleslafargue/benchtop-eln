@@ -191,10 +191,12 @@ def test_an_older_benchtop_still_refuses_the_upgraded_data(tmp_path):
     with sqlite3.connect(data / "benchtop.db") as c:
         c.execute("INSERT INTO benchtop_schema VALUES (999, 'From the future', '9.9.9', '2030-01-01T00:00:00+00:00')")
     snap = tables(data / "benchtop.db")
+    # the upgrade just now may have backed up first (when the newest fixture is older than today's database steps)
+    had = sorted((data / "backups").glob("*.zip"))
     r = run(["-c", "from app.db import init_db; init_db()"], data, BENCHTOP_BACKUP_INTERVAL_HOURS="24")
     assert r.returncode != 0 and "TooNew" in r.stderr and "newer Benchtop (9.9.9" in r.stderr
     assert tables(data / "benchtop.db") == snap
-    assert not list((data / "backups").glob("*.zip"))
+    assert sorted((data / "backups").glob("*.zip")) == had, "the refused start made a backup"
 
 
 def test_every_released_version_has_upgrade_data():

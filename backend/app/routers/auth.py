@@ -132,6 +132,22 @@ def _clean_prefs(p: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _check_default_notebook(session, user: User, prefs: dict[str, Any]) -> None:
+    """A new default notebook must be one this person can put experiments in: it exists, they can open it, and it isn't
+    archived (0.30.1: a stale tab could set a deleted one, or a hidden one, and new experiments then went nowhere).
+    Run under the write lock, so it can't be deleted between this check and the save."""
+    from ..access import access_for
+    from ..models import Notebook
+    nb_id = prefs.get("default_notebook_id")
+    if nb_id is None or nb_id == (user.preferences or {}).get("default_notebook_id"):
+        return
+    nb = session.get(Notebook, nb_id, populate_existing=True)
+    if nb is None or not access_for(session, user).can_read_notebook(nb):
+        raise HTTPException(422, "That notebook no longer exists (or you can't open it), so it can't be your default. Choose another.")
+    if nb.archived:
+        raise HTTPException(422, f"“{nb.name}” is archived, so it can't be your default notebook. Choose another.")
+
+
 class ProfileIn(BaseModel):
     full_name: str | None = None
     email: str | None = None
@@ -160,7 +176,12 @@ def update_me(body: ProfileIn, user: CurrentUser, session: DB):
             changes["orcid"] = {"from": user.orcid, "to": orcid}
             user.orcid = orcid
     if body.preferences is not None:
-        prefs = {**(user.preferences or {}), **_clean_prefs(body.preferences)}
+        # on top of the preferences as they are now: deleting a notebook clears it as people's default meanwhile
+        audit._take_write_lock(session)
+        session.refresh(user, ["preferences"])
+        new = _clean_prefs(body.preferences)
+        _check_default_notebook(session, user, new)
+        prefs = {**(user.preferences or {}), **new}
         if prefs != (user.preferences or {}):
             user.preferences = prefs
             changes["preferences"] = prefs
