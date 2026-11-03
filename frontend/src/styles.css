@@ -580,6 +580,7 @@ kbd { font: 11px var(--sans); border: 1px solid var(--rule-strong); border-botto
 .hrms .input { width: 100px; padding: 3px 6px; }
 .hrms .select { padding: 3px 6px; }
 .ppm { font-weight: 600; font-variant-numeric: tabular-nums; }
+.hrms .ppm { display: inline-block; min-width: 10.5ch; }
 .ppm.ok { color: var(--witnessed); } .ppm.bad { color: var(--danger); }
 .sp-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 13px; }
 .sp-leg-item { display: inline-flex; align-items: center; gap: 4px; }

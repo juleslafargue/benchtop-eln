@@ -145,13 +145,10 @@ def search(user: CurrentUser, session: DB, q: str = "", mode: str = "text", thre
         from .. import samples
         from ..models import Attachment, Lot, Notebook, SampleCode, User
         def as_code(t: str) -> str:
-            """A sample code typed as jl-13, JL_013 or "JL 013" is searched for as it's written: jl-013."""
-            if _CODE.fullmatch(t.strip()):
-                found = samples.find(session, t)
-                if len(found) == 1:
-                    return found[0].text.lower()
-            return t.lower()
-        terms = [as_code(q)] if _CODE.fullmatch(q) and " " in q else [as_code(t) for t in _terms(q)]
+            """A sample code typed as jl-13, JL_013, "JL 013", JL–013 or JL013 is searched for as it's written: jl-013."""
+            found = samples.lookup(session, t)
+            return found.text.lower() if found else t.lower()
+        terms = [as_code(q)] if _CODE.fullmatch(samples.normalise(q)) and " " in q else [as_code(t) for t in _terms(q)]
         if not terms:
             return empty
         pats = [_pattern(t) for t in terms]

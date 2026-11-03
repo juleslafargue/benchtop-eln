@@ -399,7 +399,10 @@ def create_follow_up(session: Session, user: User, original: Experiment, body: F
     nb_id = body.notebook_id
     if nb_id is None:
         nb = session.get(Notebook, original.notebook_id, populate_existing=True) if original.notebook_id else None
-        if nb is None or not acc.can_read_notebook(nb) or nb.archived:
+        if nb is not None and nb.archived and acc.can_read_notebook(nb):  # said as it is (0.30.1: "you can't add")
+            raise HTTPException(409, f"{original.eid}'s notebook, “{nb.name}”, is archived, so the follow-up can't go into it. "
+                                     "Choose another notebook, or unarchive it first.")
+        if nb is None or not acc.can_read_notebook(nb):
             raise HTTPException(400, f"You can't add experiments to {original.eid}'s notebook. Choose one of your notebooks.")
         nb_id = nb.id
     else:

@@ -45,6 +45,18 @@ def set_prefix(body: PrefixIn, user: CurrentUser, session: DB):
     return user_out(user)
 
 
+@router.get("/samples/lookup")
+def lookup_sample(code: str, user: CurrentUser, session: DB):
+    """The experiment a sample code was handed to, for the ⌘K box (which only has the latest records' codes).
+    A code on a record this person can't open answers exactly as a code never handed out: 404."""
+    from ..services import experiment_summary
+    found = samples.lookup(session, code[:40])
+    exp = session.get(Experiment, found.code.experiment_id) if found and found.code else None
+    if exp is None or not access_for(session, user).can_read(exp):
+        raise HTTPException(404, "No experiment you can open has that sample code")
+    return {"code": found.text, "experiment": experiment_summary(session, exp)}
+
+
 class SampleIn(BaseModel):
     number: Optional[int] = None  # a number already written on a vial; the next free one if left out
 

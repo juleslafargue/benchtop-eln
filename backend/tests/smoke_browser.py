@@ -201,6 +201,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += notebook_delete_archive(browser, tok["slaurent"])
         problems += slow_network(browser, tok["slaurent"])
         problems += numbers_and_network(browser, tok["hweiss"])
+        problems += polish(browser, tok["hweiss"])
         browser.close()
     return problems
 
@@ -1235,6 +1236,262 @@ def numbers_and_network(browser, admin_token: str) -> list[tuple[str, str, str, 
             bad("notebook delete", f"deleted, but the list didn't load after it: the page says {toast!r}")
     except Exception as e:  # noqa: BLE001
         bad("notebook delete", str(e).splitlines()[0][:160])
+    ctx.close()
+    return found
+
+
+def polish(browser, admin_token: str) -> list[tuple[str, str, str, str]]:
+    """0.30.1, the smaller things (found by the 0.30 stress test), as a new scientist sees them:
+    - a number box keeps what it can't read ("12 mL" in a mass box), says why, and saves nothing; Escape puts back
+      what was there; "25 °C" in Temperature is 25;
+    - an error under the reaction table goes once a later recalculation works;
+    - big amounts (123457 mg) and tiny equivalents (0.000123) are shown whole, and Yield stays in view at 1280 px;
+    - HRMS: Use doesn't move as the ppm appears; the Reactions page's yield filter works without Enter; Record change
+      can be pressed as soon as an amount is typed;
+    - Admin: an arrow key on a role menu asks first, it doesn't change the role;
+    - N pressed before the notebooks have loaded still picks the default notebook;
+    - a notebook deleted in another tab says so, with the way back to the dashboard;
+    - ⌘K finds a sample code it hasn't loaded, by asking Benchtop."""
+    print("Polish: number boxes, big amounts, HRMS, filters, role changes, deleted notebooks, ⌘K codes…", flush=True)
+    A = {"Authorization": "Bearer " + admin_token}
+    found: list[tuple[str, str, str, str]] = []
+
+    def bad(kind: str, what: str) -> None:
+        found.append(("polish", kind, "", what[:220]))
+    me = httpx.post(B + "/api/users", headers=A, json={"username": "ppolish", "password": "a-long-smoke-password", "must_change": False,
+                                                       "full_name": "Pat Polish", "role": "scientist"}).json()
+    token = httpx.post(B + "/api/auth/login", json={"username": "ppolish", "password": "a-long-smoke-password"}).json()["token"]
+    H = {"Authorization": "Bearer " + token}
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Pat's notebook"}).json()
+    httpx.patch(B + "/api/auth/me", headers=H, json={"preferences": {"guide_dismissed": True, "default_notebook_id": nb["id"]}})
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Polish checks", "notebook_id": nb["id"]}).json()
+    rows = [{"role": "reactant", "name": "Benzoic acid", "smiles": "OC(=O)c1ccccc1", "limiting": True, "basis": "mass", "mass_mg": 122.12},
+            {"role": "product", "name": "Benzamide", "smiles": "NC(=O)c1ccccc1", "equiv": 1}]
+    httpx.post(f"{B}/api/experiments/{exp['id']}/entries", headers=H, json={"kind": "reaction", "title": "Amounts", "content": {"rows": rows}})
+    httpx.post(f"{B}/api/experiments/{exp['id']}/entries", headers=H, json={"kind": "characterization", "title": "HRMS check",
+                                                                           "content": {"items": [{"technique": "HRMS", "conditions": "", "data": ""}]}})
+    big = httpx.post(B + "/api/experiments", headers=H, json={"title": "Big amounts", "notebook_id": nb["id"]}).json()
+    big_rows = [{"role": "reactant", "name": "Benzoic acid", "smiles": "OC(=O)c1ccccc1", "limiting": True, "basis": "mass", "mass_mg": 123456.789, "purity": 99.987},
+                {"role": "reagent", "name": "Catalyst", "smiles": "CC(=O)O", "basis": "equiv", "equiv": 0.000123, "density": 1.04912},
+                {"role": "solvent", "name": "DMF", "smiles": "CN(C)C=O", "basis": "volume", "volume_ml": 1234.5678, "density": 0.944},
+                {"role": "product", "name": "Benzamide", "smiles": "NC(=O)c1ccccc1", "equiv": 1, "actual_mass_mg": 98765.4321, "purity": 99.5}]
+    httpx.post(f"{B}/api/experiments/{big['id']}/entries", headers=H, json={"kind": "reaction", "title": "Big", "content": {"rows": big_rows}})
+    entries = httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"]
+    rxn = next(e for e in entries if e["title"] == "Amounts")
+    hrms = next(e for e in entries if e["title"] == "HRMS check")
+    stored = lambda: next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["id"] == rxn["id"])["content"]  # noqa: E731
+
+    def page(width=1300, **kw):
+        ctx = browser.new_context(viewport={"width": width, "height": 900}, **kw)
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+        return ctx, ctx.new_page()
+
+    # a number box: what it can't read stays, with why; Escape puts back what was there; °C is read
+    ctx, pg = page()
+    sec = f"#entry-{rxn['id']}"
+    box = f"{sec} input[aria-label='Mass (mg), Benzoic acid']"
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        pg.wait_for_selector(box)
+        pg.fill(box, "12 mL")
+        pg.keyboard.press("Tab")
+        pg.wait_for_timeout(1500)
+        msg = " ".join(pg.locator(f"{sec} .num-problem-line").all_inner_texts())
+        mass = stored()["rows"][0]["mass_mg"]
+        if pg.input_value(box) != "12 mL" or "can't be turned into mg" not in msg or mass != 122.12:
+            bad("number box", f"typed 12 mL in a mass box: it shows {pg.input_value(box)!r}, says {msg!r}, the record has {mass} mg")
+        pg.click(box)
+        pg.keyboard.press("Escape")
+        pg.wait_for_timeout(300)
+        if pg.input_value(box) != "122.12" or pg.locator(f"{sec} .num-problem-line").count():
+            bad("Escape", f"Escape in the mass box left {pg.input_value(box)!r} (not 122.12) and {pg.locator(f'{sec} .num-problem-line').count()} message(s)")
+        pg.click(box)
+        pg.keyboard.press("Control+A")
+        pg.keyboard.type("200")
+        pg.keyboard.press("Escape")
+        pg.keyboard.press("Tab")
+        pg.wait_for_timeout(1500)
+        if pg.input_value(box) != "122.12" or stored()["rows"][0]["mass_mg"] != 122.12:
+            bad("Escape", f"typed 200 then Escape: the box shows {pg.input_value(box)!r}, the record has {stored()['rows'][0]['mass_mg']} mg")
+        temp = f"{sec} input[aria-label='Temperature in °C']"
+        pg.fill(temp, "25 °C")
+        pg.keyboard.press("Tab")
+        pg.wait_for_timeout(2000)
+        if (stored().get("conditions") or {}).get("temperature_c") != 25:
+            bad("temperature", f"typed 25 °C: the record has {(stored().get('conditions') or {}).get('temperature_c')!r}")
+        # an error from a recalculation that failed goes once one works
+        failing = {"n": 1}
+
+        def once(route):
+            if failing["n"]:
+                failing["n"] -= 1
+                return route.fulfill(status=500, body='{"detail": "Calculation failed"}', content_type="application/json")
+            return route.continue_()
+        pg.route("**/api/chem/stoichiometry", once)
+        eq = f"{sec} input[aria-label='Equiv, Benzamide']"
+        pg.fill(eq, "0.9")
+        pg.keyboard.press("Tab")
+        pg.wait_for_selector(f"{sec} p.error", timeout=8000)
+        pg.fill(eq, "1")
+        pg.keyboard.press("Tab")
+        pg.wait_for_timeout(2000)
+        if pg.locator(f"{sec} p.error").count():
+            bad("old error", f"after a recalculation that worked, the table still says {pg.inner_text(f'{sec} p.error')!r}")
+        pg.unroute("**/api/chem/stoichiometry")
+    except Exception as e:  # noqa: BLE001
+        bad("number box", str(e).splitlines()[0][:160])
+    # HRMS: Use stays where it is while the found m/z is typed
+    try:
+        hs = f"#entry-{hrms['id']}"
+        found_box = pg.locator(f"{hs} input[aria-label='Found m/z']")
+        found_box.scroll_into_view_if_needed()
+        use = pg.locator(f"{hs} button:has-text('Use')")
+        x0 = use.bounding_box()["x"]
+        found_box.click()
+        pg.keyboard.type("122.0600")
+        pg.wait_for_timeout(300)
+        x1 = use.bounding_box()["x"]
+        bb = use.bounding_box()
+        pg.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+        pg.wait_for_timeout(500)
+        data = pg.locator(f"{hs} textarea").first.input_value()
+        if abs(x1 - x0) > 1 or "found 122.0600" not in data:
+            bad("HRMS", f"Use moved {round(x1 - x0)} px as the ppm appeared; one click on it gave {data!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("HRMS", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # big amounts and tiny equivalents are shown whole; Yield stays in view
+    for width in (1280, 1920):
+        ctx, pg = page(width)
+        try:
+            pg.goto(f"{B}/experiments/{big['id']}")
+            pg.wait_for_selector("table.grid td.yield", timeout=15000)
+            pg.wait_for_timeout(300)
+            out = pg.evaluate("""() => [...document.querySelectorAll('.grid-wrap')].flatMap(w => {
+                const box = w.getBoundingClientRect(), why = []
+                for (const y of w.querySelectorAll('td.yield')) if (y.getBoundingClientRect().right > box.right + 1) why.push('Yield is off to the side')
+                for (const i of w.querySelectorAll('input:not(.text)')) if (i.scrollWidth > i.clientWidth + 1) why.push(`${i.getAttribute('aria-label')} shows ${i.value} cut`)
+                return why })""")
+            if out:
+                bad("big amounts", f"at {width} px: " + "; ".join(out[:3]))
+        except Exception as e:  # noqa: BLE001
+            bad("big amounts", str(e).splitlines()[0][:160])
+        ctx.close()
+
+    # the Reactions page's yield filter works without Enter; Record change can be pressed once an amount is typed
+    ctx, pg = page()
+    try:
+        asked: list[str] = []
+        pg.on("request", lambda r: "/api/reactions?" in r.url and asked.append(r.url))
+        pg.goto(B + "/reactions")
+        pg.wait_for_selector("input[aria-label='Minimum yield']")
+        pg.wait_for_load_state("networkidle")
+        pg.click("input[aria-label='Minimum yield']")
+        pg.keyboard.type("90")
+        pg.wait_for_timeout(1500)
+        if not any("min_yield=90" in u for u in asked):
+            bad("Reactions filter", "typing 90 in “Yield at least” did nothing until Enter or a click elsewhere")
+        pg.goto(B + "/inventory")
+        pg.click("button:has-text('Adjust') >> nth=0", timeout=15000)
+        pg.click("dialog[open] input[aria-label='Amount']")
+        pg.keyboard.type("5")
+        pg.wait_for_timeout(300)
+        if pg.is_disabled("dialog[open] button:has-text('Record change')"):
+            bad("Record change", "Record change stays greyed out while the amount is typed (until the box is left)")
+        pg.keyboard.press("Escape")  # puts back the box's empty value; a second closes the dialog
+        pg.keyboard.press("Escape")
+    except Exception as e:  # noqa: BLE001
+        bad("filters", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # Admin → Users: an arrow key on a role menu asks first
+    other = httpx.post(B + "/api/users", headers=A, json={"username": "rrolechange", "password": "a-long-smoke-password", "must_change": False,
+                                                          "full_name": "Rory Role", "role": "scientist"}).json()
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{admin_token}')")
+    pg = ctx.new_page()
+    try:
+        pg.goto(B + "/admin")
+        sel = "select[aria-label='Role for rrolechange']"
+        pg.wait_for_selector(sel, timeout=15000)
+        pg.focus(sel)
+        pg.keyboard.press("ArrowDown")
+        pg.wait_for_timeout(1000)
+        role = next(u["role"] for u in httpx.get(B + "/api/users", headers=A).json() if u["id"] == other["id"])
+        if role != "scientist":
+            bad("role", f"one arrow key on the role menu made Rory {role} without asking")
+        pg.wait_for_selector("dialog[open] >> text=Make Rory Role", timeout=5000)
+        pg.click("dialog[open] button:has-text('Cancel')")
+        pg.wait_for_timeout(300)
+        if pg.input_value(sel) != "scientist":
+            bad("role", f"after Cancel the menu shows {pg.input_value(sel)!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("role", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # N before the notebooks have loaded
+    ctx, pg = page()
+    try:
+        slow = Slow(pg, "**/api/notebooks?include_archived=true", 2.5, "GET")
+        pg.goto(B + "/")
+        pg.wait_for_selector(".palette-trigger", timeout=15000)
+        pg.keyboard.press("n")
+        pg.wait_for_selector("dialog[open]")
+        slow.pump(6, until=lambda: not slow.held and slow.seen > 0)
+        pg.wait_for_timeout(500)
+        chosen = pg.eval_on_selector("dialog[open] select.select >> nth=0", "s => s.value") if pg.query_selector("dialog[open] select.select") else ""
+        if chosen != str(nb["id"]):
+            bad("N early", f"N pressed before the notebooks loaded: the dialog's notebook is {chosen!r}, not the default ({nb['id']})")
+        slow.release()
+    except Exception as e:  # noqa: BLE001
+        bad("N early", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # a notebook deleted in another tab
+    gone = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Deleted in the other tab"}).json()
+    ctx, pg = page()
+    try:
+        pg.goto(f"{B}/notebooks/{gone['id']}")
+        pg.wait_for_selector("h1 >> text=Deleted in the other tab")
+        httpx.delete(f"{B}/api/notebooks/{gone['id']}", headers=H)  # the other tab
+        pg.click("button:has-text('Delete notebook')")
+        pg.click("dialog.modal button:has-text('Delete notebook')")
+        pg.wait_for_selector("main >> text=was deleted, or you can no longer open it", timeout=8000)
+        if not pg.query_selector("main a[href='/']") or "not found" in pg.inner_text("main").lower():
+            bad("deleted elsewhere", f"the page says {pg.inner_text('main')[:120]!r}, without a link to the dashboard")
+        # a new experiment typed for a notebook deleted meanwhile: said in the dialog, which keeps the title
+        gone = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Deleted while typing"}).json()
+        pg.goto(f"{B}/notebooks/{gone['id']}")
+        pg.click("main button:has-text('New experiment')")
+        pg.fill("dialog[open] input.input >> nth=0", "Typed in this tab")
+        httpx.delete(f"{B}/api/notebooks/{gone['id']}", headers=H)
+        pg.click("dialog[open] button.primary")
+        pg.wait_for_selector("dialog[open] .error", timeout=8000)
+        said, title = pg.inner_text("dialog[open] .error"), pg.input_value("dialog[open] input.input >> nth=0")
+        if "was deleted" not in said or title != "Typed in this tab":
+            bad("deleted elsewhere", f"creating an experiment in a notebook deleted meanwhile: the dialog says {said!r}, the title is {title!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("deleted elsewhere", f"{str(e).splitlines()[0][:120]}; the page says {pg.inner_text('body')[:100]!r}")
+    ctx.close()
+
+    # ⌘K finds a sample code it hasn't loaded (here: none of the records are loaded), by asking Benchtop
+    httpx.put(B + "/api/auth/me/sample-prefix", headers=H, json={"prefix": "PP"})
+    code = httpx.post(f"{B}/api/experiments/{big['id']}/samples", headers=H, json={}).json()["code"]
+    ctx, pg = page()
+    try:
+        pg.route(lambda url: "/api/experiments?limit=500" in url, lambda route: route.fulfill(status=200, body="[]", content_type="application/json"))
+        pg.goto(B + "/")
+        pg.wait_for_selector(".palette-trigger")
+        pg.click(".palette-trigger")
+        for typed in (code.replace("-", "–"), code.replace("-", "")):
+            pg.fill(".palette-input", typed)
+            pg.wait_for_timeout(800)
+            top = pg.inner_text(".palette-list li[aria-selected='true']") if pg.query_selector(".palette-list li[aria-selected='true']") else ""
+            if big["eid"] not in top:
+                bad("⌘K code", f"{typed!r} in ⌘K: the first result is {top!r}, not {big['eid']}")
+    except Exception as e:  # noqa: BLE001
+        bad("⌘K code", str(e).splitlines()[0][:160])
     ctx.close()
     return found
 

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, displayName, downloadAuthed, type ExperimentSummary, type Notebook, type Status } from '../api'
+import { api, ApiError, displayName, downloadAuthed, type ExperimentSummary, type Notebook, type Status } from '../api'
 import ExperimentList from '../components/ExperimentList'
 import NewExperimentDialog from '../components/NewExperimentDialog'
 import Modal from '../components/Modal'
@@ -25,12 +25,22 @@ export default function NotebookPage() {
   const [audEdit, setAudEdit] = useState<AudienceValue | null>(null)
   // What the action did is said apart from the refreshed lists that follow it: archived or deleted is done, even if
   // the network drops right after (0.30.1: the page said it had failed).
+  // the notebook went while the page was open (deleted in another tab, or by its owner): said plainly, with the way
+  // out, instead of "Notebook 65 not found" (0.30.1)
+  const seen = useRef('')
+  if (nb) seen.current = nb.name
+  const gone = (e: any) => {
+    if (!(e instanceof ApiError && e.status === 404)) return false
+    setConfirm(null); setAudEdit(null); setBusy(false)
+    refreshNotebooks().catch(() => toast('This notebook was deleted, or you can no longer open it.'))
+    return true
+  }
   const refreshAfter = (done: string) => refreshNotebooks().then(() => toast(done),
     () => toast(`${done}. The notebook list couldn't be refreshed: reload the page when you're back online.`))
   const saveAudience = async () => {
     try {
       await api.patch(`/api/notebooks/${id}`, audEdit)
-    } catch (e: any) { toast(e.message); return }
+    } catch (e: any) { if (!gone(e)) toast(e.message); return }
     setAudEdit(null)
     await refreshAfter('Updated who can open this notebook')
   }
@@ -38,7 +48,7 @@ export default function NotebookPage() {
     setBusy(true)
     try {
       await api.patch(`/api/notebooks/${n.id}`, { archived })
-    } catch (e: any) { toast(e.message); setBusy(false); return }
+    } catch (e: any) { if (!gone(e)) { toast(e.message); setBusy(false) } return }
     setConfirm(null)
     await refreshAfter(archived ? `Archived ${n.name}` : `${n.name} is back in the notebook list`)
     setBusy(false)
@@ -47,7 +57,7 @@ export default function NotebookPage() {
     setBusy(true)
     try {
       await api.del(`/api/notebooks/${n.id}`)
-    } catch (e: any) { toast(e.message); setBusy(false); refreshNotebooks().catch(() => {}); return }
+    } catch (e: any) { if (!gone(e)) { toast(e.message); setBusy(false); refreshNotebooks().catch(() => {}) } return }
     setConfirm(null); nav('/')
     await refreshAfter(`Deleted ${n.name}`)
   }
@@ -64,11 +74,15 @@ export default function NotebookPage() {
   // an import whose notebook was deleted meanwhile still shows what happened (0.30.1)
   const importDialog = importing && <ImportElnDialog notebookId={nb?.id ?? Number(id)} onClose={() => setImporting(false)}
     onDone={() => { refreshNotebooks(); load(0) }} />
-  if (!nb) return <>{importDialog}<p className="empty">Notebook not found.</p></>
+  // kept open if the notebook goes meanwhile: it says so, and what was typed stays, to put in another notebook
+  const newDialog = creating && <NewExperimentDialog notebookId={nb?.id ?? Number(id)} onClose={() => setCreating(false)} />
+  if (!nb) return <>{importDialog}{newDialog}<div className="empty" role="status">
+    <p style={{ marginTop: 0 }}>{seen.current ? <><b>{seen.current}</b> was deleted, or you can no longer open it.</> : 'Notebook not found.'}</p>
+    <Link to="/">Go to the dashboard</Link></div></>
   const can = notebookActions(nb, user)
   const drafts = nb.status_counts.open ?? 0
   return (
-    <>{importDialog}<div className="stack" style={{ gap: 20 }}>
+    <>{importDialog}{newDialog}<div className="stack" style={{ gap: 20 }}>
       <div className="spread">
         <div>
           <h1 className="page-title">{nb.name}{nb.archived && <span className="badge-archived">Archived</span>}</h1>
@@ -84,7 +98,7 @@ export default function NotebookPage() {
         </div>
         <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
           {nb.experiment_count > 0 && <button className="btn" title="Every experiment here you can open, in the shared format of lab notebooks (.eln)"
-            onClick={() => { toast('Preparing the export…'); downloadAuthed(`/api/notebooks/${nb.id}/export.eln`, `${nb.name.replace(/[\\/:*?"<>|#^[\]{}%]+/g, ' ').slice(0, 80)} - ${new Date().toISOString().slice(0, 10)}.eln`).catch(e => toast(e.message)) }}>Export (.eln)</button>}
+            onClick={() => { toast('Preparing the export…'); downloadAuthed(`/api/notebooks/${nb.id}/export.eln`, `${nb.name.replace(/[\\/:*?"<>|#^[\]{}%]+/g, ' ').slice(0, 80)} - ${new Date().toISOString().slice(0, 10)}.eln`, false, true).catch(e => toast(e.message)) }}>Export (.eln)</button>}
           {canWrite && !nb.archived && <button className="btn" onClick={() => setImporting(true)} title="Bring experiments in from eLabFTW, RSpace, another Benchtop…">Import .eln…</button>}
           {canWrite && !nb.archived && <button className="btn primary" onClick={() => setCreating(true)}>New experiment</button>}
         </div>
@@ -110,7 +124,6 @@ export default function NotebookPage() {
           : canWrite && !nb.archived ? 'No experiments here yet. Press N or click New experiment to start one.' : 'No experiments here yet.'} /></div>}
       {loadErr && items.length > 0 && <p className="error" role="alert">Couldn't load the older experiments. {loadErr} <button className="btn sm" onClick={() => load(items.length)}>Retry</button></p>}
       {more && !loadErr && <div style={{ textAlign: 'center' }}><button className="btn" onClick={() => load(items.length)}>Show older experiments</button></div>}
-      {creating && <NewExperimentDialog notebookId={nb.id} onClose={() => setCreating(false)} />}
       {audEdit && <Modal title={`Who can open ${nb.name}`} onClose={() => setAudEdit(null)} footer={<>
         <button className="btn" onClick={() => setAudEdit(null)}>Cancel</button>
         <button className="btn primary" onClick={saveAudience}>Save</button></>}>

@@ -124,6 +124,32 @@ def close(session: Session, exp: Experiment, outcome: str, actor: User, reason: 
             _notify(session, uid, "witness_cancelled", actor, exp, f"{exp.eid} {what}; your witness signature isn't needed")
 
 
+def can_witness(u: User | None) -> bool:
+    return bool(u and u.active and u.role != Role.viewer)
+
+
+def cancel_for(session: Session, witness: User, actor: User | None) -> list[str]:
+    """The person asked can't witness any more (made read-only, or their account disabled): their open requests are
+    cancelled, so the records don't wait on them and others see them as nobody asked again (0.30.1: they stayed on
+    the dashboard of someone who couldn't act on them). Each author is told; one audit event lists the records.
+    Only the requests change: the signed records, and their signatures, are untouched."""
+    now = utcnow()
+    why = "their account is disabled" if not witness.active else "their account is read-only"
+    eids: list[str] = []
+    for r in session.exec(select(WitnessRequest).where(WitnessRequest.witness_id == witness.id, WitnessRequest.status == "open")).all():
+        r.status, r.closed_at, r.outcome = "cancelled", now, "witness_unavailable"
+        session.add(r)
+        exp = session.get(Experiment, r.experiment_id)
+        if exp:
+            eids.append(exp.eid)
+            _notify(session, r.requested_by, "witness_cancelled", witness, exp,
+                    f"can't witness {exp.eid} any more ({why}): ask someone else")
+    if eids:
+        from . import audit
+        audit.record(session, actor, "witness_requests_cancelled", "user", witness.id, eids=eids, reason=why)
+    return eids
+
+
 def remind(session: Session, r: WitnessRequest, manual_by: User | None = None) -> None:
     exp = session.get(Experiment, r.experiment_id)
     w = session.get(User, r.witness_id)
@@ -149,6 +175,12 @@ def send_due_reminders() -> int:
     now = utcnow()
     n = 0
     with Session(engine) as s:
+        # requests to someone who can no longer witness (changed before 0.30.1, which cancels them at once)
+        stuck = {r.witness_id for r in s.exec(select(WitnessRequest).where(WitnessRequest.status == "open")).all()}
+        for uid in stuck:
+            w = s.get(User, uid)
+            if w is not None and not can_witness(w):
+                cancel_for(s, w, None)
         for r in s.exec(select(WitnessRequest).where(WitnessRequest.status == "open")).all():
             exp = s.get(Experiment, r.experiment_id)
             if not exp or exp.status != ExperimentStatus.signed:

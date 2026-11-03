@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, displayName, type ExperimentSummary, type Notebook } from '../api'
+import { api, ApiError, displayName, type ExperimentSummary, type Notebook } from '../api'
 import Modal from './Modal'
 import NewNotebookDialog from './NewNotebookDialog'
 
@@ -20,6 +20,12 @@ export default function NewExperimentDialog({ notebookId, onClose }: { notebookI
   const nav = useNavigate()
   const [title, setTitle] = useState('')
   const [nb, setNb] = useState<number | ''>(() => startingNotebook(notebooks, user.id, user.preferences?.default_notebook_id, notebookId))
+  // opened (N) before the notebooks had loaded: the starting one is picked when they arrive, unless one was chosen
+  // meanwhile (0.30.1: it stayed on "Choose a notebook")
+  const chosen = useRef(false)
+  useEffect(() => {
+    if (!chosen.current && nb === '' && notebooks.length) setNb(startingNotebook(notebooks, user.id, user.preferences?.default_notebook_id, notebookId))
+  }, [notebooks]) // eslint-disable-line react-hooks/exhaustive-deps
   const [tpl, setTpl] = useState<number | ''>('')
   const [templates, setTemplates] = useState<ExperimentSummary[]>([])
   const [err, setErr] = useState('')
@@ -43,7 +49,14 @@ export default function NewExperimentDialog({ notebookId, onClose }: { notebookI
       e = await api.post<ExperimentSummary>('/api/experiments', {
         title, notebook_id: nb || null, template_id: tpl || null,
       })
-    } catch (x: any) { setErr(x.message); busy.current = false; setCreating(false); return }
+    } catch (x: any) {
+      busy.current = false; setCreating(false)
+      if (x instanceof ApiError && x.status === 404 && nb) {  // deleted meanwhile (in another tab): choose another
+        setErr('This notebook was deleted, or you can no longer open it. Choose another one.')
+        chosen.current = true; setNb(''); refreshNotebooks().catch(() => {})
+      } else setErr(x.message)
+      return
+    }
     await refreshNotebooks().catch(() => {})  // the counts beside the notebooks: the experiment is made either way
     onClose()
     nav(`/experiments/${e.id}`)
@@ -58,7 +71,7 @@ export default function NewExperimentDialog({ notebookId, onClose }: { notebookI
         <label className="field">Title<input className="input" autoFocus maxLength={300} value={title} onChange={e => setTitle(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); create() } }} placeholder="e.g. Boc protection of 4-aminopiperidine" /></label>
         <label className="field">Notebook
-          <select className="select" value={nb} onChange={e => setNb(e.target.value ? Number(e.target.value) : '')}>
+          <select className="select" value={nb} onChange={e => { chosen.current = true; setNb(e.target.value ? Number(e.target.value) : '') }}>
             {nb === '' && <option value="">Choose a notebook</option>}
             {mine.length > 0 && <optgroup label="Your notebooks">
               {mine.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}

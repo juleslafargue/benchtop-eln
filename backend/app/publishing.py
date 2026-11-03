@@ -273,9 +273,15 @@ def default_details(session: Session, user: User, exp: Experiment) -> dict[str, 
 
 
 def _names(exp: Experiment) -> tuple[str, str]:
-    from .eln import _safe
-    stem = _safe(f"{exp.eid} {exp.title}", 90)
+    """The PDF's and the .eln's names on Zenodo. The .eln's is the name of the folder inside it (0.30.1: they
+    differed: "EXP-00012 Title.eln" held "EXP-00012 - Title/")."""
+    from .eln import file_stem
+    stem = file_stem(_eln_name(exp))
     return f"{stem}.pdf", f"{stem}.eln"
+
+
+def _eln_name(exp: Experiment) -> str:
+    return f"{exp.eid} - {exp.title}"
 
 
 def files_preview(session: Session, exp: Experiment, include_comments: bool) -> list[dict[str, Any]]:
@@ -526,7 +532,7 @@ def prepare(session: Session, user: User, exp: Experiment, raw: Any) -> dict[str
         except HTTPException as e:
             raise PublishError(e.status_code if e.status_code < 500 else 502, f"Couldn't make the PDF: {e.detail}") from None
         tmp = eln.scratch_dir() / f"zenodo-{exp.id}-{datetime.now():%H%M%S%f}.eln"
-        eln.export(session, user, [exp], tmp, f"{exp.eid} - {exp.title}",
+        eln.export(session, user, [exp], tmp, _eln_name(exp),
                    f"{exp.eid} from Benchtop ELN, as published on Zenodo", with_comments=details["include_comments"],
                    licence=details["licence"])
         files = []

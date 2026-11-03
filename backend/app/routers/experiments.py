@@ -125,6 +125,21 @@ class NotebookIn(BaseModel):
     visibility: str | None = None
 
 
+def _notebook_name(raw: str) -> str:
+    """The name without spaces or invisible characters (zero-width spaces, direction marks) at either end. A name
+    that is nothing else is refused (0.30.1: "   " or a lone zero-width space made a notebook with no visible name)."""
+    import unicodedata
+    edge = lambda ch: ch.isspace() or unicodedata.category(ch) in ("Cf", "Cc", "Zs")  # noqa: E731
+    name = raw or ""
+    while name and edge(name[0]):
+        name = name[1:]
+    while name and edge(name[-1]):
+        name = name[:-1]
+    if not name:
+        raise HTTPException(422, "Give the notebook a name")
+    return name
+
+
 def _check_audience(session, user: User, group_id: int | None, visibility: str | None) -> tuple[int | None, str]:
     """Validate a notebook's group/visibility: you can only give a notebook to a group you belong to."""
     from ..access import VISIBILITIES, access_for
@@ -181,8 +196,9 @@ def list_notebooks(user: CurrentUser, session: DB, include_archived: bool = Fals
 @router.post("/notebooks", status_code=201)
 def create_notebook(body: NotebookIn, user: Writer, session: DB):
     audit._take_write_lock(session)  # the group can't be deleted between the check and the new notebook (0.30.1)
+    name = _notebook_name(body.name)
     gid, vis = _check_audience(session, user, body.group_id, body.visibility)
-    nb = Notebook(name=body.name, description=body.description, owner_id=user.id, group_id=gid, visibility=vis)
+    nb = Notebook(name=name, description=body.description, owner_id=user.id, group_id=gid, visibility=vis)
     session.add(nb)
     session.flush()
     audit.record(session, user, "create", "notebook", nb.id, name=nb.name, group_id=gid, visibility=vis)
@@ -215,7 +231,10 @@ def update_notebook(nb_id: int, body: NotebookPatch, user: Writer, session: DB):
     nb = _notebook_now(session, user, nb_id)
     if nb.owner_id != user.id and user.role != Role.admin:
         raise HTTPException(403, "Only the notebook owner can change it")
-    changes = cleaned(nb, body.model_dump(exclude_unset=True))
+    patch = body.model_dump(exclude_unset=True)
+    if patch.get("name") is not None:
+        patch["name"] = _notebook_name(patch["name"])
+    changes = cleaned(nb, patch)
     if "group_id" in changes or "visibility" in changes:
         gid = changes["group_id"] if "group_id" in changes else nb.group_id
         vis = changes.get("visibility") or (nb.visibility if gid else None)

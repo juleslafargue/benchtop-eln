@@ -86,7 +86,7 @@ export default function Account() {
           <div className="spread" style={{ alignItems: 'center', gap: 12 }}>
             <span>Everything you can open in Benchtop (your experiments, your groups', and those shared with you), with every file,
               in the <b>.eln</b> format that eLabFTW, RSpace, Kadi4Mat and other lab notebooks read.</span>
-            <button className="btn" onClick={() => { toast('Preparing the export; a big one takes a minute…'); downloadAuthed('/api/export.eln', `Benchtop - ${(user.full_name || user.username).replace(/[\\/:*?"<>|#^[\]{}%]+/g, ' ')} - ${new Date().toISOString().slice(0, 10)}.eln`).catch(e => toast(e.message)) }}>Export everything (.eln)</button>
+            <button className="btn" onClick={() => { toast('Preparing the export; a big one takes a minute…'); downloadAuthed('/api/export.eln', `Benchtop - ${(user.full_name || user.username).replace(/[\\/:*?"<>|#^[\]{}%]+/g, ' ')} - ${new Date().toISOString().slice(0, 10)}.eln`, false, true).catch(e => toast(e.message)) }}>Export everything (.eln)</button>
           </div>
           <p className="help" style={{ margin: 0 }}>Each record comes with its printable report, so it can be read without any software. To bring records
             in from another notebook, open a notebook and choose <b>Import .eln…</b></p>

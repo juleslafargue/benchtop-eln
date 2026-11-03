@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlmodel import select
 
-from .. import audit
+from .. import audit, witness
 from ..models import Role, User
 from ..config import settings
 from .. import passwords
@@ -144,7 +144,7 @@ def _clean_prefs(p: dict[str, Any]) -> dict[str, Any]:
         allowed = PREF_KEYS[k]
         if allowed is None:
             out[k] = _whole(v)
-        elif v in allowed:
+        elif any(v == a and type(v) is type(a) for a in allowed):  # true or false, not 1 or 0 (1 == True in Python)
             out[k] = v
     return out
 
@@ -527,6 +527,8 @@ def update_user(uid: int, body: UserPatch, actor: Admin, session: DB):
             setattr(u, k, v)
     session.add(u)
     audit.record(session, actor, "update", "user", u.id, changes=changes, sessions_ended=ended)
+    if ("role" in changes or "active" in changes) and not witness.can_witness(u):
+        witness.cancel_for(session, u, actor)  # nobody waits on a witness who can't sign (0.30.1)
     session.commit()
     return user_out(u)
 

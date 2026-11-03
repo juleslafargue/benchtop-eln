@@ -69,9 +69,9 @@ export default function Reactions() {
       <div className="panel panel-pad filters">
         <label className="field">Search<input className="input" placeholder="Reagent, product, tag, title…" value={q} onChange={e => setQ(e.target.value)} /></label>
         <label className="field">Contains substructure<input className="input" placeholder="SMILES/SMARTS" value={sub} onChange={e => setSub(e.target.value)} style={{ fontFamily: 'var(--mono)', fontSize: 13 }} /></label>
-        <label className="field">Yield at least (%)<NumInput className="input" label="Minimum yield" value={minYield} onCommit={setMinYield} /></label>
-        <label className="field">Temp from (°C)<NumInput className="input" label="Minimum temperature" value={minTemp} onCommit={setMinTemp} /></label>
-        <label className="field">Temp to (°C)<NumInput className="input" label="Maximum temperature" value={maxTemp} onCommit={setMaxTemp} /></label>
+        <label className="field">Yield at least (%)<NumInput className="input" label="Minimum yield" value={minYield} onCommit={setMinYield} live={400} /></label>
+        <label className="field">Temp from (°C)<NumInput className="input" label="Minimum temperature" value={minTemp} onCommit={setMinTemp} unit="C" live={400} /></label>
+        <label className="field">Temp to (°C)<NumInput className="input" label="Maximum temperature" value={maxTemp} onCommit={setMaxTemp} unit="C" live={400} /></label>
         <label className="field">Atmosphere<select className="select" value={atmosphere} onChange={e => setAtmosphere(e.target.value)}>
           {['', 'air', 'N2', 'Ar', 'H2', 'O2', 'CO'].map(a => <option key={a} value={a}>{a || 'Any'}</option>)}</select></label>
       </div>

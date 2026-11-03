@@ -45,6 +45,7 @@ export function auditSentence(e: AuditLike, n: AuditNames): string | null {
     case 'sign:rejected experiment': return `${who} returned ${exp} to its author`
     case 'sign:withdrawn experiment': return `${who} withdrew their signature from ${exp}`
     case 'sign:void experiment': return `${who} voided ${exp}`
+    case 'witness_requests_cancelled user': return `${who} cancelled the witness requests waiting for ${target || 'an account'} (${d.reason || 'they can no longer witness'}): ${list(d.eids || [])}`
     case 'witness_request experiment': return `${who} asked ${person(d.witness_id)} to witness ${exp}`
     case 'create experiment': return `${who} started ${exp}${d.title ? ` ${q(d.title)}` : ''}`
     case 'update experiment': return `${who} changed the ${list(Object.keys(d.after || {}).map(k => FIELD[k] || k)) || 'details'} of ${exp}`

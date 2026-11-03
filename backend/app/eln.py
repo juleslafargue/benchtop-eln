@@ -18,6 +18,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import unicodedata
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,20 +76,51 @@ def _cut(s: str, limit: int) -> str:
     return s
 
 
+def _shorten(s: str, limit: int) -> str:
+    """Cut to fit (see _cut). If that leaves a bracket open, end before the bracket ("Synthesis of (S)-2-(4-bro"
+    becomes "Synthesis of (S)-2-"); otherwise end at a space rather than in a word, as long as most is kept."""
+    cut = _cut(s, limit)
+    if cut == s:
+        return s
+    depth, opened = 0, -1
+    for i, ch in enumerate(cut):
+        if ch == "(":
+            if depth == 0:
+                opened = i
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+    if depth and opened >= len(cut) // 2:
+        return cut[:opened].rstrip()
+    space = cut.rfind(" ")
+    if not s[len(cut)].isspace() and space >= len(cut) * 2 // 3:
+        return cut[:space].rstrip()
+    return cut
+
+
 def _safe(name: str, limit: int = 80) -> str:
     """A file or folder name that works on Mac, Windows and Linux: no characters they refuse, not too long (the file
     extension is kept when a long name is shortened), and none of the names Windows reserves."""
-    s = re.sub(r'[\\/:*?"<>|#^\[\]{}%\x00-\x1f\x7f]+', " ", name or "").strip()
+    # invisible characters go: direction marks and overrides (which can make "exe.txt" show as "txt.exe"), zero-width
+    # spaces and joiners (0.30.1)
+    s = "".join(ch for ch in (name or "") if unicodedata.category(ch) != "Cf")
+    s = re.sub(r'[\\/:*?"<>|#^\[\]{}%\x00-\x1f\x7f]+', " ", s).strip()
     s = re.sub(r"\s+", " ", s).strip(" .")
     stem, dot, ext = s.rpartition(".")
     if dot and stem and 0 < len(ext) <= 10 and " " not in ext:
         ext = "." + ext
-        s = _cut(stem, max(1, limit - len(ext))).strip(" .") + ext
+        s = _shorten(stem, max(1, limit - len(ext))).strip(" .") + ext
     else:
-        s = _cut(s, limit).strip(" .")
+        # nor a dash left dangling at the end ("EXP-00038 - .." gave "EXP-00038 -.eln")
+        s = _shorten(s, limit).strip(" .").rstrip(" .-–—,;")
     if _RESERVED.match(s):
         s = "_" + s
     return s or "untitled"
+
+
+def file_stem(name: str) -> str:
+    """The .eln file's name (without .eln), which is also the name of the folder inside it."""
+    return _safe(name, 120)
 
 
 def _ref(i: str) -> dict[str, str]:
@@ -96,8 +128,13 @@ def _ref(i: str) -> dict[str, str]:
 
 
 def _id(path: str) -> str:
-    """The @id of something in the crate: its path, percent-encoded as RO-Crate asks (spaces become %20)."""
-    return "./" + quote(path, safe="/-_.~()'!*,;=+@")
+    """The @id of something in the crate: its path as an IRI, percent-encoding spaces and the ASCII characters a
+    URI reserves, as RO-Crate asks. Other letters stay as they are, in UTF-8 (0.30.1: a Russian or Chinese title was
+    percent-encoded too, which made the name over 255 bytes for tools that read the @id as a file name, the ELN
+    Consortium's checker among them). Invisible and space characters are still encoded. Import reads both."""
+    return "./" + "".join(
+        ch if ord(ch) > 0x7F and unicodedata.category(ch)[0] not in "CZ" else quote(ch, safe="/-_.~()'!*,;=+@")
+        for ch in path)
 
 
 def _clean(node: dict[str, Any]) -> dict[str, Any]:
@@ -447,7 +484,7 @@ def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, 
     with_comments=False leaves the discussion out (publishing on Zenodo, unless the author chooses to include it).
     licence: a key of LICENCES when the file is published under that licence; otherwise all rights are reserved."""
     exps = list(exps)
-    root = _safe(name, 120)
+    root = file_stem(name)
     folders = _Unique()
     folder_of = {e.id: folders(f"{e.eid} - {_safe(e.title, 70)}") for e in exps}
     out.parent.mkdir(parents=True, exist_ok=True)

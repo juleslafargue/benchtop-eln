@@ -73,6 +73,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
     try {
       const r = await api.post<{ rows: StoichRow[]; totals: any; warnings: string[] }>('/api/chem/stoichiometry', { rows: next, target_conc_m: target })
       if (my !== reqId.current) return
+      setErr('')  // a message from a recalculation that failed earlier is out of date now (0.30.1: it stayed)
       // into the section as it is now: names, notes and conditions typed while it was calculating stay (0.30.1)
       const merged = mergeStoich(sent, now.current, r)
       if (merged) onChange(merged)
@@ -222,7 +223,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
   )
   const UNIT_OF: Partial<Record<keyof StoichRow, 'mg' | 'mL' | 'mmol' | 'M'>> = { mass_mg: 'mg', actual_mass_mg: 'mg', volume_ml: 'mL', mmol: 'mmol', conc_m: 'M' }
   const n = (r: StoichRow, i: number, k: keyof StoichRow, basis?: StoichRow['basis'], nd = 4) => (
-    <td><NumInput label={`${COL_LABEL[k] || String(k)}, ${rowLabel(r, rows)}`} nd={nd} sig={5} disabled={readOnly} value={r[k] as number | null} unit={UNIT_OF[k]}
+    <td><NumInput label={`${COL_LABEL[k] || String(k)}, ${rowLabel(r, rows)}`} nd={nd} sig={5} disabled={readOnly} value={r[k] as number | null} unit={UNIT_OF[k]} fit
       className={basis && r.basis === basis ? 'basis' : ''} onCommit={v => setField(i, { [k]: v } as Partial<StoichRow>, basis)} onProblem={boxProblem} /></td>
   )
 

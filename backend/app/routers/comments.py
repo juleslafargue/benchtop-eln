@@ -26,10 +26,20 @@ MAX_LEN = 5000
 
 
 def mentions(session, body: str) -> list[User]:
-    names = {m.group(1).rstrip(".-").lower() for m in MENTION.finditer(body)}
-    if not names:
+    """The people @mentioned. "Thanks @hweiss." means hweiss, but a username may itself end in "." or "-" ("jo."):
+    the longest username that the text starts with is the one meant (0.30.1: the last character was always cut, so
+    "jo." was never told)."""
+    typed = {m.group(1).lower() for m in MENTION.finditer(body)}
+    if not typed:
         return []
-    return [u for u in session.exec(select(User).where(User.active == True)) if u.username.lower() in names]  # noqa: E712
+    users = {u.username.lower(): u for u in session.exec(select(User).where(User.active == True))}  # noqa: E712
+    found: dict[int, User] = {}
+    for t in typed:
+        while t and t not in users and t[-1] in ".-":
+            t = t[:-1]
+        if t in users:
+            found[users[t].id] = users[t]
+    return [found[k] for k in sorted(found)]
 
 
 def comment_out(session, c: Comment, me: User) -> dict[str, Any]:

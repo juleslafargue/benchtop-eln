@@ -20,12 +20,12 @@ function LotForm({ material, onSaved, onClose }: { material: Material; onSaved: 
     <Modal title={`Receive a lot of ${material.name}`} onClose={onClose} footer={<>
       <button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!f.amount} onClick={save}>Add lot</button></>}>
       <div className="form-grid">
-        <label className="field">Amount<NumInput className="input" label="Amount" value={f.amount} onCommit={v => setF({ ...f, amount: v })} /></label>
+        <label className="field">Amount<NumInput className="input" label="Amount" value={f.amount} onCommit={v => setF(p => ({ ...p, amount: v }))} live={0} /></label>
         <label className="field">Unit<select className="select" value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })}>{UNITS.map(u => <option key={u} value={u}>{unitLabel(u)}</option>)}</select></label>
         <label className="field">Location<input className="input" value={f.location} onChange={e => setF({ ...f, location: e.target.value })} /></label>
         <label className="field">Supplier<input className="input" value={f.supplier} onChange={e => setF({ ...f, supplier: e.target.value })} /></label>
         <label className="field">Catalogue no.<input className="input" value={f.catalog_number} onChange={e => setF({ ...f, catalog_number: e.target.value })} /></label>
-        <label className="field">Purity %<NumInput className="input" label="Purity" value={f.purity} onCommit={v => setF({ ...f, purity: v })} /></label>
+        <label className="field">Purity %<NumInput className="input" label="Purity" value={f.purity} onCommit={v => setF(p => ({ ...p, purity: v }))} /></label>
         <label className="field">Barcode<input className="input" placeholder="Generated if empty" value={f.barcode} onChange={e => setF({ ...f, barcode: e.target.value })} /></label>
       </div>
       {err && <p className="error">{err}</p>}

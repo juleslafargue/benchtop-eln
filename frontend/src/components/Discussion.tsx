@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useApp } from '../App'
 import { ago, api, displayName, when, type Comment, type Entry, type User, type UserBrief } from '../api'
 import { initials } from './Layout'
-import { rankMentions } from '../mentions'
+import { mentionTyped, rankMentions } from '../mentions'
 
 let peopleCache: Promise<User[]> | null = null
 const people = () => (peopleCache ??= api.get<User[]>('/api/users').then(us => us.filter(u => u.active)).catch(() => { peopleCache = null; return [] }))
@@ -23,8 +23,8 @@ export function Composer({ placeholder, onSend, autoFocus, initial = '', submitL
 
   const update = (v: string, caret: number) => {
     setText(v)
-    const m = /(^|[^\w@])@([\w.-]*)$/.exec(v.slice(0, caret))
-    setMenu(m ? { q: m[2], start: caret - m[2].length - 1 } : null); setActive(0)
+    const q = mentionTyped(v.slice(0, caret))
+    setMenu(q !== null ? { q, start: caret - q.length - 1 } : null); setActive(0)
   }
   const pick = (u: User) => {
     if (!menu || !ta.current) return

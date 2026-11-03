@@ -25,3 +25,10 @@ export function rankMentions<T extends Mentionable>(people: T[], typed: string, 
     .sort((a, b) => a.r - b.r || a.i - b.i)
     .slice(0, limit).map(x => x.u)
 }
+
+/** The @mention being typed just before the caret ("Thanks @Marí" → "Marí"), or null. Letters with accents count
+ *  (0.30.1: "@Marí" closed the list, as "í" isn't in \w), so a person can be found by a name typed as it's spelt. */
+export function mentionTyped(beforeCaret: string): string | null {
+  const m = /(^|[^\p{L}\p{N}_@])@([\p{L}\p{N}\p{M}_.-]*)$/u.exec(beforeCaret)
+  return m ? m[2] : null
+}

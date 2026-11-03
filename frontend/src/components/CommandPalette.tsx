@@ -2,14 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../App'
 import { api, type ExperimentSummary, type Material } from '../api'
+import { useDebounced } from './bits'
+import { looksLikeCode, sampleCode } from '../sampleCode'
 
 interface Item { key: string; group: string; label: string; hint?: string; codes?: string[]; run: () => void }
-
-/** "jl-13", "JL_013" or "JL 013" written as a sample code is: JL-013. Anything else: null. */
-export function sampleCode(q: string): string | null {
-  const m = /^([a-z][a-z0-9]{1,5})[-_ ](\d{1,6})$/i.exec(q.trim())
-  return m ? `${m[1].toUpperCase()}-${m[2].replace(/^0+(?=\d)/, '').padStart(3, '0')}` : null
-}
 
 /** Subsequence match with a bonus for word starts and contiguous runs; 0 means no match. */
 function score(q: string, text: string) {
@@ -42,6 +38,17 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
     api.get<ExperimentSummary[]>('/api/experiments?limit=500').then(setExps).catch(() => {})
     api.get<Material[]>('/api/materials?limit=500').then(setMats).catch(() => {})
   }, [])
+  // only the latest 500 records are loaded: a sample code is also looked up on the server, where every code is
+  // (0.30.1: older records' codes weren't found). It answers only for records this person can open.
+  const [byCode, setByCode] = useState<{ q: string; code: string; experiment: ExperimentSummary } | null>(null)
+  const dq = useDebounced(q, 150)
+  useEffect(() => {
+    if (!looksLikeCode(dq)) return
+    let on = true
+    api.get<{ code: string; experiment: ExperimentSummary }>(`/api/samples/lookup?code=${encodeURIComponent(dq.trim())}`)
+      .then(r => { if (on) setByCode({ q: dq, ...r }) }, () => { if (on) setByCode(null) })
+    return () => { on = false }
+  }, [dq])
 
   const go = (path: string) => () => { onClose(); nav(path) }
   const items: Item[] = useMemo(() => [
@@ -79,10 +86,16 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
     // a sample code (JL-013, typed any way the instruments accept) goes straight to the experiment it was handed to
     const code = sampleCode(q)
     const scored = items.map(it => ({ it, s: code && it.codes?.includes(code) ? 10000 : scoreAll(`${it.label} ${it.hint || ''}`) })).filter(x => x.s > 0)
+    if (byCode && byCode.q === q) {  // the record the server found for the code typed, first
+      const e = byCode.experiment
+      const at = scored.findIndex(x => x.it.key === `e${e.id}`)
+      if (at >= 0) scored.splice(at, 1)
+      scored.push({ s: 20000, it: { key: `e${e.id}`, group: 'Experiments', label: `${e.eid} ${e.title}`, hint: [byCode.code, e.status].join(' · '), run: go(`/experiments/${e.id}`) } })
+    }
     if (q) scored.sort((a, b) => b.s - a.s)
     else return scored.filter(x => x.it.group !== 'Materials').slice(0, 14).map(x => x.it) // recent work + actions when empty
     return scored.slice(0, 30).map(x => x.it)
-  }, [items, q])
+  }, [items, q, byCode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => setSel(0), [q])
   useEffect(() => { list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }) }, [sel])

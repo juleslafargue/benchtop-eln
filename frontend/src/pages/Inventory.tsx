@@ -21,7 +21,7 @@ function AdjustDialog({ lot, onClose, onDone }: { lot: Lot; onClose: () => void;
       <p className="muted" style={{ marginTop: 0 }}>{lot.material_name}: {fmt(lot.amount, 4)} {unitLabel(lot.unit)} on hand.</p>
       <div className="form-grid">
         <label className="field">Change<select className="select" value={direction} onChange={e => setDirection(e.target.value)}><option value="out">Remove (used)</option><option value="in">Add (correction)</option></select></label>
-        <label className="field">Amount<NumInput className="input" label="Amount" value={amount} onCommit={setAmount} /></label>
+        <label className="field">Amount<NumInput className="input" label="Amount" value={amount} onCommit={setAmount} live={0} /></label>
         <label className="field">Unit<select className="select" value={unit} onChange={e => setUnit(e.target.value)}>{['mg', 'g', 'kg', 'uL', 'mL', 'L'].map(u => <option key={u} value={u}>{unitLabel(u)}</option>)}</select></label>
       </div>
       <label className="field" style={{ marginTop: 12 }}>Note<input className="input" value={note} onChange={e => setNote(e.target.value)} /></label>

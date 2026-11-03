@@ -29,8 +29,10 @@ export default function HrmsHelper({ smiles, current, onUse }: { smiles: string;
         {ions.map(i => <option key={i.adduct} value={i.adduct}>{i.adduct}</option>)}
       </select>
       <span>calcd for <b>{ion.formula}</b> <b>{ion.mz.toFixed(4)}</b></span>
-      <label className="row" style={{ gap: 6 }}>found <NumInput className="input" label="Found m/z" value={found} onCommit={setFound} nd={4} /></label>
-      {ppm != null && <span className={Math.abs(ppm) <= 5 ? 'ppm ok' : 'ppm bad'} title="Most journals accept within ±5 ppm">{ppm >= 0 ? '+' : ''}{ppm.toFixed(1)} ppm</span>}
+      <label className="row" style={{ gap: 6 }}>found <NumInput className="input" label="Found m/z" value={found} onCommit={setFound} nd={4} live={0} /></label>
+      {/* the room for the ppm is kept while there's none, so Use doesn't move under the mouse as it appears (0.30.1) */}
+      <span className={ppm == null ? 'ppm' : Math.abs(ppm) <= 5 ? 'ppm ok' : 'ppm bad'} title={ppm == null ? undefined : 'Most journals accept within ±5 ppm'}>
+        {ppm != null && `${ppm >= 0 ? '+' : ''}${ppm.toFixed(1)} ppm`}</span>
       <button className="btn sm primary" disabled={found == null} onClick={() => onUse(text)}>Use</button>
     </div>
   )

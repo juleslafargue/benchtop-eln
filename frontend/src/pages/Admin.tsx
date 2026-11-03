@@ -366,6 +366,13 @@ export default function Admin() {
   )
 }
 
+const ROLE_NAME: Record<Role, string> = { admin: 'an admin', scientist: 'a scientist', viewer: 'a viewer (read-only)' }
+const ROLE_MEANS: Record<Role, string> = {
+  admin: 'An admin can do everything a scientist can, and manage accounts, backups and settings.',
+  scientist: 'A scientist can write, sign and witness records.',
+  viewer: "A viewer can open records but can't write, sign or witness them.",
+}
+
 function Users() {
   const { user: me, toast } = useApp()
   const [users, setUsers] = useState<User[]>([])
@@ -376,14 +383,19 @@ function Users() {
   useEffect(load, [])
   const [added, setAdded] = useState<Added | null>(null)
   const toggle = async (u: User) => {
-    if (u.active && !confirm(`Disable ${displayName(u)} (${u.username})? They're signed out everywhere now and can't sign in until an admin enables the account again. Their records stay as they are.`)) return
+    if (u.active && !confirm(`Disable ${displayName(u)} (${u.username})? They're signed out everywhere now and can't sign in until an admin enables the account again. Requests waiting for them to witness a record are cancelled. Their records stay as they are.`)) return
     try { await api.patch(`/api/users/${u.id}`, { active: !u.active }); toast(u.active ? `${u.username} is disabled and signed out` : `${u.username} can sign in again`) }
     catch (e: any) { toast(e.message) }
     load()
   }
+  // a role changes only once confirmed: arrow keys on the menu used to change it at each press (0.30.1)
+  const [roleChange, setRoleChange] = useState<{ u: User; r: Role } | null>(null)
+  const [changing, setChanging] = useState(false)
   const role = async (u: User, r: Role) => {
-    try { await api.patch(`/api/users/${u.id}`, { role: r }); toast(`${u.username} is now ${r === 'admin' ? 'an admin' : r === 'viewer' ? 'a viewer (read-only)' : 'a scientist'}`) }
+    setChanging(true)
+    try { await api.patch(`/api/users/${u.id}`, { role: r }); toast(`${u.username} is now ${ROLE_NAME[r]}`) }
     catch (e: any) { toast(e.message) }
+    setChanging(false); setRoleChange(null)
     load()
   }
   const signOut = async (u: User) => {
@@ -397,7 +409,7 @@ function Users() {
         <table className="plain"><thead><tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th><span className="vh">Actions</span></th></tr></thead>
           <tbody>{users.map(u => (
             <tr key={u.id}><td>{u.username}</td><td>{u.full_name}</td><td className="faint">{u.email}</td>
-              <td><select className="select" style={{ padding: '2px 6px' }} value={u.role} disabled={u.id === me.id} onChange={e => role(u, e.target.value as Role)} aria-label={`Role for ${u.username}`}>
+              <td><select className="select" style={{ padding: '2px 6px' }} value={u.role} disabled={u.id === me.id} onChange={e => setRoleChange({ u, r: e.target.value as Role })} aria-label={`Role for ${u.username}`}>
                 <option value="scientist">scientist</option><option value="viewer">viewer</option><option value="admin">admin</option></select></td>
               <td>{u.active ? (u.must_change_password ? 'Active · must set password' : u.has_password === false ? 'Active · single sign-on' : 'Active') : 'Disabled'}</td>
               <td style={{ whiteSpace: 'nowrap' }}><button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
@@ -406,6 +418,12 @@ function Users() {
                 {u.id !== me.id && <button className="btn ghost sm" onClick={() => toggle(u)}>{u.active ? 'Disable' : 'Enable'}</button>}</td></tr>
           ))}</tbody></table>
       </div>
+      {roleChange && <Modal title={`Make ${displayName(roleChange.u)} ${ROLE_NAME[roleChange.r]}?`} onClose={() => setRoleChange(null)} footer={<>
+        <button className="btn" onClick={() => setRoleChange(null)}>Cancel</button>
+        <button className="btn primary" disabled={changing} onClick={() => role(roleChange.u, roleChange.r)}>{changing ? 'Changing…' : `Make ${ROLE_NAME[roleChange.r]}`}</button></>}>
+        <p style={{ marginTop: 0 }}>{roleChange.u.username} is {ROLE_NAME[roleChange.u.role]} now. {ROLE_MEANS[roleChange.r]}</p>
+        {roleChange.r === 'viewer' && <p className="faint" style={{ marginBottom: 0 }}>Requests to witness a record that are waiting for them are cancelled, and the authors are told to ask someone else. Their records and signatures stay as they are.</p>}
+      </Modal>}
       {editing && <EditUser u={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); toast('User updated') }} />}
       {resetting && <ResetPassword u={resetting} onClose={() => setResetting(null)} onDone={() => { setResetting(null); load(); toast(`Password reset; ${resetting.username} was signed out and will choose a new one`) }} />}
       {adding && <UserForm onClose={() => setAdding(false)} onSaved={a => { setAdding(false); load(); toast(`Added ${a.u.username}`); setAdded(a) }} />}

@@ -227,8 +227,19 @@ export const api = {
 export const depictUrl = (smiles: string, w = 260, h = 160, rxn = false, highlight = '') =>
   `/api/chem/depict?smiles=${encodeURIComponent(smiles)}&w=${w}&h=${h}${rxn ? '&rxn=true' : ''}${highlight ? `&highlight=${encodeURIComponent(highlight)}` : ''}`
 
-export async function downloadAuthed(path: string, filename: string, open = false) {
+/** The file name the server gave (Content-Disposition), or null. */
+export function servedName(disposition: string | null): string | null {
+  const star = /filename\*\s*=\s*utf-8''([^;]+)/i.exec(disposition || '')
+  if (star) { try { return decodeURIComponent(star[1].trim()) } catch { /* not encoded properly: the plain one */ } }
+  const plain = /filename\s*=\s*"([^"]+)"/i.exec(disposition || '')
+  return plain ? plain[1] : null
+}
+
+/** Download what `path` serves. With `serverName`, it's saved under the name the server gives it (an .eln export's
+ *  name is that of the folder inside it), `filename` being only for when it gives none. */
+export async function downloadAuthed(path: string, filename: string, open = false, serverName = false) {
   const res = await api.raw(path)
+  if (serverName) filename = servedName(res.headers.get('content-disposition')) || filename
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
   if (open) window.open(url, '_blank')

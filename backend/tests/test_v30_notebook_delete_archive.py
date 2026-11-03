@@ -227,7 +227,8 @@ def test_nothing_new_goes_into_an_archived_notebook(client, admin, lab):
     # a follow-up chooses its notebook: not the archived one
     r = client.post(f"/api/experiments/{signed['id']}/follow-up", headers=owner, json={"notebook_id": nb["id"]})
     assert r.status_code == 409 and r.json()["detail"].startswith(msg)
-    assert client.post(f"/api/experiments/{signed['id']}/follow-up", headers=owner, json={}).status_code == 400
+    r = client.post(f"/api/experiments/{signed['id']}/follow-up", headers=owner, json={})  # 0.30.1: says it's archived
+    assert r.status_code == 409 and "archived" in r.json()["detail"], r.text
     assert client.post(f"/api/experiments/{signed['id']}/follow-up", headers=owner, json={"notebook_id": other_nb["id"]}).status_code == 201
     # a .eln import
     p = client.post("/api/eln/preview", headers=owner, files={"file": ("x.eln", eln, "application/zip")}).json()
