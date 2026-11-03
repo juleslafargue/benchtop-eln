@@ -558,6 +558,30 @@ def test_release_notes_list_the_commits_since_the_last_release_without_trailers(
     assert n.index("Medians were off") < n.index("\n---\n") < n.index("**To update:**")
 
 
+def test_release_notes_never_mention_a_github_account():
+    # 0.30.1: "@nn" in a commit message linked a stranger's GitHub account on the v0.29.0 release page
+    m = release.no_mentions
+    assert m("- @mentions: accented letters work (@nn picks Nadia).") == "- `@mentions`: accented letters work (`@nn` picks Nadia)."
+    assert m("Typing @jo. at the end") == "Typing `@jo`. at the end"
+    assert m("Already code: `@nn` and `type @bob here`") == "Already code: `@nn` and `type @bob here`"
+    assert m("Mail Jules@lafargue.name or s@example.invalid") == "Mail Jules@lafargue.name or s@example.invalid"
+    assert m("A lone @ sign, @-1 and 50 @ 2 g") == "A lone @ sign, @-1 and 50 @ 2 g"
+
+
+@needs_tools
+def test_release_notes_put_an_at_word_from_any_commit_in_code(tmp_path):
+    src = make_program(tmp_path / "src", "50.0.0")
+    for msg in ("Mentions work (work in progress)\n\n- @mentions with accents; @nn picks Nadia",
+                "v50.1.0: mentions\n\n- Fixed\n\nCo-Authored-By: Someone <s@example.invalid>"):
+        (src / "docs" / f"{len(msg)}.md").write_text(msg)
+        git(src, "add", "-A")
+        git(src, "commit", "-qm", msg)
+    set_version(src, "50.1.0")
+    n = release.notes(src, "50.1.0")
+    assert "- `@mentions` with accents; `@nn` picks Nadia" in n
+    assert re.search(r"(?<![\w`])@\w", n) is None
+
+
 def test_terminal_shows_what_changed_not_how_to_install(tmp_path, monkeypatch, capsys):
     from app import __version__
     newer = f"{updates.parse_version(__version__)[0] + 1}.0.0"

@@ -61,12 +61,22 @@ def _commits(root: Path, v: str) -> list[str]:
     return git("log", "--no-merges", "--format=%H", "-n", "1", root=root).split()
 
 
+def no_mentions(text: str) -> str:
+    """On a GitHub release page, "@name" links (and tells) the GitHub account of that name, a stranger. Commit messages
+    write "`@mentions`" for the feature or "`@nn`" for a typed example; put any bare @word in code so it stays text.
+    An email address (letters right before the @) and text already in backticks are left alone."""
+    out = []
+    for i, chunk in enumerate(re.split(r"(`[^`\n]*`)", text)):
+        out.append(chunk if i % 2 else re.sub(r"(?<![\w`])@([A-Za-z0-9][\w.-]*[\w]|[A-Za-z0-9])", r"`@\1`", chunk))
+    return "".join(out)
+
+
 def notes(root: Path = ROOT, v: str | None = None) -> str:
     v = v or version(root)
     parts = []
     for h in _commits(root, v):
-        subject = git("log", "-1", "--format=%s", h, root=root).strip()
-        body = [ln for ln in git("log", "-1", "--format=%b", h, root=root).splitlines() if not TRAILERS.match(ln.strip())]
+        subject = no_mentions(git("log", "-1", "--format=%s", h, root=root).strip())
+        body = [no_mentions(ln) for ln in git("log", "-1", "--format=%b", h, root=root).splitlines() if not TRAILERS.match(ln.strip())]
         title = re.sub(r"^v\d+(\.\d+)*:\s*", "", subject)
         title = title[:1].upper() + title[1:]
         text = "\n".join(body).strip()
