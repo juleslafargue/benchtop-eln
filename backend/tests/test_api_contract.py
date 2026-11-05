@@ -20,8 +20,10 @@ from fastapi.testclient import TestClient
 from app import doi, instruments
 from app.main import app
 
+pytestmark = pytest.mark.usefixtures("safety_settled")  # see conftest.py
+
 PW = "lab-bench-pw-2026"
-DOC = Path(__file__).resolve().parents[2] / "docs" / "API.md"
+DOC =Path(__file__).resolve().parents[2] / "docs" / "API.md"
 NUM = (int, float)
 NONE = type(None)
 TIME = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$")
@@ -337,12 +339,9 @@ def test_doi_lookup(client, admin, me):
 
 def test_materials(client, me):
     w, r = me["write"], me["read"]
-    made = client.post("/api/materials", headers=w, json={"name": "Contract triethylamine", "cas": "121-44-8",
-                                                          "smiles": "CCN(CC)CC", "density": 0.726})
-    if made.status_code == 409:  # another test registered NEt3 first
-        assert "MAT-" in made.json()["detail"]
-        made = client.post("/api/materials", headers=w, json={"name": "Contract tributylamine", "cas": "102-82-9",
-                                                              "smiles": "CCCCN(CCCC)CCCC", "density": 0.778})
+    # structures no other test registers: the registry is shared by the whole test run, and a structure goes in once
+    made = client.post("/api/materials", headers=w, json={"name": "Contract diethyloctylamine", "cas": "4088-37-9",
+                                                          "smiles": "CCCCCCCCN(CC)CC", "density": 0.78})
     assert made.status_code == 201, made.text
     m = shaped(made.json(), MATERIAL, "POST /api/materials")
     assert m["mid"] == f"MAT-{m['id']:05d}"
@@ -461,11 +460,11 @@ def test_register_product(client, me, nb, other):
 
 def test_compounds(client, me, nb):
     client.post("/api/materials/register-product", headers=me["write"], json={
-        "experiment_id": new_exp(client, me, nb, "Contract compound")["id"], "name": "Contract anisole", "smiles": "COc1ccccc1"})
+        "experiment_id": new_exp(client, me, nb, "Contract compound")["id"], "name": "Contract trimethoxybenzene", "smiles": "COc1ccc(OC)c(OC)c1"})
     r = client.get("/api/compounds", headers=me["read"])
     rows = all_shaped(r.json(), COMPOUND, "GET /api/compounds")
     assert total(r) == len(rows)
-    row = next(c for c in rows if c["smiles"] == "COc1ccccc1")
+    row = next(c for c in rows if c["smiles"] == "COc1ccc(OC)c(OC)c1")
     shaped(row["material"], {"id": int, "mid": str}, "compound material")
     assert all(isinstance(v, str) for c in rows for v in c["lipinski_violations"] + c["veber_violations"])
     for c in rows:

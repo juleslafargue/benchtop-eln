@@ -2,6 +2,9 @@
 
 Until 0.31, GET /api/materials stopped at 500 without saying so, and had no way to fetch the rest: a script that
 listed the registry to find what was already there quietly missed everything after the 500th name."""
+import pytest
+
+pytestmark = pytest.mark.usefixtures("safety_settled")  # 500-odd materials mustn't hold up later tests' safety refresh
 
 
 def _person(client, admin, username):

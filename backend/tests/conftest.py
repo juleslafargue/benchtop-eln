@@ -51,3 +51,28 @@ def users(client, admin):
 @pytest.fixture()
 def notebook(client, users):
     return client.post("/api/notebooks", headers=users["alice"], json={"name": "NB"}).json()
+
+
+@pytest.fixture(scope="module")
+def safety_settled(client):
+    """For a test file that registers many materials (0.31): when it's done, their safety data counts as looked up,
+    so the hourly refresh in later tests (40 records a run, those never looked up first) still reaches theirs."""
+    from sqlalchemy import func
+    from sqlmodel import Session, select
+
+    from app import safety
+    from app.db import engine
+    from app.models import ChemSafety, Material, utcnow
+    with Session(engine) as s:
+        start = s.exec(select(func.max(Material.id))).one() or 0
+    yield
+    with Session(engine) as s:
+        now = utcnow()
+        for m in s.exec(select(Material).where(Material.id > start)).all():
+            key = safety.material_key(m)
+            cs = s.exec(select(ChemSafety).where(ChemSafety.key == key)).first() if key else None
+            if key and (cs is None or cs.fetched_at is None):
+                cs = cs or ChemSafety(key=key, title=m.name)
+                cs.status, cs.fetched_at, cs.checked_at = "not_found", now, now
+                s.add(cs)
+        s.commit()
