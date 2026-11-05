@@ -1526,9 +1526,9 @@ def cut_short_lists(browser, admin_token: str) -> list[tuple[str, str, str, str]
         el = pg.query_selector(".cut-short [role=status]")
         return el.inner_text().strip() if el else ""
 
-    def press_show_more(scope: str = "") -> None:
+    def press_show_more() -> None:
         """By keyboard, as someone who doesn't use a mouse would: the button takes the focus, Enter presses it."""
-        pg.focus(f"{scope} .cut-short button".strip())
+        pg.focus(".cut-short button")
         pg.keyboard.press("Enter")
     try:
         where["path"] = "/materials"
