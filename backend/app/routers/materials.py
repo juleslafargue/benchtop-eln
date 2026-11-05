@@ -4,11 +4,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import Session, col, or_, select
 
-from .. import audit, chem, safety
+from .. import audit, chem, paging, safety
 from ..db import engine
 from ..models import Entry, EntryKind, Experiment, Lot, LotTransaction, Material
 from ..security import DB, CurrentUser, Writer
@@ -81,14 +81,19 @@ def _apply_structure(m: Material) -> None:
 
 
 @router.get("/materials")
-def list_materials(_: CurrentUser, session: DB, q: str = "", kind: str | None = None, limit: int = 500):
-    stmt = select(Material).order_by(Material.name).limit(limit)
+def list_materials(_: CurrentUser, session: DB, response: Response, q: str = "", kind: str | None = None,
+                   limit: int = paging.limit_param(500), offset: int = paging.offset_param()):
+    """Registered materials by name. Until 0.31 this stopped at 500 without saying so; X-Total-Count now says how many
+    match, and `offset` fetches the rest."""
+    stmt = select(Material)
     if q:
         like = f"%{q}%"
         stmt = stmt.where(or_(col(Material.name).ilike(like), col(Material.cas).ilike(like),
                               col(Material.synonyms).ilike(like), col(Material.formula).ilike(like)))
     if kind:
         stmt = stmt.where(Material.kind == kind)
+    paging.set_total(response, paging.count(session, stmt))
+    stmt = stmt.order_by(Material.name, Material.id).offset(offset).limit(limit)  # id: same-named ones page reliably
     return [material_out(session, m) for m in session.exec(stmt)]
 
 
@@ -223,8 +228,10 @@ def create_lot(mat_id: int, body: LotIn, user: Writer, session: DB):
 
 
 @router.get("/lots")
-def list_lots(_: CurrentUser, session: DB, q: str = "", location: str = "", status: str | None = None):
-    stmt = select(Lot, Material).join(Material, Material.id == Lot.material_id).order_by(Material.name, Lot.id)
+def list_lots(_: CurrentUser, session: DB, response: Response, q: str = "", location: str = "", status: str | None = None,
+              limit: int | None = paging.limit_param(None), offset: int = paging.offset_param()):
+    """Containers by material name; every match unless `limit` is given."""
+    stmt = select(Lot, Material).join(Material, Material.id == Lot.material_id)
     if q:
         like = f"%{q}%"
         stmt = stmt.where(or_(col(Lot.barcode).ilike(like), col(Material.name).ilike(like),
@@ -233,6 +240,8 @@ def list_lots(_: CurrentUser, session: DB, q: str = "", location: str = "", stat
         stmt = stmt.where(col(Lot.location).ilike(f"%{location}%"))
     if status:
         stmt = stmt.where(Lot.status == status)
+    paging.set_total(response, paging.count(session, stmt))
+    stmt = stmt.order_by(Material.name, Lot.id).offset(offset).limit(limit)
     return [{**lot_out(lot), "material_name": m.name, "mid": m.mid, "smiles": m.smiles, "mw": m.mw}
             for lot, m in session.exec(stmt)]
 
@@ -320,11 +329,15 @@ def reverse_transaction(tx_id: int, user: Writer, session: DB):
 
 
 @router.get("/lots/{lot_id}/transactions")
-def lot_history(lot_id: int, user: CurrentUser, session: DB):
+def lot_history(lot_id: int, user: CurrentUser, session: DB, response: Response,
+                limit: int | None = paging.limit_param(None), offset: int = paging.offset_param()):
+    """A lot's ledger, newest first; every entry unless `limit` is given."""
     from ..access import access_for
     acc = access_for(session, user)
     get_or_404(session, Lot, lot_id)
-    txs = session.exec(select(LotTransaction).where(LotTransaction.lot_id == lot_id).order_by(LotTransaction.id.desc()))
+    stmt = select(LotTransaction).where(LotTransaction.lot_id == lot_id)
+    paging.set_total(response, paging.count(session, stmt))
+    txs = session.exec(stmt.order_by(LotTransaction.id.desc()).offset(offset).limit(limit))
     out = []
     for t in txs:
         exp = session.get(Experiment, t.experiment_id) if t.experiment_id else None

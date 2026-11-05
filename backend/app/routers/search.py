@@ -7,10 +7,10 @@ import html
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from sqlmodel import col, or_, select
 
-from .. import audit, chem
+from .. import audit, chem, paging
 from ..models import AuditEvent, Entry, EntryKind, Experiment, Material
 from ..security import DB, Admin, CurrentUser
 from ..services import experiment_summary
@@ -123,14 +123,25 @@ def _mat_out(m: Material, **extra: Any) -> dict[str, Any]:
             "kind": m.kind, **extra}
 
 
+def _totals(response: Response, experiments: int, materials: int, files: int) -> None:
+    """How many of each kind match, before `limit` and `offset` (0.31). X-Total-Count is the largest of the three, so
+    paging until `offset` reaches it fetches every list in full."""
+    response.headers["X-Total-Experiments"] = str(experiments)
+    response.headers["X-Total-Materials"] = str(materials)
+    response.headers["X-Total-Files"] = str(files)
+    paging.set_total(response, max(experiments, materials, files))
+
+
 @router.get("/search")
-def search(user: CurrentUser, session: DB, q: str = "", mode: str = "text", threshold: float = 0.5,
-           limit: int = 100, status: str = "", notebook_id: int | None = None, mine: bool = False):
+def search(user: CurrentUser, session: DB, response: Response, q: str = "", mode: str = "text", threshold: float = 0.5,
+           limit: int = paging.limit_param(100), offset: int = paging.offset_param(),
+           status: str = "", notebook_id: int | None = None, mine: bool = False):
     """mode = text | substructure | similarity. Text search matches every word (or "quoted phrase")
-    anywhere in an experiment: title, tags, ID, notebook, author, section text, table values, file names."""
+    anywhere in an experiment: title, tags, ID, notebook, author, section text, table values, file names.
+    `limit` and `offset` apply to each of the three lists."""
     q = q.strip()[:500]
-    limit = max(1, min(limit, 200))
     empty = {"experiments": [], "materials": [], "files": [], "terms": []}
+    _totals(response, 0, 0, 0)
     if not q:
         return empty
 
@@ -189,9 +200,10 @@ def search(user: CurrentUser, session: DB, q: str = "", mode: str = "text", thre
         hits.sort(key=lambda h: h[1].updated_at, reverse=True)  # ties: most recently edited first
         hits.sort(key=lambda h: -h[0])
         # only build result cards for what's returned (a common word can match thousands of records)
+        n_hits = len(hits)
         hits = [{**experiment_summary(session, exp), "score": score, "match": where[0],
                  "snippet": _snippet(where[1], terms) if where[0] not in ("ID", "Title") else ""}
-                for score, exp, where in hits[:limit]]
+                for score, exp, where in paging.window(hits, limit, offset)]
 
         mats = []
         lots = {}
@@ -211,7 +223,9 @@ def search(user: CurrentUser, session: DB, q: str = "", mode: str = "text", thre
                 if _has(a.filename, pats):
                     fl.append({"id": a.id, "filename": a.filename, "size": a.size, "experiment_id": eid,
                                "eid": exps[eid].eid, "title": exps[eid].title, "created_at": a.created_at.isoformat() + "Z"})
-        return {"experiments": hits[:limit], "materials": mats[:limit], "files": fl[:limit], "terms": terms}
+        _totals(response, n_hits, len(mats), len(fl))
+        return {"experiments": hits, "materials": paging.window(mats, limit, offset), "files": paging.window(fl, limit, offset),
+                "terms": terms}
 
     try:
         if mode == "substructure":
@@ -249,7 +263,9 @@ def search(user: CurrentUser, session: DB, q: str = "", mode: str = "text", thre
                            "match": f"{best_row.get('role')}: {best_row.get('name') or best_row.get('formula') or ''}".strip(),
                            "smiles": best_row.get("smiles")}
     key = lambda d: -d["score"]  # noqa: E731
-    return {"experiments": sorted(out.values(), key=key)[:limit], "materials": sorted(mats, key=key)[:limit], "files": [], "terms": []}
+    _totals(response, len(out), len(mats), 0)
+    return {"experiments": paging.window(sorted(out.values(), key=key), limit, offset),
+            "materials": paging.window(sorted(mats, key=key), limit, offset), "files": [], "terms": []}
 
 
 @router.get("/audit")

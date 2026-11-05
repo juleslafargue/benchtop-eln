@@ -8,12 +8,12 @@ from typing import Any
 import html
 import re
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import select
 
-from .. import chem
+from .. import chem, paging
 from ..models import Entry, EntryKind, Experiment
 from ..security import DB, CurrentUser
 from ..services import user_brief
@@ -137,9 +137,10 @@ def list_reactions(user: CurrentUser, session: DB, q: str = "", min_yield: float
 
 
 @router.get("/compounds")
-def compounds(user: CurrentUser, session: DB):
+def compounds(user: CurrentUser, session: DB, response: Response,
+              limit: int | None = paging.limit_param(None), offset: int = paging.offset_param()):
     """Every product made (from reaction tables) and every registered product/sample, one row per
-    structure, with medicinal-chemistry descriptors."""
+    structure, with medicinal-chemistry descriptors. Every one unless `limit` is given."""
     from ..models import Material
 
     seen: dict[str, dict[str, Any]] = {}
@@ -179,7 +180,9 @@ def compounds(user: CurrentUser, session: DB):
                 row["material"] = {"id": m.id, "mid": m.mid}
     for row in seen.values():
         row["experiments"].sort(key=lambda e: e["date"] or "", reverse=True)  # newest first
-    return sorted(seen.values(), key=lambda r: r["name"].lower())
+    rows = sorted(seen.values(), key=lambda r: r["name"].lower())
+    paging.set_total(response, len(rows))
+    return paging.window(rows, limit, offset)
 
 
 # ---------------------------------------------------------------- "have we done this before?"

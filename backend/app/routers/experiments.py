@@ -98,7 +98,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
-from .. import audit, chem, doi, mailer, nmrpredict, plugins, publishing, storage, timestamps, witness
+from .. import audit, chem, doi, mailer, nmrpredict, paging, plugins, publishing, storage, timestamps, witness
 from ..config import settings
 from ..models import (
     Attachment, Entry, EntryKind, EntryVersion, Experiment, ExperimentStatus, Notebook, Role,
@@ -390,10 +390,10 @@ def _num(v):
 
 @router.get("/experiments")
 def list_experiments(
-    user: CurrentUser, session: DB,
+    user: CurrentUser, session: DB, response: Response,
     notebook_id: int | None = None, status_: ExperimentStatus | None = Query(None, alias="status"),
     owner_id: int | None = None, templates: bool = False,
-    limit: int = Query(200, ge=1, le=1000), offset: int = Query(0, ge=0),
+    limit: int = paging.limit_param(200), offset: int = paging.offset_param(),
 ):
     from ..access import visible_experiment_filter
     q = visible_experiment_filter(select(Experiment).where(Experiment.is_template == templates), session, user)
@@ -403,6 +403,7 @@ def list_experiments(
         q = q.where(Experiment.status == status_)
     if owner_id is not None:
         q = q.where(Experiment.owner_id == owner_id)
+    paging.set_total(response, paging.count(session, q))
     q = q.order_by(Experiment.updated_at.desc(), Experiment.id.desc()).offset(offset).limit(limit)
     exps = session.exec(q).all()
     # each one's sample codes (JL-013), so the ⌘K box finds an experiment by the code on its vial
