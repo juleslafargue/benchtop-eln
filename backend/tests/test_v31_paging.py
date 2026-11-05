@@ -108,3 +108,35 @@ def test_lots_ledger_experiments_compounds_and_search_page(client, admin):
     assert comp.headers["X-Total-Count"] == str(len(allc))
     one = client.get("/api/compounds", headers=r, params={"limit": 1, "offset": 0})
     assert one.json() == allc[:1] and one.headers["X-Total-Count"] == str(len(allc))
+
+
+def test_the_inbox_says_how_many_are_waiting_past_200(client, admin, tmp_path):
+    """Until 0.31 the Inbox list stopped at 200 without saying so: the Waiting tab said (200) with 230 waiting."""
+    from datetime import datetime, timedelta
+
+    from app import instruments
+    tok = _person(client, admin, "pageinbox")
+    folder = tmp_path / "plate-reader"
+    folder.mkdir()
+    inst = client.post("/api/instruments", headers=admin, json={"name": "Paging reader", "kind": "files", "folder": str(folder)})
+    assert inst.status_code == 201, inst.text
+    t0 = datetime(2001, 1, 1)  # older than other tests' arrivals, so their Inbox lists aren't pushed down
+    try:
+        instruments.scan_all(now=t0)
+        for i in range(230):
+            (folder / f"paging plate {i:03d}.csv").write_text("well,abs\n")
+        instruments.scan_all(now=t0 + timedelta(seconds=10))
+        instruments.scan_all(now=t0 + timedelta(seconds=200))
+        mine = lambda rows: [x for x in rows if x["path"].startswith("paging plate")]  # noqa: E731
+        first = client.get("/api/inbox", headers=tok["read"])
+        total = int(first.headers.get("X-Total-Count", "-1"))
+        assert len(first.json()) == 200 and total >= 230, "the caller can't tell more are waiting"
+        rest = client.get("/api/inbox", headers=tok["read"], params={"offset": 200, "limit": 500})
+        assert int(rest.headers["X-Total-Count"]) == total and len(first.json()) + len(rest.json()) == total
+        assert len(mine(first.json()) + mine(rest.json())) == 230
+        for bad in ({"limit": 0}, {"limit": 501}, {"offset": -1}):
+            assert client.get("/api/inbox", headers=tok["read"], params=bad).status_code == 422, bad
+    finally:  # set aside, so later tests' Inbox is as it was
+        for x in mine(client.get("/api/inbox", headers=admin, params={"limit": 500}).json()):
+            client.post(f"/api/inbox/{x['id']}/ignore", headers=admin)
+        client.delete(f"/api/instruments/{inst.json()['id']}", headers=admin)

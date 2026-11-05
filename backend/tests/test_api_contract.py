@@ -172,12 +172,12 @@ def test_a_bad_token_gets_401_and_human_only_actions_get_403(client, me, nb):
 def test_documented_limits_defaults_and_maximum(client):
     spec = client.get("/openapi.json").json()["paths"]
     documented = {"/api/experiments": 200, "/api/materials": 500, "/api/lots": None, "/api/lots/{lot_id}/transactions": None,
-                  "/api/compounds": None, "/api/search": 100}
+                  "/api/compounds": None, "/api/search": 100, "/api/inbox": 200}
     for path, default in documented.items():
         params = {p["name"]: p for p in spec[path]["get"]["parameters"]}
         lim, off = params["limit"]["schema"], params["offset"]["schema"]
         lim = next((s for s in lim.get("anyOf", [lim]) if s.get("type") == "integer"), lim)
-        assert (lim.get("minimum"), lim.get("maximum")) == (1, 1000), path
+        assert (lim.get("minimum"), lim.get("maximum")) == (1, 500 if path == "/api/inbox" else 1000), path
         assert params["limit"]["schema"].get("default") == default, path
         assert off.get("minimum") == 0 and off.get("default") == 0, path
 
@@ -249,6 +249,7 @@ def test_inbox_follow_ups_and_not_mine(client, admin, me, nb, tmp_path):
         # a file with no experiment number waits in the Inbox
         _arrive(folder, "contract unlabelled.csv", b"well,abs\nA1,0.5\n")
         r = client.get("/api/inbox", headers=me["read"], params={"state": "inbox"})
+        assert total(r) == len(r.json())
         item = next(i for i in r.json() if i["path"] == "contract unlabelled.csv")
         shaped(item, {"id": int, "path": str, "state": str, "files": list, "matched": list, "follow_up": bool}, "Inbox item")
         assert client.get(f"/api/inbox/{item['id']}/files/0", headers=me["read"]).content == b"well,abs\nA1,0.5\n"

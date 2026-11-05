@@ -215,8 +215,29 @@ async function request<T>(method: string, path: string, body?: unknown, raw = fa
   return (ct.includes('json') ? res.json() : res.text()).catch(dropped) as Promise<T>
 }
 
+/** A count header (X-Total-Count and the like, 0.31) as a number, or null when it's missing or not a whole number. */
+export function countHeader(v: string | null | undefined): number | null {
+  const t = (v ?? '').trim()
+  return /^\d+$/.test(t) ? Number(t) : null
+}
+
+/** A JSON answer with its count headers (0.31): `count(name)` reads one, null when the server didn't send it. */
+async function getCounted<T>(p: string): Promise<{ data: T; count: (header: string) => number | null }> {
+  const res = await request<Response>('GET', p, undefined, true)
+  const data = await res.json() as T
+  return { data, count: (h: string) => countHeader(res.headers.get(h)) }
+}
+
+/** One page of a list, and how many rows match in all (X-Total-Count). Without the header, the page's own length. */
+async function getList<T>(p: string): Promise<{ rows: T[]; total: number }> {
+  const { data, count } = await getCounted<T[]>(p)
+  return { rows: data, total: Math.max(count('X-Total-Count') ?? 0, data.length) }
+}
+
 export const api = {
   get: <T>(p: string) => request<T>('GET', p),
+  getList,
+  getCounted,
   post: <T>(p: string, b?: unknown) => request<T>('POST', p, b ?? {}),
   put: <T>(p: string, b?: unknown) => request<T>('PUT', p, b),
   patch: <T>(p: string, b?: unknown) => request<T>('PATCH', p, b),

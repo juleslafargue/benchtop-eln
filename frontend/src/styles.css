@@ -1461,4 +1461,6 @@ table.rxn-grid .used { display: inline-flex; flex-wrap: wrap; align-items: cente
   padding: 2px 8px; border-radius: 99px; background: var(--paper-2); color: var(--ink-2); border: 1px solid var(--rule); }
 .notice.archived-note { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; border-left-color: var(--ink-3); }
 .notice.archived-note > span { flex: 1 1 320px; min-width: 0; }
+/* a list cut short (0.31): how many of how many, and Show more */
+.notice.cut-short { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; border-left-color: var(--ink-3); }
 .archive-points { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }

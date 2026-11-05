@@ -41,7 +41,7 @@ too, for programs that sort files:
 
 | Endpoint | What it does |
 |---|---|
-| `GET /api/inbox?state=inbox` | files waiting (`ignored` and `attached` for the other tabs); only those you may see |
+| `GET /api/inbox?state=inbox` | files waiting, newest first (`ignored` and `attached` for the other tabs); only those you may see. In pages, like the lists under [Paging](#paging-fetching-every-row-of-a-list), but at most 500 a page |
 | `GET /api/inbox/{id}/files/{n}` | download one of a waiting arrival's files |
 | `POST /api/inbox/{id}/assign` `{"experiment_id": 25}` | attach it to a draft you can edit |
 | `POST /api/inbox/{id}/follow-up` `{"notebook_id": 3}` | make a follow-up of the signed record it names, with the file in it |
@@ -93,7 +93,7 @@ In the tables below, **Token** says which kind of token an endpoint needs: **rea
 
 Lists come back as plain JSON lists, one page at a time. These lists take two query parameters:
 
-- `limit`: at most this many rows, from 1 to 1000.
+- `limit`: at most this many rows, from 1 to 1000 (to 500 for the Inbox).
 - `offset`: skip this many rows first (0 if left out).
 
 Each answer has an `X-Total-Count` header: how many rows match, before `limit` and `offset`. If it's more than the
@@ -107,6 +107,7 @@ rows you have, there are more pages. A `limit` or `offset` out of range gets 422
 | `GET /api/lots/{id}/transactions` | newest first | all |
 | `GET /api/compounds` | by name | all |
 | `GET /api/search` | best match first | 100 of each kind |
+| `GET /api/inbox` | newest first | 200 |
 
 Search answers with three lists in one object, and `limit` and `offset` apply to each of them. Its
 `X-Total-Experiments`, `X-Total-Materials` and `X-Total-Files` headers count each list; `X-Total-Count` is the largest

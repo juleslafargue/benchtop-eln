@@ -4,6 +4,8 @@ import { useApp } from '../App'
 import { api, displayName, fmt, when, type ExperimentSummary } from '../api'
 import { StatusDot } from '../components/ExperimentList'
 import { Mol, StructureEditor } from '../components/bits'
+import CutShort from '../components/CutShort'
+import { addPage } from '../listNotice'
 
 type Mode = 'text' | 'substructure' | 'similarity'
 type Tab = 'all' | 'experiments' | 'materials' | 'files'
@@ -11,6 +13,13 @@ interface ExpHit extends ExperimentSummary { score: number; match: string; snipp
 interface MatHit { id: number; mid: string; name: string; smiles: string; formula: string; mw: number | null; cas: string; kind: string; score?: number }
 interface FileHit { id: number; filename: string; size: number; experiment_id: number; eid: string; title: string; created_at: string }
 interface Result { experiments: ExpHit[]; materials: MatHit[]; files: FileHit[]; terms: string[] }
+type Kind = 'experiments' | 'materials' | 'files'
+type Totals = Record<Kind, number>
+const KINDS: Kind[] = ['experiments', 'materials', 'files']
+const HEADER: Record<Kind, string> = { experiments: 'X-Total-Experiments', materials: 'X-Total-Materials', files: 'X-Total-Files' }
+/** How many of each kind match in all (0.31: the lists stop at 100 each); a list's length if the server didn't say. */
+const totalsOf = (r: Result, count: (h: string) => number | null): Totals =>
+  Object.fromEntries(KINDS.map(k => [k, Math.max(count(HEADER[k]) ?? 0, r[k].length)])) as Totals
 
 const RECENT_KEY = 'benchtop.recentSearches'
 const loadRecent = (): { q: string; mode: Mode }[] => { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]').slice(0, 8) } catch { return [] } }
@@ -41,6 +50,9 @@ export default function Search() {
   const [mine, setMine] = useState(params.get('mine') === '1')
   const [tab, setTab] = useState<Tab>('all')
   const [res, setRes] = useState<Result | null>(null)
+  const [totals, setTotals] = useState<Totals | null>(null)
+  const [moreBusy, setMoreBusy] = useState<Kind | null>(null)
+  const searched = useRef('')  // the query string of the results shown, for Show more
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [drawing, setDrawing] = useState(false)
@@ -63,8 +75,9 @@ export default function Search() {
       if (mine) n.set('mine', '1')
       return n.toString() === p.toString() ? p : n
     }, { replace: true })
-    if (!query || (structural && query.length < 2)) { setRes(null); setErr(''); setBusy(false); return }
+    if (!query || (structural && query.length < 2)) { ++reqId.current; setRes(null); setErr(''); setBusy(false); return }
     const my = ++reqId.current
+    setMoreBusy(null)
     setBusy(true)
     const t = setTimeout(async () => {
       const qs = new URLSearchParams({ q: query, mode, threshold: String(threshold) })
@@ -72,9 +85,9 @@ export default function Search() {
       if (nb) qs.set('notebook_id', nb)
       if (mine) qs.set('mine', 'true')
       try {
-        const r = await api.get<Result>(`/api/search?${qs}`)
+        const { data: r, count } = await api.getCounted<Result>(`/api/search?${qs}`)
         if (my !== reqId.current) return
-        setRes(r); setErr('')
+        setRes(r); setTotals(totalsOf(r, count)); setErr(''); searched.current = qs.toString()
         if (r.experiments.length + r.materials.length + r.files.length) { saveRecent(query, mode); setRecent(loadRecent()) }
       } catch (e: any) { if (my === reqId.current) { setErr(e.message); setRes(null) } }
       finally { if (my === reqId.current) setBusy(false) }
@@ -82,8 +95,24 @@ export default function Search() {
     return () => clearTimeout(t)
   }, [q, mode, threshold, status, nb, mine]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const counts = res ? { experiments: res.experiments.length, materials: res.materials.length, files: res.files.length } : null
+  const counts = res && totals
   const total = counts ? counts.experiments + counts.materials + counts.files : 0
+  // the next 100 of one kind (the server pages each list the same way; the others are left as they are)
+  const showMore = async (kind: Kind) => {
+    if (!res) return
+    const my = reqId.current
+    setMoreBusy(kind)
+    try {
+      const { data: r, count } = await api.getCounted<Result>(`/api/search?${searched.current}&offset=${res[kind].length}`)
+      if (my !== reqId.current) return
+      const next = { ...res, [kind]: addPage<any>(res[kind], r[kind]) } as Result
+      setRes(next)
+      setTotals(t => ({ ...(t as Totals), [kind]: Math.max(count(HEADER[kind]) ?? 0, next[kind].length) }))
+    } catch (e: any) { if (my === reqId.current) setErr(e.message) }
+    finally { if (my === reqId.current) setMoreBusy(null) }
+  }
+  const more = (kind: Kind) => res && counts && <CutShort shown={res[kind].length} total={counts[kind]} things={kind}
+    busy={moreBusy === kind} onMore={() => showMore(kind)} />
   const show = (t: Tab) => tab === 'all' || tab === t
   const terms = res?.terms || []
   const filtersOn = !!(status || nb || mine)
@@ -197,6 +226,7 @@ export default function Search() {
                 </span>
               </Link></li>)}
             </ul>
+            {more('experiments')}
           </section>}
 
           {show('materials') && counts.materials > 0 && <section className="stack" style={{ gap: 6 }}>
@@ -211,6 +241,7 @@ export default function Search() {
                 <span className="hit-side">{mode === 'similarity' && m.score !== undefined && <span className="sim"><span className="sim-bar"><span style={{ width: `${Math.round(m.score * 100)}%` }} /></span>{Math.round(m.score * 100)}%</span>}</span>
               </Link></li>)}
             </ul>
+            {more('materials')}
           </section>}
 
           {show('files') && counts.files > 0 && <section className="stack" style={{ gap: 6 }}>
@@ -222,6 +253,7 @@ export default function Search() {
                   <span className="hit-meta">{f.eid} · {f.title} · {(f.size / 1024).toFixed(0)} kB · {when(f.created_at)}</span></span>
               </Link></li>)}
             </ul>
+            {more('files')}
           </section>}
         </div>
       </>}

@@ -4,14 +4,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import update
 from sqlmodel import Session, select
 
-from .. import audit, instruments
+from .. import audit, instruments, paging
 from ..access import access_for
 from ..models import (
     Attachment, Entry, EntryKind, EntryVersion, Experiment, ExperimentShare, ExperimentStatus, Instrument,
@@ -245,13 +245,15 @@ def item_out(session: Session, user: User, row: InstrumentFile, inst: Instrument
 
 
 @router.get("/inbox")
-def inbox(user: CurrentUser, session: DB, state: str = "inbox", limit: int = 200):
-    """Arrivals this person may see: waiting (inbox), ignored, or recently attached (attached)."""
+def inbox(user: CurrentUser, session: DB, response: Response, state: str = "inbox",
+          limit: int = Query(200, ge=1, le=500, description="At most this many (1 to 500)"), offset: int = paging.offset_param()):
+    """Arrivals this person may see: waiting (inbox), ignored, or recently attached (attached), newest first.
+    X-Total-Count says how many there are in all (0.31: before, the list stopped at 200 without saying so)."""
     if state not in ("inbox", "ignored", "attached"):
         raise HTTPException(422, "state is inbox, ignored or attached")
     insts = {i.id: i for i in session.exec(select(Instrument))}
     order = InstrumentFile.handled_at.desc() if state == "attached" else InstrumentFile.first_seen_at.desc()
-    out = []
+    out, n = [], 0
     for row in session.exec(select(InstrumentFile).where(InstrumentFile.state == state).order_by(order, InstrumentFile.id.desc())):
         inst = insts.get(row.instrument_id)
         if inst and instruments.can_see(session, user, row, inst):
@@ -259,9 +261,10 @@ def inbox(user: CurrentUser, session: DB, state: str = "inbox", limit: int = 200
                 exp = session.get(Experiment, row.experiment_id) if row.experiment_id else None
                 if not exp or not access_for(session, user).can_read(exp):
                     continue
-            out.append(item_out(session, user, row, inst))
-            if len(out) >= min(limit, 500):
-                break
+            if offset <= n < offset + limit:  # counted all the way through; cards only for this page
+                out.append(item_out(session, user, row, inst))
+            n += 1
+    paging.set_total(response, n)
     return out
 
 

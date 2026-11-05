@@ -202,6 +202,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += slow_network(browser, tok["slaurent"])
         problems += numbers_and_network(browser, tok["hweiss"])
         problems += polish(browser, tok["hweiss"])
+        problems += cut_short_lists(browser, tok["hweiss"])
         browser.close()
     return problems
 
@@ -1492,6 +1493,121 @@ def polish(browser, admin_token: str) -> list[tuple[str, str, str, str]]:
                 bad("⌘K code", f"{typed!r} in ⌘K: the first result is {top!r}, not {big['eid']}")
     except Exception as e:  # noqa: BLE001
         bad("⌘K code", str(e).splitlines()[0][:160])
+    ctx.close()
+    return found
+
+
+def cut_short_lists(browser, admin_token: str) -> list[tuple[str, str, str, str]]:
+    """0.31: a list that comes in pages says so when it's cut short, with Show more. Before, the Materials page stopped
+    at 500, Search at 100 of each kind and the Inbox at 200, without a word (and Search's and the Inbox's counts were
+    those of the page shown). Each check here failed on 0.30.1."""
+    print("Lists cut short: Materials past 500, Search past 100, the Inbox past 200, and Show more…", flush=True)
+    A = {"Authorization": "Bearer " + admin_token}
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": ""}
+
+    def bad(kind: str, what: str) -> None:
+        found.append(("cut short", where["path"], kind, what[:220]))
+    httpx.post(B + "/api/users", headers=A, json={"username": "clister", "password": "a-long-smoke-password", "must_change": False,
+                                                 "full_name": "Casey Lister", "role": "scientist"})
+    token = httpx.post(B + "/api/auth/login", json={"username": "clister", "password": "a-long-smoke-password"}).json()["token"]
+    H = {"Authorization": "Bearer " + token}
+    httpx.patch(B + "/api/auth/me", headers=H, json={"preferences": {"guide_dismissed": True}})
+    with httpx.Client(base_url=B, headers=H, timeout=30) as c:
+        for i in range(520):
+            c.post("/api/materials", json={"name": f"Cut-short check {i:03d}", "kind": "other"})
+    total = int(httpx.get(B + "/api/materials?limit=1", headers=H).headers["X-Total-Count"])
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    rows = lambda sel: pg.locator(sel).count()  # noqa: E731
+
+    def notice() -> str:
+        el = pg.query_selector(".cut-short [role=status]")
+        return el.inner_text().strip() if el else ""
+
+    def press_show_more(scope: str = "") -> None:
+        """By keyboard, as someone who doesn't use a mouse would: the button takes the focus, Enter presses it."""
+        pg.focus(f"{scope} .cut-short button".strip())
+        pg.keyboard.press("Enter")
+    try:
+        where["path"] = "/materials"
+        pg.goto(B + "/materials")
+        pg.wait_for_selector(".mat-row")
+        pg.wait_for_timeout(500)
+        want = f"Showing the first 500 of {total:,} materials."
+        if rows(".mat-row") != 500 or notice() != want:
+            bad("materials", f"{rows('.mat-row')} shown, and the page says {notice()!r} (expected 500 and {want!r})")
+        else:
+            press_show_more()
+            pg.wait_for_function("document.querySelectorAll('.mat-row').length > 500", timeout=15000)
+            pg.wait_for_timeout(300)
+            if rows(".mat-row") != min(total, 1000):
+                bad("show more", f"Show more gave {rows('.mat-row')} materials, not {min(total, 1000)}")
+            if total <= 1000 and notice():
+                bad("show more", f"everything is shown, and the page still says {notice()!r}")
+        pg.fill("input[placeholder^='Search by name']", "Cut-short check 51")
+        pg.wait_for_timeout(1200)
+        if rows(".mat-row") != 10 or notice():  # 510 to 519: searching works as before, and nothing is left out
+            bad("materials search", f"searching gave {rows('.mat-row')} materials (10 expected), notice {notice()!r}")
+
+        where["path"] = "/search?q=Cut-short check"
+        pg.goto(B + "/search?q=" + "Cut-short%20check")
+        pg.wait_for_selector(".search-results")
+        pg.wait_for_timeout(800)
+        tab = pg.inner_text("[role=tab]:has-text('Materials')").strip()
+        if tab != "Materials 520":
+            bad("search count", f"the Materials tab says {tab!r}, not 'Materials 520'")
+        if notice() != "Showing the first 100 of 520 materials." or rows(".search-hit") != 100:
+            bad("search", f"{rows('.search-hit')} results shown, and the page says {notice()!r}")
+        else:
+            press_show_more()
+            pg.wait_for_function("document.querySelectorAll('.search-hit').length > 100", timeout=15000)
+            if rows(".search-hit") != 200 or notice() != "Showing the first 200 of 520 materials.":
+                bad("search show more", f"Show more gave {rows('.search-hit')} results; the page says {notice()!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("pages", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # the Inbox, with 230 files waiting (made up here: the demo lab watches no folders)
+    def item(i: int) -> dict:
+        return {"id": 900000 + i, "path": f"plate {i:03d}.csv", "revision": 1, "state": "inbox", "note": "No experiment number in the name",
+                "instrument": {"id": 1, "name": "Plate reader", "kind": "files"},
+                "files": [{"n": 0, "name": f"plate {i:03d}.csv", "size": 120, "content_type": "text/csv"}], "size": 120,
+                "arrived_at": "2026-11-01T10:00:00Z", "handled_at": None, "handled_by": None, "matched": [], "experiment": None,
+                "follow_up": False, "for_you": False}
+
+    def inbox(route) -> None:
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(route.request.url).query)
+        if qs.get("state", ["inbox"])[0] != "inbox":
+            return route.fulfill(status=200, body="[]", content_type="application/json", headers={"X-Total-Count": "0"})
+        offset, limit = int(qs.get("offset", ["0"])[0]), int(qs.get("limit", ["200"])[0])
+        import json
+        page = [item(i) for i in range(230)][offset:offset + min(limit, 500)]
+        route.fulfill(status=200, body=json.dumps(page), content_type="application/json", headers={"X-Total-Count": "230"})
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    where["path"] = "/inbox"
+    try:
+        pg.route(lambda url: "/api/inbox?" in url, inbox)
+        pg.goto(B + "/inbox")
+        pg.wait_for_selector(".inbox-list")
+        pg.wait_for_timeout(500)
+        tab = pg.inner_text("[role=tab]:has-text('Waiting')").strip()
+        if tab != "Waiting (230)":
+            bad("inbox count", f"the tab says {tab!r}, not 'Waiting (230)'")
+        if notice() != "Showing the first 200 of 230 files." or rows(".inbox-list > li") != 200:
+            bad("inbox", f"{rows('.inbox-list > li')} shown, and the page says {notice()!r}")
+        else:
+            press_show_more()
+            pg.wait_for_function("document.querySelectorAll('.inbox-list > li').length > 200", timeout=15000)
+            pg.wait_for_timeout(300)
+            if rows(".inbox-list > li") != 230 or notice():
+                bad("inbox show more", f"Show more gave {rows('.inbox-list > li')} files; the page says {notice()!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("inbox", str(e).splitlines()[0][:160])
     ctx.close()
     return found
 

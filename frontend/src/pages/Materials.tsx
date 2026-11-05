@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useApp } from '../App'
 import { api, fmt, type Material } from '../api'
 import { Mol, NumInput, StructureEditor, useDebounced } from '../components/bits'
+import CutShort from '../components/CutShort'
 import Modal from '../components/Modal'
 import { LookupBox, LookupCard, SafetyBadge, type LookupResult } from '../components/Safety'
+import { addPage } from '../listNotice'
 
 export function MaterialForm({ initial, onSaved, onClose }: { initial?: Material; onSaved: (m: Material) => void; onClose: () => void }) {
   const [f, setF] = useState({
@@ -70,8 +72,10 @@ export function MaterialForm({ initial, onSaved, onClose }: { initial?: Material
   )
 }
 
+const PAGE = 500  // the server's own page size for materials
+
 export default function Materials() {
-  const { canWrite } = useApp()
+  const { canWrite, toast } = useApp()
   const nav = useNavigate()
   const [q, setQ] = useState('')
   const [kind, setKind] = useState('')
@@ -79,7 +83,25 @@ export default function Materials() {
   const [params, setParams] = useSearchParams()
   const [creating, setCreating] = useState(params.get('new') === '1')
   const dq = useDebounced(q, 200)
-  useEffect(() => { api.get<Material[]>(`/api/materials?q=${encodeURIComponent(dq)}${kind ? `&kind=${kind}` : ''}`).then(setItems) }, [dq, kind])
+  // 0.31: the list comes in pages of 500 and says how many match in all, instead of stopping at 500 without a word
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const search = useRef(0)  // a page that arrives after the search changed is dropped
+  const listUrl = (offset: number) => `/api/materials?q=${encodeURIComponent(dq)}${kind ? `&kind=${kind}` : ''}&limit=${PAGE}&offset=${offset}`
+  useEffect(() => {
+    const my = ++search.current
+    setLoadingMore(false)
+    api.getList<Material>(listUrl(0)).then(r => { if (my === search.current) { setItems(r.rows); setTotal(r.total) } })
+  }, [dq, kind]) // eslint-disable-line react-hooks/exhaustive-deps
+  const showMore = async () => {
+    const my = search.current
+    setLoadingMore(true)
+    try {
+      const r = await api.getList<Material>(listUrl(items.length))
+      if (my === search.current) { setItems(old => addPage(old, r.rows)); setTotal(r.total) }
+    } catch (e: any) { if (my === search.current) toast(e.message) }
+    finally { if (my === search.current) setLoadingMore(false) }
+  }
 
   return (
     <div className="stack" style={{ gap: 20 }}>
@@ -112,6 +134,7 @@ export default function Materials() {
             : <>No materials registered yet.{canWrite && ' Click Register material to add your first reagent or solvent.'}</>}</li>}
         </ul>
       </div>
+      <CutShort shown={items.length} total={total} things="materials" busy={loadingMore} onMore={showMore} />
       {creating && <MaterialForm onClose={() => { setCreating(false); setParams({}) }} onSaved={m => nav(`/materials/${m.id}`)} />}
     </div>
   )
