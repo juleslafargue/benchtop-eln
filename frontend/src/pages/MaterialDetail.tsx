@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useApp } from '../App'
-import { unitLabel, api, displayName, fmt, when, type Lot, type Material } from '../api'
+import { unitLabel, api, ApiError, displayName, fmt, when, type Lot, type Material } from '../api'
+import Scanner from '../components/Scanner'
 import { StatusDot } from '../components/ExperimentList'
 import { Mol, NumInput } from '../components/bits'
 import Modal from '../components/Modal'
@@ -10,15 +11,23 @@ import { GhsDetails, type SafetySummary } from '../components/Safety'
 
 const UNITS = ['mg', 'g', 'kg', 'uL', 'mL', 'L']
 
-function LotForm({ material, onSaved, onClose }: { material: Material; onSaved: () => void; onClose: () => void }) {
-  const [f, setF] = useState({ amount: null as number | null, unit: material.kind === 'solvent' ? 'mL' : 'g', location: '', supplier: '', catalog_number: '', purity: null as number | null, barcode: '' })
+export function LotForm({ material, barcode = '', onSaved, onClose }: { material: Material; barcode?: string; onSaved: (lot: Lot) => void; onClose: () => void }) {
+  const [f, setF] = useState({ amount: null as number | null, unit: material.kind === 'solvent' ? 'mL' : 'g', location: '', supplier: '', catalog_number: '', purity: null as number | null, barcode })
   const [err, setErr] = useState('')
-  const save = async () => {
-    try { await api.post(`/api/materials/${material.id}/lots`, f); onSaved() } catch (e: any) { setErr(e.message) }
+  const [dup, setDup] = useState('')  // another lot has this barcode already: the server's message, naming it
+  const [scanning, setScanning] = useState(false)
+  const codeBox = useRef<HTMLInputElement>(null)
+  const save = async (allowDuplicate = false) => {
+    setErr('')
+    try { onSaved(await api.post<Lot>(`/api/materials/${material.id}/lots`, { ...f, allow_duplicate: allowDuplicate })) } catch (e: any) {
+      if (e instanceof ApiError && e.status === 409) setDup(e.message)
+      else setErr(e.message)
+    }
   }
+  const setCode = (barcode: string) => { setF(p => ({ ...p, barcode })); setDup('') }
   return (
     <Modal title={`Receive a lot of ${material.name}`} onClose={onClose} footer={<>
-      <button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!f.amount} onClick={save}>Add lot</button></>}>
+      <button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!f.amount || !!dup} onClick={() => save()}>Add lot</button></>}>
       <div className="form-grid">
         <label className="field">Amount<NumInput className="input" label="Amount" value={f.amount} onCommit={v => setF(p => ({ ...p, amount: v }))} live={0} /></label>
         <label className="field">Unit<select className="select" value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })}>{UNITS.map(u => <option key={u} value={u}>{unitLabel(u)}</option>)}</select></label>
@@ -26,9 +35,23 @@ function LotForm({ material, onSaved, onClose }: { material: Material; onSaved: 
         <label className="field">Supplier<input className="input" value={f.supplier} onChange={e => setF({ ...f, supplier: e.target.value })} /></label>
         <label className="field">Catalogue no.<input className="input" value={f.catalog_number} onChange={e => setF({ ...f, catalog_number: e.target.value })} /></label>
         <label className="field">Purity %<NumInput className="input" label="Purity" value={f.purity} onCommit={v => setF(p => ({ ...p, purity: v }))} /></label>
-        <label className="field">Barcode<input className="input" placeholder="Generated if empty" value={f.barcode} onChange={e => setF({ ...f, barcode: e.target.value })} /></label>
+        <div className="field"><label htmlFor="lot-barcode">Barcode</label>
+          <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+            <input id="lot-barcode" ref={codeBox} className="input grow" style={{ minWidth: 0 }} placeholder="Generated if empty" value={f.barcode} onChange={e => setCode(e.target.value)} />
+            <button className="btn sm" type="button" onClick={() => setScanning(true)} aria-label="Scan the barcode">Scan</button>
+          </div></div>
       </div>
+      {dup && <div className="sp-note warn dup-warn" role="alert">
+        <p><b>{dup}</b></p>
+        <p>A supplier's barcode can be the same on every bottle of a batch; a container label, such as VIM's, is one per bottle.
+          If this bottle's label really is shared, add it anyway: scanning the code will then show both bottles to choose from.</p>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn sm" onClick={() => save(true)}>Add anyway</button>
+          <button className="btn sm ghost" onClick={() => { setDup(''); codeBox.current?.focus() }}>Change the barcode</button>
+        </div>
+      </div>}
       {err && <p className="error">{err}</p>}
+      {scanning && <Scanner title="Scan the bottle's barcode" onClose={() => setScanning(false)} onCode={c => { setScanning(false); setCode(c) }} />}
     </Modal>
   )
 }

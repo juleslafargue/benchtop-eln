@@ -151,9 +151,10 @@ location. Each lot keeps a ledger of what was received, what was used and any co
 | `GET /api/materials/{id}` | one material with its `lots`, and `used_in`: the experiments you can open whose reaction tables use it. 404: no such material | read |
 | `POST /api/materials` `{"name": "Triethylamine", "cas": "121-44-8", "smiles": "CCN(CC)CC", "density": 0.726}` | register a material; returns it (201). Only `name` is needed. 409: the structure is registered already (the message gives its MAT number); 422: a structure Benchtop can't read | read & write |
 | `PATCH /api/materials/{id}` | change `name`, `kind`, `smiles`, `cas`, `density`, `synonyms`, `hazards`, `notes` or `mw`. 404: no such material; 422: a structure Benchtop can't read | read & write |
-| `POST /api/materials/{id}/lots` `{"barcode": "SA-0042", "amount": 100, "unit": "g", "location": "Cabinet B2", "supplier": "Sigma-Aldrich"}` | receive a lot; returns it (201). Also `catalog_number`, `purity` (%) and `expires_at`. Without a barcode, Benchtop makes one like `MAT-00012-L0034`. 400: unknown unit, or an amount that isn't positive; 404: no such material | read & write |
+| `POST /api/materials/{id}/lots` `{"barcode": "SA-0042", "amount": 100, "unit": "g", "location": "Cabinet B2", "supplier": "Sigma-Aldrich"}` | receive a lot; returns it (201). Also `catalog_number`, `purity` (%) and `expires_at`. Without a barcode, Benchtop makes one like `MAT-00012-L0034`. 400: unknown unit, or an amount that isn't positive; 404: no such material; 409: another lot has this barcode already (the message names it). Send `"allow_duplicate": true` to add it anyway, for a supplier's barcode that is the same on every bottle of a batch | read & write |
 | `GET /api/lots?q=…&location=…&status=…` | lots, each with its `material_name` and `mid`. `q` matches part of a barcode, material name or CAS number; `location` matches part of the location; `status` is `available`, `empty`, `quarantined` or `disposed` | read |
-| `PATCH /api/lots/{id}` | change `location`, `status`, `purity`, `supplier` or `expires_at`. 404: no such lot | read & write |
+| `GET /api/scan?code=…` | what a scanned or typed code is. `lots`: every lot whose barcode is exactly this code (none, one or several), each with `material_name`, `mid`, `material` (`id`, `mid`, `name`, `kind`, `formula`, `smiles`, `mw`, `density`, `cas`) and `safety` (`signal`, `pictograms`, or `null`). When no lot has it, `record` is what the code names, if you may open it: an experiment or material number (`kind` `experiment` or `material`, with `id` and `code`) or a sample code (`kind` `sample`, with the experiment's `id`); otherwise `null`. Also `code`: the code as looked up. Case doesn't matter, and spaces and control characters around the code are ignored. A UPC-A code matches the same code read as EAN-13 (with a 0 in front), and a GS1 code matches whether it's written with brackets, `(01)…(10)…`, or as a scanner sends it. 422: an empty code | read |
+| `PATCH /api/lots/{id}` | change `location`, `status`, `purity`, `supplier`, `expires_at` or `barcode` (an empty barcode gives the lot Benchtop's own again). 404: no such lot; 409: another lot has this barcode already, unless you send `"allow_duplicate": true` | read & write |
 | `POST /api/lots/{id}/transactions` `{"amount": 1.25, "unit": "g"}` | record an amount taken out of a lot (`"direction": "in"` puts an amount back, for a correction). Optional: `experiment_id` and `note`. Returns the updated `lot` and the new `transaction_id` (201). A lot that reaches zero becomes `empty`. 400: unknown unit or direction, an amount that isn't positive, or a mass for a liquid (or a volume for a solid) when the material has no density; 404: no such lot, or an experiment you can't open; 409: not that much left | read & write |
 | `GET /api/lots/{id}/transactions` | the lot's ledger, newest first. 404: no such lot | read |
 | `POST /api/lots/transactions/{id}/reverse` | undo a ledger entry by adding the opposite one; the original stays in the ledger. Returns `lot` and `transaction_id` (201). 404: no such entry; 409: already reversed, itself a reversal, or not that much left | read & write |
@@ -176,11 +177,9 @@ Look up a bottle by its barcode:
 
 ```python
 def find_bottle(barcode):
-    """The lot with exactly this barcode, or None (q also matches part of a barcode)."""
-    for lot in BT.get("/api/lots", params={"q": barcode}).json():
-        if lot["barcode"] == barcode:
-            return lot
-    return None
+    """The lot with this barcode, or None. A supplier's barcode can be on several bottles: this takes the first."""
+    lots = BT.get("/api/scan", params={"code": barcode}).json()["lots"]
+    return lots[0] if lots else None
 
 lot = find_bottle("SA-0042")
 print(lot["material_name"], lot["mid"], lot["amount"], lot["unit"], lot["location"])

@@ -41,6 +41,9 @@ MATERIAL = {"id": int, "mid": str, "name": str, "kind": str, "cas": str, "smiles
 LOT = {"id": int, "material_id": int, "barcode": str, "supplier": str, "catalog_number": str, "purity": (*NUM, NONE),
        "amount": NUM, "unit": str, "location": str, "status": str, "received_at": "time", "expires_at": ("time", NONE)}
 LOT_LISTED = {**LOT, "material_name": str, "mid": str}
+SCANNED_LOT = {**LOT_LISTED, "material": dict, "safety": (dict, NONE)}
+SCANNED_MATERIAL = {"id": int, "mid": str, "name": str, "kind": str, "formula": str, "smiles": str, "mw": (*NUM, NONE),
+                    "density": (*NUM, NONE), "cas": str}
 LEDGER = {"id": int, "delta": NUM, "balance_after": NUM, "note": str, "created_at": "time", "user": dict,
           "experiment": (dict, NONE)}
 COMPOUND = {"name": str, "smiles": str, "formula": str, "mw": NUM, "logp": NUM, "tpsa": NUM, "hbd": int, "hba": int,
@@ -438,6 +441,37 @@ def test_lots_usage_and_reversal(client, me, nb, other):
     assert last["amount"] == 0 and last["status"] == "empty"
 
 
+def test_scan_and_duplicate_barcodes(client, me, nb, other):
+    w, r = me["write"], me["read"]
+    m = client.post("/api/materials", headers=w, json={"name": "Contract scan toluene", "smiles": "Cc1ccccc1", "density": 0.867}).json()
+    lot = client.post(f"/api/materials/{m['id']}/lots", headers=w, json={"barcode": "CT-SCAN-1", "amount": 1, "unit": "L"}).json()
+    s = client.get("/api/scan", headers=r, params={"code": " ct-scan-1\r\n"})
+    assert s.status_code == 200, s.text
+    assert set(s.json()) == {"code", "lots", "record"} and s.json()["code"] == "ct-scan-1" and s.json()["record"] is None
+    hit = shaped(all_shaped(s.json()["lots"], SCANNED_LOT, "GET /api/scan lots")[0], SCANNED_LOT)
+    assert hit["id"] == lot["id"] and shaped(hit["material"], SCANNED_MATERIAL, "scanned material")["id"] == m["id"]
+    assert client.get("/api/scan", headers=r, params={"code": "CT-SCAN-"}).json()["lots"] == []  # exact, not part of one
+    assert client.get("/api/scan", headers=r, params={"code": " "}).status_code == 422
+    # no lot: the record the code names, if you can open it
+    exp = new_exp(client, me, nb, "Contract scan")
+    rec = client.get("/api/scan", headers=r, params={"code": exp["eid"]}).json()["record"]
+    assert rec["kind"] == "experiment" and rec["id"] == exp["id"] and rec["code"] == exp["eid"]
+    rec = client.get("/api/scan", headers=r, params={"code": m["mid"]}).json()["record"]
+    assert rec["kind"] == "material" and rec["id"] == m["id"]
+    assert client.get("/api/scan", headers=r, params={"code": other["experiment"]["eid"]}).json()["record"] is None
+
+    # the same barcode again: 409 naming the lot that has it, unless allowed
+    dup = client.post(f"/api/materials/{m['id']}/lots", headers=w, json={"barcode": "CT-SCAN-1", "amount": 1, "unit": "L"})
+    assert dup.status_code == 409 and dup.json()["detail"] == f"{m['mid']}-L{lot['id']:04d} (Contract scan toluene) already has this barcode."
+    ok = client.post(f"/api/materials/{m['id']}/lots", headers=w, json={"barcode": "CT-SCAN-1", "amount": 1, "unit": "L", "allow_duplicate": True})
+    assert ok.status_code == 201
+    assert len(client.get("/api/scan", headers=r, params={"code": "CT-SCAN-1"}).json()["lots"]) == 2
+    p = client.patch(f"/api/lots/{ok.json()['id']}", headers=w, json={"barcode": "CT-SCAN-2"})
+    assert p.status_code == 200 and shaped(p.json(), LOT)["barcode"] == "CT-SCAN-2"
+    assert client.patch(f"/api/lots/{ok.json()['id']}", headers=w, json={"barcode": "CT-SCAN-1"}).status_code == 409
+    assert client.patch(f"/api/lots/{ok.json()['id']}", headers=w, json={"barcode": "CT-SCAN-1", "allow_duplicate": True}).status_code == 200
+
+
 def test_register_product(client, me, nb, other):
     w = me["write"]
     exp = new_exp(client, me, nb, "Contract product")
@@ -571,7 +605,7 @@ COVERED = {
     "POST /api/attachments/{id}/not-mine", "GET /api/experiments/{id}/export.eln", "GET /api/notebooks/{id}/export.eln",
     "GET /api/export.eln", "POST /api/eln/preview", "POST /api/eln/import/{token}", "DELETE /api/eln/import/{token}",
     "GET /api/doi", "GET /api/materials", "GET /api/materials/{id}", "POST /api/materials", "PATCH /api/materials/{id}",
-    "POST /api/materials/{id}/lots", "GET /api/lots", "PATCH /api/lots/{id}", "POST /api/lots/{id}/transactions",
+    "POST /api/materials/{id}/lots", "GET /api/lots", "GET /api/scan", "PATCH /api/lots/{id}", "POST /api/lots/{id}/transactions",
     "GET /api/lots/{id}/transactions", "POST /api/lots/transactions/{id}/reverse", "POST /api/materials/register-product",
     "GET /api/compounds", "GET /api/samples/lookup", "GET /api/search",
 }

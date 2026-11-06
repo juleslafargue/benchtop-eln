@@ -1,12 +1,13 @@
 """Materials registry and inventory (lots/containers with a usage ledger)."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Response
 from pydantic import BaseModel
-from sqlmodel import Session, col, or_, select
+from sqlmodel import Session, col, func, or_, select
 
 from .. import audit, chem, paging, safety
 from ..db import engine
@@ -205,6 +206,66 @@ class LotIn(BaseModel):
     unit: str = "g"
     location: str = ""
     expires_at: datetime | None = None
+    allow_duplicate: bool = False  # another lot may already have this barcode (a supplier's code on every bottle of a batch)
+
+
+# ------------------------------------------------------------------ barcodes (0.32)
+
+# a scanner types the code and then Enter (sometimes a tab or another control character): those never belong to it
+_EDGES = re.compile(r"^[\s\x00-\x1f\x7f]+|[\s\x00-\x1f\x7f]+$")
+
+
+def clean_code(raw: str | None) -> str:
+    """A scanned or typed code without the spaces and control characters around it. Inside it nothing changes (a GS1
+    code's group separators stay)."""
+    return _EDGES.sub("", raw or "")[:200]
+
+
+def _gs1_flat(code: str) -> str:
+    """A GS1 code without its brackets and group separators, or "" if it doesn't look like one."""
+    if re.match(r"\(\d{2,4}\)", code) or "\x1d" in code:
+        return re.sub(r"[()\x1d]", "", code)
+    return ""
+
+
+def _code_forms(code: str) -> set[str]:
+    """The ways the same code can arrive, in lower case: as written; a UPC-A code (12 digits) and the same code read as
+    EAN-13 (a 0 in front); a GS1 code as printed, "(01)09506000134352(10)ABC", and as a scanner sends it (no brackets,
+    a group separator between the fields)."""
+    c = code.lower()
+    forms = {c}
+    if re.fullmatch(r"\d{12}", c):
+        forms.add("0" + c)
+    elif re.fullmatch(r"0\d{12}", c):
+        forms.add(c[1:])
+    flat = _gs1_flat(c)
+    if flat:
+        forms.add(flat)
+    return forms
+
+
+def lots_with_code(session: Session, code: str, exclude: int | None = None) -> list[Lot]:
+    """Every lot whose barcode is this code (in any case; see _code_forms), oldest first."""
+    code = clean_code(code)
+    if not code:
+        return []
+    forms = _code_forms(code)
+    found = {lot.id: lot for lot in session.exec(select(Lot).where(func.lower(Lot.barcode).in_(forms)))}
+    if any(f[:1].isdigit() for f in forms):  # a GS1 code stored the other way: "(01)…" against the scanner's form
+        stored = select(Lot).where(or_(col(Lot.barcode).contains("("), col(Lot.barcode).contains("\x1d")))
+        for lot in session.exec(stored):
+            if _gs1_flat(lot.barcode.lower()) in forms:
+                found[lot.id] = lot
+    return [found[k] for k in sorted(found) if k != exclude]
+
+
+def _refuse_duplicate(session: Session, others: list[Lot]) -> None:
+    """409 naming the lot (or lots) that already have this barcode."""
+    m = session.get(Material, others[0].material_id)
+    first = f"{m.mid}-L{others[0].id:04d} ({m.name})" if m else f"Lot {others[0].id}"
+    more = len(others) - 1
+    who = f"{first} and {more} other lot{'s' if more > 1 else ''} already have" if more else f"{first} already has"
+    raise HTTPException(409, f"{who} this barcode.")
 
 
 @router.post("/materials/{mat_id}/lots", status_code=201)
@@ -214,7 +275,12 @@ def create_lot(mat_id: int, body: LotIn, user: Writer, session: DB):
         raise HTTPException(400, f"unit must be one of {list(_UNITS)}")
     if not (body.amount > 0 and body.amount < 1e12):
         raise HTTPException(400, "Amount must be a positive number")
-    lot = Lot(material_id=m.id, created_by=user.id, **body.model_dump())
+    fields = body.model_dump(exclude={"allow_duplicate"})
+    fields["barcode"] = clean_code(fields["barcode"])
+    others = lots_with_code(session, fields["barcode"])
+    if others and not body.allow_duplicate:
+        _refuse_duplicate(session, others)
+    lot = Lot(material_id=m.id, created_by=user.id, **fields)
     session.add(lot)
     session.flush()
     if not lot.barcode:
@@ -222,9 +288,43 @@ def create_lot(mat_id: int, body: LotIn, user: Writer, session: DB):
     session.add(LotTransaction(lot_id=lot.id, delta=lot.amount, balance_after=lot.amount,
                                note="received", user_id=user.id))
     audit.record(session, user, "create", "lot", lot.id, material=m.mid, barcode=lot.barcode,
-                 amount=lot.amount, unit=lot.unit)
+                 amount=lot.amount, unit=lot.unit, **({"same_barcode_as": [x.id for x in others]} if others else {}))
     session.commit()
     return lot_out(lot)
+
+
+@router.get("/scan")
+def scan(code: str, user: CurrentUser, session: DB):
+    """What a scanned or typed code is: every lot with that barcode (none, one or several), each with its material and
+    hazard pictograms. When no lot has it: the record it names (EXP-00025, MAT-00007), or the experiment a sample
+    code (JL-013) was handed to, if you may open it. Read-only."""
+    code = clean_code(code)
+    if not code:
+        raise HTTPException(422, "Scan or type a code")
+    lots = []
+    for lot in lots_with_code(session, code):
+        m = session.get(Material, lot.material_id)
+        if m is None:
+            continue
+        lots.append({**lot_out(lot), "material_name": m.name, "mid": m.mid, "smiles": m.smiles, "mw": m.mw,
+                     "material": {"id": m.id, "mid": m.mid, "name": m.name, "kind": m.kind, "formula": m.formula,
+                                  "smiles": m.smiles, "mw": m.mw, "density": m.density, "cas": m.cas},
+                     "safety": safety.brief(safety.get_record(session, safety.material_key(m)))})
+    record = None
+    if not lots:
+        from .bench import lookup  # EXP- and MAT- numbers, with the same checks as a link in the text
+        from .samples import lookup_sample  # sample codes, as the ⌘K box finds them
+        try:
+            record = lookup(code, user, session)
+        except HTTPException:
+            try:
+                s = lookup_sample(code, user, session)
+                e = s["experiment"]
+                record = {"kind": "sample", "code": s["code"], "id": e["id"], "experiment": e["eid"],
+                          "title": e["title"], "status": e["status"]}
+            except HTTPException:
+                record = None
+    return {"code": code, "lots": lots, "record": record}
 
 
 @router.get("/lots")
@@ -252,16 +352,31 @@ class LotPatch(BaseModel):
     purity: float | None = None
     supplier: str | None = None
     expires_at: datetime | None = None
+    barcode: str | None = None
+    allow_duplicate: bool = False
 
 
 @router.patch("/lots/{lot_id}")
 def update_lot(lot_id: int, body: LotPatch, user: Writer, session: DB):
     lot = get_or_404(session, Lot, lot_id)
-    changes = cleaned(lot, body.model_dump(exclude_unset=True))
+    changes = cleaned(lot, body.model_dump(exclude_unset=True, exclude={"allow_duplicate"}))
+    others: list[Lot] = []
+    if "barcode" in changes:
+        changes["barcode"] = clean_code(changes["barcode"])
+        if not changes["barcode"]:  # cleared: back to the one Benchtop makes, as for a new lot
+            m = get_or_404(session, Material, lot.material_id)
+            changes["barcode"] = f"{m.mid}-L{lot.id:04d}"
+        if changes["barcode"] == lot.barcode:
+            del changes["barcode"]
+        else:
+            others = lots_with_code(session, changes["barcode"], exclude=lot.id)
+            if others and not body.allow_duplicate:
+                _refuse_duplicate(session, others)
     for k, v in changes.items():
         setattr(lot, k, v)
     session.add(lot)
-    audit.record(session, user, "update", "lot", lot.id, changes=changes)
+    audit.record(session, user, "update", "lot", lot.id, changes=changes,
+                 **({"same_barcode_as": [x.id for x in others]} if others else {}))
     session.commit()
     return lot_out(lot)
 

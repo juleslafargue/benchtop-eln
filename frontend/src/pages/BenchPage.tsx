@@ -1,12 +1,89 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, displayName, fmt, loadAttachmentImages, type Attachment, type Experiment } from '../api'
+import { api, displayName, fmt, loadAttachmentImages, unitLabel, type Attachment, type Experiment, type StoichRow } from '../api'
 import { logLine, parseTimer, startTimer, fmtDuration } from '../bench'
 import { TimerTray } from '../components/BenchTools'
+import Scanner from '../components/Scanner'
+import { lotProblem, mass, rowLine, rowsForLot, vol, withBottle, type ScanAnswer } from '../scan'
 
-const mass = (mg: number) => (mg >= 1000 ? `${fmt(mg / 1000, 2)} g` : `${fmt(mg, 1)} mg`)
-const vol = (ml: number) => (ml >= 1000 ? `${fmt(ml / 1000, 2)} L` : `${fmt(ml, ml < 1 ? 3 : 1)} mL`)
+/** Scan a bottle at the bench: is it one this reaction needs, how much to weigh, and is it fit to use? The reaction
+ *  table can be told to use it for its row. That save says which version of the table it changes, so an edit made
+ *  meanwhile on the computer is never overwritten: it's refused, and the page reloads to show the table as it is. */
+function CheckBottle({ exp, editable, reload }: { exp: Experiment; editable: boolean; reload: () => Promise<unknown> }) {
+  const [scanning, setScanning] = useState(false)
+  const [answer, setAnswer] = useState<ScanAnswer | null>(null)
+  const [picked, setPicked] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [said, setSaid] = useState('')
+  const [err, setErr] = useState('')
+  const entry = exp.entries.find(e => e.kind === 'reaction' && e.content?.rows?.length)
+  const rows: StoichRow[] = entry?.content?.rows || []
+  const lot = answer?.lots.find(l => l.id === picked)
+
+  const lookUp = async (code: string) => {
+    setScanning(false); setSaid(''); setErr('')
+    try {
+      const a = await api.get<ScanAnswer>(`/api/scan?code=${encodeURIComponent(code)}`)
+      setAnswer(a); setPicked(a.lots.length === 1 ? a.lots[0].id : null)
+    } catch (e: any) { setErr(e.message) }
+  }
+  const use = async (index: number) => {
+    if (!entry || !lot) return
+    const next = withBottle(rows, index, lot)
+    if (!next) { setErr('The reaction table changed; check the row again.'); return }
+    setBusy(true); setErr(''); setSaid('')
+    try {
+      // the version shown here: if the table was changed elsewhere since, the server refuses (409) instead of overwriting it
+      await api.put(`/api/entries/${entry.id}`, { content: { ...entry.content, rows: next }, expected_version: entry.version })
+      setSaid(`${rows[index].name || 'The row'} now uses this bottle.`)
+    } catch (e: any) {
+      setErr(/elsewhere/.test(e.message) ? 'The reaction table was changed on another screen since this page loaded. It has been reloaded: check the row and try again.' : e.message)
+    } finally { await reload().catch(() => {}); setBusy(false) }
+  }
+
+  const problem = lot ? lotProblem(lot) : null
+  const usable = !!lot && lot.status === 'available'
+  const matches = lot ? rowsForLot(rows, lot).filter(x => x.row.role !== 'product') : []
+  const isProduct = !!lot && !matches.length && rowsForLot(rows, lot).length > 0
+  return (
+    <section className="bench-card check-bottle">
+      <h2 className="fld-cap">Check a bottle</h2>
+      <button className={`btn bench-big${answer ? '' : ' primary'}`} onClick={() => setScanning(true)}>{answer ? 'Scan another bottle' : 'Scan a bottle'}</button>
+      <div role="status" className="stack" style={{ gap: 8 }}>
+        {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
+        {said && <p className="sp-note" style={{ margin: 0 }}><span>{said}</span></p>}
+        {answer && !lot && (answer.lots.length ? <>
+          <p className="check-line"><b>{answer.lots.length} bottles</b> have this barcode. Which one is in your hand?</p>
+          {answer.lots.map(l => <button key={l.id} className="btn lot-pick" onClick={() => setPicked(l.id)}>
+            <b>{l.material.name}</b><span>{fmt(l.amount, 3)} {unitLabel(l.unit)}</span>
+            <span className="faint">{[l.location || 'no location', l.status, l.supplier].filter(Boolean).join(' · ')}</span></button>)}
+        </> : answer.record ? <p className="check-line">{answer.record.code} is {answer.record.kind === 'sample' ? `a sample of ${answer.record.experiment}` : `${answer.record.kind === 'experiment' ? 'an experiment' : 'a material'}, ${answer.record.title}`}, not a bottle.{' '}
+          <Link to={answer.record.kind === 'material' ? `/materials/${answer.record.id}` : `/experiments/${answer.record.id}`}>Open it</Link></p>
+          : <p className="check-line">No lot has the barcode <b>{answer.code}</b>.</p>)}
+        {lot && <>
+          {problem && <p className="risk-warn danger bottle-bad" style={{ margin: 0 }}>{problem}</p>}
+          <p className="check-line">This bottle: <b>{lot.material.name}</b>, {fmt(lot.amount, 3)} {unitLabel(lot.unit)} left{lot.location ? ` · ${lot.location}` : ''}
+            <span className="faint" style={{ display: 'block' }}>{lot.barcode}{lot.purity != null ? ` · ${lot.purity} %` : ''}</span></p>
+          {matches.map(({ row, index }) => <div key={index} className="stack" style={{ gap: 6 }}>
+            <p className="check-line"><b>{rowLine(row)}</b></p>
+            {row.lot_id === lot.id ? <p className="faint" style={{ margin: 0 }}>The reaction table already uses this bottle for it.</p> : <>
+              <p className="faint" style={{ margin: 0 }}>{row.lot_id ? 'The reaction table names a different bottle for it.' : 'The reaction table names no bottle for it yet.'}
+                {lot.purity != null && lot.purity !== row.purity ? ` This one is ${lot.purity} % pure (the table has ${row.purity ?? 100} %), so the amount to weigh changes.` : ''}</p>
+              {(row as { deducted?: unknown }).deducted ? <p className="faint" style={{ margin: 0 }}>Its amount was already taken from another bottle; undo that in the full experiment first.</p>
+                : editable && usable && <button className="btn primary bench-big" disabled={busy} onClick={() => use(index)}>{busy ? 'Saving…' : 'Use this bottle for it'}</button>}
+            </>}
+          </div>)}
+          {!matches.length && (isProduct ? <p className="check-line">This bottle is {lot.material.name}, this reaction's product.</p>
+            : rows.length ? <p className="risk-warn warning bottle-bad" style={{ margin: 0 }}>This bottle is {lot.material.name}, which isn't in this reaction.</p>
+            : <p className="faint" style={{ margin: 0 }}>This experiment has no reaction table to check it against.</p>)}
+        </>}
+      </div>
+      {scanning && <Scanner title="Check a bottle" onClose={() => setScanning(false)} onCode={lookUp} />}
+    </section>
+  )
+}
+
 const QUICK = ['Started heating', 'Added dropwise', 'TLC taken', 'Colour change', 'Quenched', 'Work-up started']
 const PRESETS = [5, 10, 15, 30, 60]
 
@@ -101,6 +178,8 @@ export default function BenchPage() {
           <TimerTray compact />
         </section>
       </>}
+
+      <CheckBottle exp={exp} editable={editable} reload={load} />
 
       {rx && <section className="bench-card">
         <h2 className="fld-cap">Reaction</h2>

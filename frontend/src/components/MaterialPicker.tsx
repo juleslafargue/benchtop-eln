@@ -6,8 +6,9 @@ import { LookupBox, LookupCard, type LookupResult } from './Safety'
 
 interface Usual { id: number; mid: string; name: string; formula: string; mw: number | null; smiles: string; kind: string; uses: number; role: StoichRow['role']; last_lot_id: number | null; last_used: string }
 
-export default function MaterialPicker({ onPick, onLookup, onClose }: {
+export default function MaterialPicker({ onPick, onLookup, onClose, title = 'Add from registry', withRole = true }: {
   onPick: (m: Material, role: StoichRow['role']) => void; onLookup?: (r: LookupResult, role: StoichRow['role']) => void; onClose: () => void
+  title?: string; withRole?: boolean  // withRole: the "as reagent" choice, for a reaction table
 }) {
   const [found, setFound] = useState<LookupResult | null>(null)
   const [regErr, setRegErr] = useState('')
@@ -22,20 +23,20 @@ export default function MaterialPicker({ onPick, onLookup, onClose }: {
   const pick = async (m: Material) => onPick(await api.get<Material>(`/api/materials/${m.id}`), role)
 
   return (
-    <Modal title="Add from registry" onClose={onClose} footer={<button className="btn" onClick={onClose}>Close</button>}>
+    <Modal title={title} onClose={onClose} footer={<button className="btn" onClick={onClose}>Close</button>}>
       <div className="row" style={{ marginBottom: 10 }}>
-        <input className="input grow" autoFocus placeholder="Name, CAS or formula" value={q} onChange={e => setQ(e.target.value)} />
-        <select className="select" value={role} onChange={e => setRole(e.target.value as StoichRow['role'])} aria-label="Add as">
+        <input className="input grow" autoFocus placeholder="Name, CAS or formula" aria-label="Find a material" value={q} onChange={e => setQ(e.target.value)} />
+        {withRole && <select className="select" value={role} onChange={e => setRole(e.target.value as StoichRow['role'])} aria-label="Add as">
           <option value="reactant">as reactant</option><option value="reagent">as reagent</option>
           <option value="catalyst">as catalyst</option><option value="solvent">as solvent</option>
-        </select>
+        </select>}
       </div>
       {!q && usual.length > 0 && <div className="usual">
         <div className="fld-cap">Your usual</div>
         <div className="usual-chips">{usual.map(u => (
           <button key={u.id} className="usual-chip" title={`${u.mid} · used in ${u.uses} reaction${u.uses === 1 ? '' : 's'}, usually as ${u.role} · adds as ${u.role}${u.last_lot_id ? ', with the lot you used last' : ''}`}
             onClick={async () => onPick({ ...(await api.get<Material>(`/api/materials/${u.id}`)), preferred_lot_id: u.last_lot_id } as Material, u.role)}>
-            {u.name}<span className="faint"> · {u.role}</span></button>))}</div>
+            {u.name}{withRole && <span className="faint"> · {u.role}</span>}</button>))}</div>
       </div>}
       <ul className="list" style={{ maxHeight: 360, overflowY: 'auto' }}>
         {items.map(m => (

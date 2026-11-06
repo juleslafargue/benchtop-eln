@@ -214,6 +214,8 @@ def demo_accounts():
 # Serve the built single-page app when BENCHTOP_STATIC_DIR is set (Docker image does this)
 if settings.static_dir and Path(settings.static_dir).is_dir():
     static = Path(settings.static_dir)
+    import mimetypes
+    mimetypes.add_type("application/wasm", ".wasm")  # the barcode reader (0.32); some systems' tables lack it
     app.mount("/assets", StaticFiles(directory=static / "assets"), name="assets")
 
     @app.get("/{path:path}", include_in_schema=False)
