@@ -218,6 +218,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += numbers_and_network(browser, tok["hweiss"])
         problems += polish(browser, tok["hweiss"])
         problems += cut_short_lists(browser, tok["hweiss"])
+        problems += scanning(browser, tok["slaurent"])
         browser.close()
     return problems
 
@@ -1624,6 +1625,265 @@ def cut_short_lists(browser, admin_token: str) -> list[tuple[str, str, str, str]
     except Exception as e:  # noqa: BLE001
         bad("inbox", str(e).splitlines()[0][:160])
     ctx.close()
+    return found
+
+
+def _qr_video(text: str, path: Path, w: int = 640, h: int = 480) -> None:
+    """A camera's view of a QR code, as a Y4M file Chrome can use as its fake camera."""
+    import segno
+    m = segno.make(text, error="m").matrix  # rows of 0/1, without the quiet zone
+    n = len(m)
+    mod = min(w, h) // (n + 12)
+    ox, oy = (w - n * mod) // 2, (h - n * mod) // 2
+    y = bytearray([225]) * (w * h)
+    for r in range(n):
+        for c in range(n):
+            if m[r][c]:
+                for dy in range(mod):
+                    start = (oy + r * mod + dy) * w + ox + c * mod
+                    y[start:start + mod] = bytes([30]) * mod
+    uv = bytes([128]) * ((w // 2) * (h // 2))
+    with open(path, "wb") as f:
+        f.write(f"YUV4MPEG2 W{w} H{h} F10:1 Ip A1:1 C420jpeg\n".encode())
+        for _ in range(5):
+            f.write(b"FRAME\n" + bytes(y) + uv + uv)
+
+
+def scanning(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """0.32: scanning a bottle's barcode. On the Inventory page: a code typed (as a USB scanner types it) shows the bottle,
+    whose status is then changed, and Scan next opens the scanner again; an unknown code is added as a new lot with the
+    barcode filled in; a second bottle with the same barcode needs Add anyway; an experiment number opens it. On a
+    phone over plain http (no live camera there) the photo of a barcode is read, offline, by the decoder Benchtop
+    serves itself; the bench page's Check a bottle says which row it's for and uses it for that row, never over an
+    edit made elsewhere, and warns about a bottle that isn't in the reaction. On a secure page the live camera reads
+    a code and is turned off. Every check fails without the 0.32 scanner."""
+    print("Scanning: Inventory, the add-lot form, a photo on the phone's bench page, and the live camera…", flush=True)
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": ""}
+
+    def bad(kind: str, what: str) -> None:
+        found.append(("scanning", where["path"], kind, what[:220]))
+
+    def material(name: str, **kw) -> dict:
+        r = httpx.post(B + "/api/materials", headers=H, json={"name": name, **kw})
+        if r.status_code == 409:  # the demo lab has this structure already
+            mid = int(re.search(r"MAT-(\d+)", r.json()["detail"]).group(1))
+            return httpx.get(f"{B}/api/materials/{mid}", headers=H).json()
+        return r.json()
+
+    def lot(mat: dict, barcode: str, **kw) -> dict:
+        return httpx.post(f"{B}/api/materials/{mat['id']}/lots", headers=H, json={"barcode": barcode, "amount": 25, "unit": "g", **kw}).json()
+
+    def scan_api(code: str) -> list[dict]:
+        return httpx.get(B + "/api/scan", headers=H, params={"code": code}).json()["lots"]
+
+    fluoro = material("Scan check 2-bromo-5-fluoropyridine", smiles="Fc1ccc(Br)nc1")
+    hexanes = material("Scan check hexanes", kind="solvent", density=0.66)
+    a1 = lot(fluoro, "SMOKE-VIM-0001", purity=97, location="Shelf 2")
+    a2 = lot(fluoro, "SMOKE-VIM-0002", purity=99.5, location="Shelf 3", supplier="Combi-Blocks")
+    lot(hexanes, "SMOKE-VIM-0003", location="Solvent cabinet")
+    lot(fluoro, "SMOKE-VIM-0004", expires_at="2020-01-01T00:00:00")
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Scanning check"}).json()
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Pyridine coupling", "notebook_id": nb["id"]}).json()
+    rows = [{"role": "reactant", "name": "Benzoic acid", "smiles": "OC(=O)c1ccccc1", "limiting": True, "basis": "mass", "mass_mg": 122.12},
+            {"role": "reagent", "name": fluoro["name"], "smiles": fluoro["smiles"], "material_id": fluoro["id"], "lot_id": a1["id"],
+             "purity": 97, "equiv": 1.2, "basis": "equiv"}]
+    httpx.post(f"{B}/api/experiments/{exp['id']}/entries", headers=H, json={"kind": "reaction", "title": "Coupling", "content": {"rows": rows}})
+    entry = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["title"] == "Coupling")
+
+    def page(**kw):
+        ctx = browser.new_context(**kw)
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+        pg = ctx.new_page()
+        pg.on("pageerror", lambda e: bad("page error", str(e)))
+        # a 409 is expected here twice: the second bottle with a barcode, and the reaction table changed elsewhere
+        pg.on("console", lambda m: m.type == "error" and not any(i in m.text for i in IGNORE + ("409 (Conflict)",)) and bad("console error", m.text))
+        return ctx, pg
+
+    def type_code(pg, code: str) -> None:
+        pg.wait_for_selector("#scan-typed")
+        pg.fill("#scan-typed", code)
+        pg.keyboard.press("Enter")
+
+    # ---- Inventory, on a desktop: a barcode scanner types the code and presses Enter
+    ctx, pg = page(viewport={"width": 1400, "height": 900})
+    try:
+        where["path"] = "/inventory"
+        pg.goto(B + "/inventory")
+        pg.click("button:text-is('Scan')")
+        pg.wait_for_selector("dialog.modal #scan-typed")
+        if pg.evaluate("document.activeElement && document.activeElement.id") != "scan-typed":
+            bad("focus", "the code box doesn't have the keyboard focus, so a USB scanner's typing goes elsewhere")
+        if pg.locator(".scan-view video").is_visible():
+            bad("camera", "the camera started by itself on a desktop")
+        type_code(pg, " smoke-vim-0002\t")
+        pg.wait_for_selector(".lot-card", timeout=10000)
+        card = pg.inner_text(".lot-card")
+        if fluoro["name"] not in card or "SMOKE-VIM-0002" not in card or "Shelf 3" not in card or "25 g" not in card:
+            bad("card", f"the scanned bottle's card says {card[:160]!r}")
+        pg.select_option(".lot-card select", "empty")
+        pg.wait_for_selector("text=Saved. Marked empty.", timeout=10000)
+        if scan_api("SMOKE-VIM-0002")[0]["status"] != "empty":
+            bad("status", "marking the scanned bottle empty didn't reach the server")
+        if "This bottle is marked empty." not in pg.inner_text(".lot-card"):
+            bad("status", "the card of an empty bottle doesn't say so")
+        httpx.patch(f"{B}/api/lots/{a2['id']}", headers=H, json={"status": "available"})
+        pg.click("button:text-is('Scan next')")
+        pg.wait_for_selector("dialog.modal #scan-typed")
+        # a code no lot has: add it as a new lot, barcode filled in
+        type_code(pg, "SMOKE-NEW-0042")
+        pg.wait_for_selector("text=No lot has the barcode", timeout=10000)
+        pg.click("button:text-is('Add as a new lot…')")
+        pg.fill("dialog.modal input[aria-label='Find a material']", "Scan check hexanes")
+        pg.click("dialog.modal .list-row:has-text('Scan check hexanes')", timeout=10000)
+        pg.wait_for_selector("#lot-barcode")
+        if pg.input_value("#lot-barcode") != "SMOKE-NEW-0042":
+            bad("add lot", f"the new lot's barcode box holds {pg.input_value('#lot-barcode')!r}, not the scanned code")
+        pg.fill("dialog.modal input[aria-label='Amount']", "500")
+        pg.keyboard.press("Tab")
+        pg.click("dialog.modal button:text-is('Add lot')")
+        pg.wait_for_timeout(1000)
+        new = scan_api("SMOKE-NEW-0042")
+        if len(new) != 1 or new[0]["material_id"] != hexanes["id"]:
+            bad("add lot", f"after Add lot, the code finds {len(new)} lot(s)")
+        # an experiment's number opens it
+        pg.click("button:text-is('Scan')")
+        type_code(pg, exp["eid"])
+        pg.wait_for_url(f"**/experiments/{exp['id']}", timeout=10000)
+
+        # ---- the add-lot form: a barcode another bottle has needs Add anyway
+        where["path"] = f"/materials/{fluoro['id']}"
+        pg.goto(f"{B}/materials/{fluoro['id']}")
+        pg.click("button:text-is('Receive lot')")
+        pg.fill("dialog.modal input[aria-label='Amount']", "5")
+        pg.keyboard.press("Tab")
+        pg.fill("#lot-barcode", "SMOKE-VIM-0001")
+        pg.click("dialog.modal button:text-is('Add lot')")
+        pg.wait_for_selector(".dup-warn", timeout=10000)
+        warn = pg.inner_text(".dup-warn")
+        if f"{fluoro['mid']}-L{a1['id']:04d}" not in warn or "already has this barcode" not in warn:
+            bad("duplicate", f"the warning says {warn[:160]!r}")
+        if len(scan_api("SMOKE-VIM-0001")) != 1:
+            bad("duplicate", "a second bottle with the same barcode was added without asking")
+        pg.click(".dup-warn button:text-is('Add anyway')")
+        pg.wait_for_timeout(1000)
+        if len(scan_api("SMOKE-VIM-0001")) != 2:
+            bad("duplicate", "Add anyway didn't add the second bottle")
+        where["path"] = "/inventory"
+        pg.goto(B + "/inventory")
+        pg.click("button:text-is('Scan')")
+        type_code(pg, "SMOKE-VIM-0001")
+        pg.wait_for_selector("text=2 bottles", timeout=10000)
+        if pg.locator("dialog.modal .lot-pick").count() != 2:
+            bad("duplicate", "scanning a shared barcode doesn't list both bottles")
+    except Exception as e:  # noqa: BLE001
+        bad("inventory", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # ---- the phone's bench page over plain http: a photo of the barcode, read by the decoder Benchtop serves
+    where["path"] = f"/bench/{exp['id']}"
+    shot = Path(tempfile.mkdtemp(prefix="benchtop-scan-")) / "barcode.png"
+    import segno
+    segno.make("SMOKE-VIM-0002", error="m").save(str(shot), kind="png", scale=10, border=4)
+    ctx, pg = page(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    ctx.add_init_script("Object.defineProperty(window, 'isSecureContext', { get: () => false })")  # as at http://192.168.1.20:8000
+    fetched: list[str] = []
+    pg.on("request", lambda r: fetched.append(r.url))
+    try:
+        pg.goto(f"{B}/bench/{exp['id']}")
+        pg.click("button:text-is('Scan a bottle')")
+        pg.wait_for_selector("dialog.modal button:text-is('Take a photo of the barcode')")
+        if pg.locator(".scan-view").is_visible() or not pg.locator("text=Live scanning needs a secure (https) address").is_visible():
+            bad("http", "over plain http the scanner doesn't offer a photo instead of a live view")
+        pg.set_input_files("input[data-testid=scan-photo]", str(shot))
+        pg.wait_for_selector(".check-bottle >> text=This bottle:", timeout=20000)
+        text = pg.inner_text(".check-bottle")
+        if f"{fluoro['name']}, reagent, 1.2 eq: weigh" not in text or "names a different bottle" not in text:
+            bad("check", f"Check a bottle says {text[:200]!r}")
+        zx = [u for u in fetched if "zxing" in u]
+        if not any(u.endswith(".wasm") for u in zx) or any(not u.startswith(B) for u in zx):
+            bad("decoder", f"the decoder's files came from {sorted(set(u.split('/assets/')[0] for u in zx)) or 'nowhere'}")
+        # an edit made on the computer meanwhile isn't overwritten
+        cur = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["id"] == entry["id"])
+        meanwhile = httpx.put(f"{B}/api/entries/{entry['id']}", headers=H, json={
+            "content": {**cur["content"], "conditions": {"temperature_c": 80}}, "expected_version": cur["version"]})
+        if meanwhile.status_code != 200 or meanwhile.json()["version"] == cur["version"]:
+            bad("setup", f"the edit made elsewhere wasn't saved: {meanwhile.status_code} {meanwhile.text[:120]}")
+        pg.click("button:text-is('Use this bottle for it')")
+        pg.wait_for_selector("text=changed on another screen", timeout=10000)
+        after = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["id"] == entry["id"])
+        if after["content"]["rows"][1]["lot_id"] != a1["id"] or after["content"]["conditions"].get("temperature_c") != 80:
+            bad("conflict", "Use this bottle overwrote an edit made elsewhere")
+        pg.click("button:text-is('Use this bottle for it')")
+        pg.wait_for_selector("text=now uses this bottle", timeout=10000)
+        r = next(e for e in httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()["entries"] if e["id"] == entry["id"])["content"]["rows"][1]
+        if r["lot_id"] != a2["id"] or r["purity"] != 99.5:
+            bad("use", f"after Use this bottle the row has lot {r['lot_id']} at {r['purity']} % (expected {a2['id']} at 99.5 %)")
+        if "already uses this bottle" not in pg.inner_text(".check-bottle"):
+            bad("use", "after Use this bottle the card doesn't say the table uses it")
+        # a bottle that isn't in this reaction
+        pg.click("button:text-is('Scan another bottle')")
+        type_code(pg, "SMOKE-VIM-0003")
+        pg.wait_for_selector("text=which isn't in this reaction", timeout=10000)
+        if "This bottle is Scan check hexanes, which isn't in this reaction." not in pg.inner_text(".check-bottle"):
+            bad("not in reaction", "the warning doesn't name the bottle's material")
+        # an expired bottle of the right material: said plainly, and not offered for the row
+        pg.click("button:text-is('Scan another bottle')")
+        type_code(pg, "SMOKE-VIM-0004")
+        pg.wait_for_selector(".check-bottle >> text=This bottle expired on", timeout=10000)
+        if pg.locator("button:text-is('Use this bottle for it')").count():
+            bad("expired", "an expired bottle is offered for the reaction row")
+        over = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        if over > 2:
+            bad("too wide", f"the bench page is {over}px wider than the phone")
+    except Exception as e:  # noqa: BLE001
+        bad("bench", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # ---- the live camera, on a secure page: Chrome's fake camera films a QR code; the scanner reads it and stops the camera
+    where["path"] = "/inventory (live camera)"
+    video = shot.parent / "camera.y4m"
+    _qr_video("SMOKE-VIM-0003", video)
+    cam = browser.browser_type.launch(args=["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream",
+                                            f"--use-file-for-fake-video-capture={video}"])
+    try:
+        ctx = cam.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, permissions=["camera"])
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+        ctx.add_init_script("""(() => { const md = navigator.mediaDevices; if (!md) return; const get = md.getUserMedia.bind(md)
+            window.__streams = []; md.getUserMedia = async (c) => { const s = await get(c); window.__streams.push(s); return s } })()""")
+        on = "(window.__streams || []).flatMap(s => s.getTracks()).filter(t => t.readyState === 'live').length"
+        # closed before it reads anything (the decoder held back): the camera goes off with the dialog
+        pg = ctx.new_page()
+        held: list = []
+        pg.route("**/zxing_reader-*.wasm", lambda route: held.append(route))
+        pg.goto(B + "/inventory")
+        pg.click("button:text-is('Scan')")
+        pg.wait_for_selector(".scan-view video", state="visible", timeout=10000)
+        pg.wait_for_function("(window.__streams || []).length > 0", timeout=10000)
+        pg.keyboard.press("Escape")
+        pg.wait_for_timeout(500)
+        if pg.locator("dialog.modal").count() or pg.evaluate(on):
+            bad("camera left on", f"{pg.evaluate(on)} camera track(s) still on after the scanner was closed with Escape")
+        pg.unroute("**/zxing_reader-*.wasm")
+        for route in held:
+            route.abort()
+        pg.close()
+        # the camera films the code: its bottle is shown, and the camera is off
+        pg = ctx.new_page()
+        pg.on("pageerror", lambda e: bad("page error", str(e)))
+        pg.goto(B + "/inventory")
+        pg.click("button:text-is('Scan')")
+        pg.wait_for_selector(".lot-card", timeout=20000)
+        if "Scan check hexanes" not in pg.inner_text(".lot-card"):
+            bad("live", "the live camera's code didn't show its bottle")
+        if pg.evaluate(on) or not pg.evaluate("(window.__streams || []).length"):
+            bad("camera left on", f"{pg.evaluate(on)} camera track(s) still on after the code was read")
+        ctx.close()
+    except Exception as e:  # noqa: BLE001
+        bad("live camera", str(e).splitlines()[0][:160])
+    finally:
+        cam.close()
     return found
 
 

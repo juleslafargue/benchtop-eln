@@ -49,12 +49,16 @@ export interface ScannedLot extends Lot {
 export interface ScanRecord { kind: 'experiment' | 'material' | 'sample'; id: number; code: string; title: string; experiment?: string }
 export interface ScanAnswer { code: string; lots: ScannedLot[]; record: ScanRecord | null }
 
+/** An expiry date as it was entered: stored as midnight UTC, so it's shown in UTC (a browser west of Greenwich would
+ *  otherwise show the day before). */
+export const expiryDay = (iso: string) => day(new Date(new Date(iso).getTime() + new Date(iso).getTimezoneOffset() * 60_000))
+
 /** Why this bottle shouldn't be used, said plainly; null when nothing is wrong with it. */
 export function lotProblem(lot: Pick<Lot, 'status' | 'expires_at'>, now: Date = new Date()): string | null {
   if (lot.status === 'empty') return 'This bottle is marked empty.'
   if (lot.status === 'disposed') return 'This bottle was disposed of.'
   if (lot.status === 'quarantined') return "This bottle is quarantined: don't use it until someone clears it."
-  if (lot.expires_at && new Date(lot.expires_at).getTime() < now.getTime()) return `This bottle expired on ${day(lot.expires_at)}.`
+  if (lot.expires_at && new Date(lot.expires_at).getTime() < now.getTime()) return `This bottle expired on ${expiryDay(lot.expires_at)}.`
   return null
 }
 

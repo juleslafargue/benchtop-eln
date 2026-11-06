@@ -153,6 +153,8 @@ test("what's wrong with a bottle", () => {
   assert.equal(m.lotProblem({ status: 'empty', expires_at: null }, now), 'This bottle is marked empty.')
   assert.equal(m.lotProblem({ status: 'disposed', expires_at: null }, now), 'This bottle was disposed of.')
   assert.match(m.lotProblem({ status: 'quarantined', expires_at: null }, now), /quarantined/)
+  // stored as midnight UTC: the day entered, in any time zone (not 31 Aug west of Greenwich)
+  assert.equal(m.expiryDay('2026-09-01T00:00:00Z'), new Date(2026, 8, 1).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))
 })
 
 const row = (o) => ({ role: 'reagent', name: '', formula: '', smiles: '', mw: null, material_id: null, lot_id: null, equiv: null, mmol: null,

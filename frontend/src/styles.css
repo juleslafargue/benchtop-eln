@@ -1159,7 +1159,8 @@ textarea.exp-title-input { resize: none; overflow: hidden; display: block; line-
 .scan-type .input { min-width: 0; font-size: 16px; }  /* 16px: a phone doesn't zoom in on it */
 .scan-choice { display: flex; justify-content: space-between; gap: 10px; width: 100%; text-align: left; overflow-wrap: anywhere; }
 .lot-card { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 12px 16px; align-items: start; }
-.lot-card .mat-thumb { width: 128px; height: 96px; }
+.lot-card .mat-thumb { width: 128px; height: 96px; position: relative; }
+.lot-card .mat-thumb img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); max-width: none; max-height: none; object-fit: contain; }
 .lot-card h3 { font-size: 17px; margin: 0 0 2px; overflow-wrap: anywhere; }
 .lot-card .kv { grid-template-columns: 92px minmax(0, 1fr); font-size: 14px; }
 .lot-card .lot-acts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1168,7 +1169,7 @@ textarea.exp-title-input { resize: none; overflow: hidden; display: block; line-
 .lot-problem { grid-column: 1 / -1; margin: 0; }
 .lot-pick { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; width: 100%; text-align: left; padding: 10px 12px; }
 .lot-pick .faint { grid-column: 1 / -1; }
-.dup-warn { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin-top: 12px; font-size: 14px; }
+.dup-warn { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin-top: 12px; font-size: 14px; color: var(--ink); }
 .dup-warn p { margin: 0; }
 .check-line { font-size: 15.5px; margin: 0; overflow-wrap: anywhere; }
 .check-line b { font-weight: 600; }

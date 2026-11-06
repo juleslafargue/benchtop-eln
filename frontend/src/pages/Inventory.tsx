@@ -7,7 +7,7 @@ import Modal from '../components/Modal'
 import MaterialPicker from '../components/MaterialPicker'
 import Scanner from '../components/Scanner'
 import { SafetyBadge, SignalWord } from '../components/Safety'
-import { lotProblem, type ScanAnswer, type ScannedLot } from '../scan'
+import { expiryDay, lotProblem, type ScanAnswer, type ScannedLot } from '../scan'
 import { LotForm, LotHistory } from './MaterialDetail'
 
 function AdjustDialog({ lot, onClose, onDone }: { lot: Lot; onClose: () => void; onDone: () => void }) {
@@ -60,7 +60,7 @@ function LotCard({ lot, canWrite, onAdjust, onChanged }: {
           <dt>Location</dt><dd>{lot.location || <span className="faint">not given</span>}</dd>
           <dt>Status</dt><dd style={{ textTransform: 'capitalize' }}>{lot.status}</dd>
           {lot.supplier && <><dt>Supplier</dt><dd>{lot.supplier}{lot.catalog_number ? ` · ${lot.catalog_number}` : ''}</dd></>}
-          {lot.expires_at && <><dt>Expires</dt><dd>{day(lot.expires_at)}</dd></>}
+          {lot.expires_at && <><dt>Expires</dt><dd>{expiryDay(lot.expires_at)}</dd></>}
           {(lot.safety?.pictograms?.length || lot.safety?.signal) ? <><dt>Hazards</dt><dd className="row" style={{ gap: 6 }}>
             <SafetyBadge s={lot.safety} /><SignalWord signal={lot.safety?.signal || ''} /></dd></> : null}
         </dl>
@@ -99,7 +99,7 @@ function ScanResult({ answer, canWrite, onClose, onScanNext, onAddLot, onReload 
       {lot && answer.lots.length > 1 && <button className="btn ghost" onClick={() => { setPicked(null); setDone('') }}>Other bottles</button>}
       <span className="grow" />
       <button className="btn" onClick={onClose}>Close</button>
-      <button ref={next} className="btn primary" onClick={onScanNext}>Scan next</button></>}>
+      <button ref={next} className="btn primary" autoFocus onClick={onScanNext}>Scan next</button></>}>
       <div role="status" className="stack" style={{ gap: 12 }}>
         {done && <p className="sp-note"><span>Saved. {done}</span></p>}
         {lot ? <LotCard key={`${lot.id}-${lot.status}-${lot.location}`} lot={lot} canWrite={canWrite} onAdjust={() => setAdjust(lot)} onChanged={changed} />

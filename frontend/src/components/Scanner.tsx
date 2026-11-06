@@ -159,7 +159,7 @@ export default function Scanner({ title = 'Scan a barcode', intro, onCode, onClo
         <input ref={fileInput} type="file" accept="image/*" capture="environment" hidden aria-label="Photo of the barcode"
           data-testid="scan-photo" onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) fromPhoto(f) }} />
         {(!live || cam === 'error') && <>
-          <button className={`btn${touch || !live ? ' primary bench-big' : ''}`} onClick={takePhoto} disabled={photo.state === 'reading'}>
+          <button className={`btn${touch ? ' primary bench-big' : ''}`} onClick={takePhoto} disabled={photo.state === 'reading'}>
             {photo.state === 'none' || photo.state === 'error' ? 'Take another photo' : 'Take a photo of the barcode'}</button>
           {!live && <p className="faint scan-why">Live scanning needs a secure (https) address; take a photo of the barcode instead.</p>}
         </>}

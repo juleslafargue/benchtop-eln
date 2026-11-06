@@ -97,7 +97,10 @@ export default function Guide() {
           Typing “30 min stir” in the log starts one too.</li>
         <li><kbd>P</kbd> shows a QR code that opens the experiment on your phone, already signed in, to take photos, log
           notes and run timers. The phone has to be able to reach Benchtop (usually the same network); the
-          dialog tells you if it can't.</li>
+          dialog tells you if it can't. There, <b>Check a bottle</b> scans a bottle's barcode and tells you which row of
+          the reaction it's for and what to weigh, or that it isn't in the reaction, or is empty or expired.</li>
+        <li><b>Scan</b> on the <Link to="/inventory">Inventory</Link> page reads a bottle's barcode (with the camera, a
+          photo or a USB barcode scanner) and shows how much is left and where it is, to record use or move it.</li>
         <li><b>Draft write-up</b> turns the reaction table, conditions, work-up and characterisation into an
           experimental paragraph to copy or add as a section. It lists what's missing rather than guessing.</li>
       </ul>

@@ -43,7 +43,7 @@ function CheckBottle({ exp, editable, reload }: { exp: Experiment; editable: boo
   }
 
   const problem = lot ? lotProblem(lot) : null
-  const usable = !!lot && lot.status === 'available'
+  const usable = !!lot && !problem  // never offered for an empty, disposed, quarantined or expired bottle
   const matches = lot ? rowsForLot(rows, lot).filter(x => x.row.role !== 'product') : []
   const isProduct = !!lot && !matches.length && rowsForLot(rows, lot).length > 0
   return (
@@ -69,7 +69,7 @@ function CheckBottle({ exp, editable, reload }: { exp: Experiment; editable: boo
             <p className="check-line"><b>{rowLine(row)}</b></p>
             {row.lot_id === lot.id ? <p className="faint" style={{ margin: 0 }}>The reaction table already uses this bottle for it.</p> : <>
               <p className="faint" style={{ margin: 0 }}>{row.lot_id ? 'The reaction table names a different bottle for it.' : 'The reaction table names no bottle for it yet.'}
-                {lot.purity != null && lot.purity !== row.purity ? ` This one is ${lot.purity} % pure (the table has ${row.purity ?? 100} %), so the amount to weigh changes.` : ''}</p>
+                {editable && usable && lot.purity != null && lot.purity !== row.purity ? ` This one is ${lot.purity} % pure (the table has ${row.purity ?? 100} %); using it works the amounts out again.` : ''}</p>
               {(row as { deducted?: unknown }).deducted ? <p className="faint" style={{ margin: 0 }}>Its amount was already taken from another bottle; undo that in the full experiment first.</p>
                 : editable && usable && <button className="btn primary bench-big" disabled={busy} onClick={() => use(index)}>{busy ? 'Saving…' : 'Use this bottle for it'}</button>}
             </>}
