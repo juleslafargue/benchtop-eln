@@ -114,6 +114,23 @@ def restore_and_upgrade(name: str, root: Path) -> dict:
     return {"data": data, "old_db": root / "old.db", "log": r.stderr}
 
 
+# Bytes 92-99 of an SQLite file's header: "version-valid-for" (92-95) and SQLITE_VERSION_NUMBER (96-99)
+SQLITE_VERSION_STAMP = range(92, 100)
+
+
+def same_sqlite_data(a: bytes, b: bytes) -> bool:
+    """Two SQLite database files are the same byte for byte, except for the version stamp in the header (bytes 92-99).
+
+    SQLite writes its own version number there whenever it writes a file. A backup made with SQLite's backup API (as
+    Benchtop's are) is a new file, so it carries the version of the SQLite that made it, not of the one that made the
+    original: a test machine with a newer SQLite (GitHub's, in November 2026) gives a backup whose data is unchanged
+    but whose stamp differs. Everything else must match: the length, the page size and every other byte."""
+    if len(a) != len(b):
+        return False
+    skip = SQLITE_VERSION_STAMP
+    return a[:skip.start] == b[:skip.start] and a[skip.stop:] == b[skip.stop:]
+
+
 def tables(db: Path) -> dict[str, tuple[list[str], list[tuple]]]:
     with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as c:
         names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
@@ -145,7 +162,7 @@ def test_upgrade_from(name, tmp_path):
         assert len(made) == 1, up["log"]
         with zipfile.ZipFile(made[0]) as z:
             m = json.loads(z.read("manifest.json"))
-            assert z.read("benchtop.db") == old_db.read_bytes(), "the backup before the upgrade isn't the old data"
+            assert same_sqlite_data(z.read("benchtop.db"), old_db.read_bytes()), "the backup before the upgrade isn't the old data"
         assert m["reason"] == "before-upgrade" and (m.get("schema_version") or 0) == old_v
     else:
         assert made == [], "a backup before an upgrade when nothing was due"
@@ -182,6 +199,42 @@ def health_check(data: Path) -> str:
     for part in ("Database file", "Database version", "Audit trail", "Signed records", "Attached files"):
         assert f"✓ {part}" in r.stdout, r.stdout
     return r.stdout
+
+
+def test_same_sqlite_data_skips_only_the_version_stamp(tmp_path):
+    """0.31.0: the check that a backup before an upgrade holds the old data skips the 8 bytes where SQLite stamps its
+    own version, and nothing else."""
+    db = tmp_path / "small.db"
+    with sqlite3.connect(db) as c:
+        c.execute("CREATE TABLE t (x TEXT)")
+        c.executemany("INSERT INTO t VALUES (?)", [(f"yield {i}%",) for i in range(500)])
+    c.close()
+    a = db.read_bytes()
+    assert len(a) > 4096 and int.from_bytes(a[16:18], "big") > 0  # a header and more than one page
+
+    def changed(offset: int) -> bytes:
+        b = bytearray(a)
+        b[offset] ^= 0xFF
+        return bytes(b)
+    assert same_sqlite_data(a, a)
+    stamped = bytearray(a)
+    stamped[92:100] = (12345).to_bytes(4, "big") + (3099001).to_bytes(4, "big")  # another SQLite's stamp
+    assert same_sqlite_data(a, bytes(stamped)) and same_sqlite_data(bytes(stamped), a)
+    for offset in (0, 16, 24, 91, 100, len(a) // 2, len(a) - 1):  # the header outside 92-99, and data pages
+        assert not same_sqlite_data(a, changed(offset)), offset
+    assert not same_sqlite_data(a, a + bytes(4096))  # a page more
+    assert not same_sqlite_data(a, a[:-4096])  # a page fewer
+    # as in the upgrade test: the old data is itself a backup, and the backup before the upgrade is a backup of it.
+    # (SQLite's backup API also restarts the change counter, bytes 24-27, so only a backup of a backup matches.)
+    def backup(frm: Path, to: Path) -> bytes:
+        src, dst = sqlite3.connect(frm), sqlite3.connect(to)
+        with dst:
+            src.backup(dst)
+        src.close()
+        dst.close()
+        return to.read_bytes()
+    first = backup(db, tmp_path / "first.db")
+    assert same_sqlite_data(first, backup(tmp_path / "first.db", tmp_path / "second.db"))
 
 
 def test_an_older_benchtop_still_refuses_the_upgraded_data(tmp_path):
