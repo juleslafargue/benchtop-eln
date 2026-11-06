@@ -49,7 +49,8 @@ exposed to the internet. In short, on the lab Mac:
 2. Run `./benchtop lab`, then, in a second Terminal window, `tailscale serve --bg localhost:8000`. It prints
    the address people open, `https://<mac-name>.<tailnet>.ts.net`, and keeps serving after restarts.
 3. Put `BENCHTOP_PUBLIC_URL=https://<mac-name>.<tailnet>.ts.net` in `backend/data/settings.env` and start
-   `./benchtop lab` again, so phone QR codes and email links use the Tailscale address.
+   `./benchtop lab` again, so phone QR codes and email links use the Tailscale address. Being https, it also lets
+   phones scan barcodes with the live camera (on plain `http` they take a photo of the barcode instead).
 
 [FROM-HOME.md](FROM-HOME.md) has the full step-by-step. It is also the page to hand labmates: how to set
 up Tailscale on their laptop and phone, and what to check when it doesn't load.

@@ -27,7 +27,7 @@ You don't need a new Benchtop account: use the one you have in the lab.
 
 Everything works as in the lab: writing up, spectra, signing and witnessing. Signing still asks for your password.
 
-**On your phone:** turn on the Tailscale app, then open the same address. Pressing **P** on an experiment also gives a QR code that opens it on your phone; the phone needs Tailscale on for that, in the lab too.
+**On your phone:** turn on the Tailscale app, then open the same address. Pressing **P** on an experiment also gives a QR code that opens it on your phone; the phone needs Tailscale on for that, in the lab too. On this https address, scanning a bottle's barcode uses the phone's live camera; on the lab's plain `http` address it takes a photo of the barcode instead.
 
 ## If it doesn't load
 
