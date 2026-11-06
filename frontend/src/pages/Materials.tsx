@@ -121,12 +121,12 @@ export default function Materials() {
             <li key={m.id}>
               <Link to={`/materials/${m.id}`} className="list-row mat-row">
                 <span className="mat-thumb">{m.smiles && <Mol smiles={m.smiles} w={192} h={116} />}</span>
-                <span><b style={{ fontWeight: 600 }}>{m.name}</b><span className="faint" style={{ display: 'block' }}>{m.mid} · {m.kind}</span></span>
+                <span className="mat-name"><b style={{ fontWeight: 600 }}>{m.name}</b><span className="faint" style={{ display: 'block' }}>{m.mid} · {m.kind}</span></span>
                 <span className="hide-sm muted">{m.formula}</span>
                 <span className="hide-sm muted">{m.cas}</span>
                 <span className="hide-sm"><SafetyBadge s={m.safety} /></span>
-                <span className="muted">{fmt(m.mw, 2)}</span>
-                <span className="faint">{m.available_lots} lot{m.available_lots === 1 ? '' : 's'}</span>
+                <span className="muted mat-side">{fmt(m.mw, 2)}</span>
+                <span className="faint mat-side">{m.available_lots} lot{m.available_lots === 1 ? '' : 's'}</span>
               </Link>
             </li>
           ))}

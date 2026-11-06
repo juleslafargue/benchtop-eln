@@ -403,8 +403,12 @@ table.plain td.num { text-align: right; }
   .exp-head { grid-template-columns: minmax(0, 1fr); }
   .exp-head .status-card { justify-self: start; align-items: flex-start; text-align: left; min-width: 0; width: min(100%, 300px); }
   .exp-title, .exp-title-input { font-size: 25px; }
-  .mat-row { grid-template-columns: 72px minmax(0, 1fr) auto; }
+  /* picture and name on the left; the weight above the lot count on the right, both beside the name */
+  .mat-row { grid-template-columns: 72px minmax(0, 1fr) auto; row-gap: 2px; }
   .mat-row > span { min-width: 0; overflow-wrap: anywhere; }
+  .mat-row > .mat-thumb { width: 72px; height: 44px; grid-row: span 2; }
+  .mat-row > .mat-name { grid-row: span 2; }
+  .mat-row > .mat-side { grid-column: 3; text-align: right; }
   .mat-row .hide-sm { display: none; }
   .timeline li { grid-template-columns: 1fr; gap: 2px; }
 }

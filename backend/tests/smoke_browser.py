@@ -185,6 +185,21 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
                 over = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
                 if over > 2:
                     note("too wide", f"page is {over}px wider than the screen")
+                # 0.31.1: the parts of a list row never cover each other (on a phone, the Materials pictures were wider
+                # than their column and covered the start of each name, from 0.7.3 to 0.31.0)
+                clash = pg.evaluate("""() => {
+                    for (const row of document.querySelectorAll('.list-row')) {
+                        const parts = [...row.children].map(k => [k, k.getBoundingClientRect()]).filter(([, r]) => r.width && r.height)
+                        for (let i = 0; i < parts.length; i++) for (let j = i + 1; j < parts.length; j++) {
+                            const [a, ra] = parts[i], [b, rb] = parts[j]
+                            const x = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left)
+                            const y = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top)
+                            if (x > 1 && y > 1) return `"${(a.innerText || a.className).trim().slice(0, 40)}" and "${(b.innerText || b.className).trim().slice(0, 40)}" overlap by ${Math.round(x)}px`
+                        }
+                    }
+                    return '' }""")
+                if clash:
+                    note("overlap", f"in a list row, {clash}")
                 if label == "desktop" and (path.startswith("/experiments/") or path == "/reactions"):
                     # 0.28 showed "AE 139%" (a co-reactant marked as Reagent); records signed back then still hold it
                     ae = [float(x) for x in re.findall(r"(?:Atom economy|AE|RME)\s*(\d+(?:\.\d+)?)\s*%", pg.inner_text("body"))]
