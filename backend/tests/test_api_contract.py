@@ -443,7 +443,7 @@ def test_lots_usage_and_reversal(client, me, nb, other):
 
 def test_scan_and_duplicate_barcodes(client, me, nb, other):
     w, r = me["write"], me["read"]
-    m = client.post("/api/materials", headers=w, json={"name": "Contract scan toluene", "smiles": "Cc1ccccc1", "density": 0.867}).json()
+    m = client.post("/api/materials", headers=w, json={"name": "Contract scan toluene", "kind": "solvent", "density": 0.867}).json()
     lot = client.post(f"/api/materials/{m['id']}/lots", headers=w, json={"barcode": "CT-SCAN-1", "amount": 1, "unit": "L"}).json()
     s = client.get("/api/scan", headers=r, params={"code": " ct-scan-1\r\n"})
     assert s.status_code == 200, s.text
