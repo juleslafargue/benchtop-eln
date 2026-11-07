@@ -22,6 +22,7 @@ export function useBackTarget(to: string | null, label: string) {
 
 function parentOf(path: string): Target {
   if (/^\/materials\/\d+/.test(path)) return { to: '/materials', label: 'Materials' }
+  if (/^\/si\/\d+/.test(path)) return { to: '/si', label: 'Supporting information' }
   if (/^\/experiments\/\d+/.test(path)) return { to: '/', label: 'Dashboard' }
   return { to: '/', label: 'Dashboard' }
 }

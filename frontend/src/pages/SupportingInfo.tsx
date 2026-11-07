@@ -130,7 +130,7 @@ function SiEditor({ id }: { id: number }) {
   useEffect(() => () => clearTimeout(timer.current), [])
 
   const byExp = useMemo(() => new Map((doc?.compounds || []).map(c => [c.experiment_id, c])), [doc])
-  if (err) return <div className="stack"><BackToList /><p className="error">{err}</p></div>
+  if (err) return <p className="error">{err}</p>
   if (!doc || !draft) return <p className="faint">Loading…</p>
 
   const items = draft.items
@@ -194,7 +194,6 @@ function SiEditor({ id }: { id: number }) {
 
   return (
     <div className="stack si-page" style={{ gap: 18 }}>
-      <BackToList />
       <div className="spread">
         <div style={{ minWidth: 0, flex: '1 1 320px' }}>
           <h1 className="page-title">{draft.title || 'Untitled'}</h1>
@@ -292,7 +291,6 @@ function SiEditor({ id }: { id: number }) {
   )
 }
 
-const BackToList = () => <div><Link to="/si" className="btn ghost sm">← All documents</Link></div>
 
 /** The structure as a PNG, drawn at three times its size so it prints sharply. */
 async function structurePng(smiles: string): Promise<SiImage> {

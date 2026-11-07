@@ -62,7 +62,7 @@ def checks(entries: list[Entry], draft: dict[str, Any], status: ExperimentStatus
     if not any(it.get("attachment_id") for it in c):
         out.append("no ¹³C NMR spectrum file")
     if any(it.get("attachment_id") and not (it.get("analysis") or {}).get("integrals") for it in h):
-        out.append("the ¹H spectrum has no saved integrals (the figure uses automatic ones; check them in the spectrum viewer)")
+        out.append("¹H integrals not saved (the figure uses automatic ones)")
     return out
 
 

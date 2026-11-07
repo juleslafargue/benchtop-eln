@@ -437,6 +437,7 @@ def _methods(lab: Lab, NB, tpl):
     lab.pins["dcho"] = [e["id"]]
 
     # substrate scope, same SOP
+    scope_ids: list[int] = []
     scope = [
         ("4-Bromoanisole", "COc1ccc(Br)cc1", "4-Methoxybiphenyl", "COc1ccc(-c2ccccc2)cc1", 187.0, 84, "White solid", "86–88 °C", "0.45 (10% EtOAc/hexanes)", "", 1),
         ("4-Bromobenzonitrile", "N#Cc1ccc(Br)cc1", "Biphenyl-4-carbonitrile", "N#Cc1ccc(-c2ccccc2)cc1", 182.0, 91, "White solid", "85–86 °C", "0.40 (10% EtOAc/hexanes)", "", 2),
@@ -475,6 +476,15 @@ def _methods(lab: Lab, NB, tpl):
         if seed <= 5:
             lab.witness("slaurent" if seed % 2 else "mruiz", e, days=1.5)
         day -= 3 if seed < 6 else 2
+        scope_ids.append(e["id"])
+
+    # the paper's supporting information (0.33), started from the scope entries
+    si = lab.c.post("/api/si-documents", headers=lab.h("dcho"), json={"title": "Suzuki couplings of aryl bromides under the group SOP"}).json()
+    lab.c.put(f"/api/si-documents/{si['id']}", headers=lab.h("dcho"), json={
+        "expected_version": si["version"], "items": [{"experiment_id": i, "number": f"3{'abcdefg'[k]}"} for k, i in enumerate(scope_ids)],
+        "general": "All reactions were run under nitrogen in oven-dried vials. Reagents were used as received; 1,4-dioxane was dried over "
+                   "4 Å molecular sieves. Flash column chromatography used silica gel (40–63 µm).\n\n"
+                   "NMR spectra were recorded at 298 K on a 400 MHz spectrometer and referenced to the residual solvent signal."})
 
     # a voided record
     yield (57, 15)

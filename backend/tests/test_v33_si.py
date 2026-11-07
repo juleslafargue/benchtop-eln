@@ -161,7 +161,7 @@ def test_what_a_journal_will_ask_for_is_listed(client, users, notebook):
     doc = new_doc(client, a)
     doc = put(client, a, doc, items=[{"experiment_id": e["id"], "number": n} for e, n in ((full, "1"), (bare, "2a"), (oil, "3"))]).json()
     p = {c["number"]: c["problems"] for c in doc["compounds"]}
-    no_integrals = "the ¹H spectrum has no saved integrals (the figure uses automatic ones; check them in the spectrum viewer)"
+    no_integrals = "¹H integrals not saved (the figure uses automatic ones)"
     assert p["1"] == ["not signed yet", no_integrals]
     assert p["2a"] == ["not signed yet", "no ¹³C NMR data", "no HRMS (or elemental analysis)",
                        "no melting point (it's a white solid)", "no ¹H NMR spectrum file", "no ¹³C NMR spectrum file"]

@@ -69,7 +69,7 @@ export async function buildSiDocx(m: SiModel): Promise<Uint8Array> {
     body.push(heading(1, [new TextRun('General information')], 'general', true))
     for (const para of m.general) {
       const lines = para.split('\n')
-      body.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: lines.map((l, i) => new TextRun({ text: l, break: i ? 1 : undefined })) }))
+      body.push(new Paragraph({ alignment: AlignmentType.LEFT, children: lines.map((l, i) => new TextRun({ text: l, break: i ? 1 : undefined })) }))
     }
   }
 
@@ -77,9 +77,9 @@ export async function buildSiDocx(m: SiModel): Promise<Uint8Array> {
   body.push(heading(1, [new TextRun('Experimental procedures and characterisation data')], 'experimental', true))
   for (const p of m.parts) {
     body.push(heading(2, nameAndNumber(p.name, p.number, true), p.anchor))
-    if (p.structure) body.push(new Paragraph({ alignment: AlignmentType.CENTER, keepNext: true, children: [picture(p.structure, Math.min(textWidth * 0.42, 260))] }))
-    if (p.experimental.length) body.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: runs(p.experimental) }))
-    if (p.characterisation.length) body.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: runs(p.characterisation) }))
+    if (p.structure) body.push(new Paragraph({ alignment: AlignmentType.CENTER, keepNext: true, children: [picture(p.structure, Math.min(textWidth * 0.36, 220))] }))
+    if (p.experimental.length) body.push(new Paragraph({ alignment: AlignmentType.LEFT, children: runs(p.experimental) }))
+    if (p.characterisation.length) body.push(new Paragraph({ alignment: AlignmentType.LEFT, children: runs(p.characterisation) }))
   }
 
   // spectra, drawn as the spectrum viewer draws them

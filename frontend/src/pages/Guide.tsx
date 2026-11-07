@@ -103,6 +103,9 @@ export default function Guide() {
           photo or a USB barcode scanner) and shows how much is left and where it is, to record use or move it.</li>
         <li><b>Draft write-up</b> turns the reaction table, conditions, work-up and characterisation into an
           experimental paragraph to copy or add as a section. It lists what's missing rather than guessing.</li>
+        <li>For a paper, the <Link to="/si">Supporting information</Link> page builds the whole SI as a Word file: add
+          the experiment each compound was made in and type its number (3a); each one's procedure, characterisation
+          data, structure and spectra go in, and a check lists what journals usually ask for that's still missing.</li>
       </ul>
     </>,
     instruments: <>

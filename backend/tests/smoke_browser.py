@@ -114,7 +114,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
     mats = mats["items"] if isinstance(mats, dict) else mats
     nbs = httpx.get(B + "/api/notebooks", headers=H).json()
     pages = (["/", "/guide", "/templates", "/materials", f"/materials/{mats[0]['id']}", "/inventory", "/search?q=suzuki", "/reactions",
-              "/compounds", "/account", "/groups"] + [f"/notebooks/{n['id']}" for n in nbs]
+              "/compounds", "/si", "/account", "/groups"] + [f"/notebooks/{n['id']}" for n in nbs]
              + [f"/experiments/{e['id']}" for e in exps] + [f"/bench/{exps[0]['id']}", "/inbox"])
     # Admin's tabs (0.26), each at its own address
     ADMIN = ["/admin"] + [f"/admin/{t}" for t in ("backups", "instruments", "email", "signing", "integrations", "audit")]
@@ -219,6 +219,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += polish(browser, tok["hweiss"])
         problems += cut_short_lists(browser, tok["hweiss"])
         problems += scanning(browser, tok["slaurent"])
+        problems += supporting_info(browser, tok["slaurent"])
         browser.close()
     return problems
 
@@ -1884,6 +1885,97 @@ def scanning(browser, token: str) -> list[tuple[str, str, str, str]]:
         bad("live camera", str(e).splitlines()[0][:160])
     finally:
         cam.close()
+    return found
+
+
+def supporting_info(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """0.33: a Supporting Information document made on its page from two demo-lab experiments with NMR files: the check
+    list shows, the Word file is built in the browser and downloads (a real .docx with the compounds' text and at least
+    one spectrum picture), and the page fits a phone."""
+    print("Supporting information: a document, its check list, the Word file, on a phone…", flush=True)
+    import io
+    import zipfile
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": "/si"}
+
+    def bad(kind: str, text: str) -> None:
+        found.append(("supporting info", where["path"], kind, text))
+    # two experiments this person can open whose characterisation has an NMR spectrum file
+    picks = []
+    for e in httpx.get(B + "/api/experiments?limit=200", headers=H).json():
+        full = httpx.get(f"{B}/api/experiments/{e['id']}", headers=H).json()
+        items = [it for en in full["entries"] if en["kind"] == "characterization" for it in en["content"].get("items", [])]
+        if any("NMR" in (it.get("technique") or "") and it.get("attachment_id") for it in items):
+            picks.append(e)
+        if len(picks) == 2:
+            break
+    if not picks:
+        print("  (no experiment with an NMR file here; skipped)")
+        return found
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900}, accept_downloads=True)
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    pg.on("pageerror", lambda e: bad("page error", str(e)[:200]))
+    doc_id = None
+    try:
+        pg.goto(B + "/si")
+        pg.fill(".si-new input", "Smoke-test couplings")
+        pg.click(".si-new button:has-text('New document')")
+        pg.wait_for_url(re.compile(r"/si/\d+$"), timeout=15000)
+        doc_id = int(pg.url.rsplit("/", 1)[1])
+        where["path"] = f"/si/{doc_id}"
+        for e in picks:
+            pg.click("button:has-text('Add a compound')")
+            pg.fill("input[aria-label='Find an experiment']", e["eid"])
+            pg.click(f".si-pick-list button:has-text('{e['eid']}')")
+            pg.click("dialog button:has-text('Done')")
+        pg.fill(".si-compound >> nth=0 >> input.si-num", "3a")
+        pg.wait_for_function("document.querySelector('.lede')?.textContent.endsWith('saved') && document.querySelectorAll('.si-compound .si-from a').length === 2", timeout=15000)
+        saved = httpx.get(f"{B}/api/si-documents/{doc_id}", headers=H).json()
+        if [it["experiment_id"] for it in saved["items"]] != [e["id"] for e in picks] or saved["items"][0]["number"] != "3a":
+            bad("saving", f"the server has {saved['items']}")
+        check = pg.inner_text(".si-check")
+        if "Before you download" not in check or not ("3a:" in check or "Nothing missing" in check):
+            bad("check list", f"it says: {check[:200]}")
+        with pg.expect_download(timeout=90000) as dl:
+            pg.click("button:has-text('Download Word file')")
+        d = dl.value
+        if not d.suggested_filename.startswith("SI – Smoke-test couplings") or not d.suggested_filename.endswith(".docx"):
+            bad("file name", d.suggested_filename)
+        z = zipfile.ZipFile(io.BytesIO(Path(d.path()).read_bytes()))
+        xml = z.read("word/document.xml").decode()
+        text = re.sub(r"<[^>]+>", "", xml)
+        for want in ("Supporting Information", "Smoke-test couplings", "Experimental procedures and characterisation data", "3a"):
+            if want not in text:
+                bad("word file", f"no “{want}” in it")
+        spectra = [n for n in z.namelist() if n.startswith("word/media/") and n.endswith(".png") and z.getinfo(n).file_size > 20_000]
+        if not spectra:
+            bad("word file", "no spectrum picture in it")
+        pg.wait_for_selector("[role=status]:has-text('Downloaded')", timeout=10000)
+    except Exception as e:  # noqa: BLE001
+        bad("error", str(e).splitlines()[0][:160])
+    ctx.close()
+    if doc_id is None:
+        return found
+    # a phone: the page fits, and the document can still be built from it
+    where["path"] = f"/si/{doc_id} (phone)"
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    try:
+        pg.goto(f"{B}/si/{doc_id}")
+        pg.wait_for_selector(".si-compound .si-from a", timeout=15000)
+        pg.wait_for_load_state("networkidle")
+        over = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        if over > 2:
+            bad("too wide", f"page is {over}px wider than the screen")
+        if not pg.is_visible("button:has-text('Download Word file')"):
+            bad("phone", "no Download Word file button")
+    except Exception as e:  # noqa: BLE001
+        bad("error", str(e).splitlines()[0][:160])
+    ctx.close()
+    httpx.delete(f"{B}/api/si-documents/{doc_id}", headers=H)
     return found
 
 
