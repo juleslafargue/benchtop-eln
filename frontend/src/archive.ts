@@ -1,10 +1,13 @@
-/** The yearly archive (0.34): what the page says and decides, as plain data. No imports, so `npm test` checks it
+/** The archive PDF (0.34): what the page says and decides, as plain data. No imports, so `npm test` checks it
  *  directly; pages/Archive.tsx draws the spectra (spectrumDraw.ts) and talks to the server. */
 
 export type PageSize = 'letter' | 'a4'
-export interface Choices { year: number | null; notebook_id: number | null; author_id: number | null; page_size: PageSize }
+/** From and To are days ('2026-11-03'), both included, in this browser's calendar. */
+export interface Choices { from: string; to: string; notebook_id: number | null; author_id: number | null; page_size: PageSize }
 export interface Counts { records: number; witnessed: number; awaiting_witness: number; voided: number }
-export interface Preview extends Counts { files: number | null; scope: string; year: number }
+export interface Preview extends Counts {
+  files: number | null; scope: string; title: string; label: string; phrase: string; from_date: string; to_date: string
+}
 export interface ArchiveSpectrum {
   attachment_id: number; experiment_id: number; eid: string; filename: string; size: number; sha256: string
   technique: string; conditions: string; analysis: unknown
@@ -13,13 +16,13 @@ export interface ArchiveSpectrum {
 }
 export type JobState = 'drawing' | 'queued' | 'building' | 'done' | 'stopped' | 'failed'
 export interface ArchiveJob {
-  id: string; state: JobState; params: Choices & { year: number }; scope: string; counts: Counts; title: string; file_name: string
+  id: string; state: JobState; scope: string; counts: Counts; title: string; file_name: string
+  params: { from_date: string; to_date: string; tz: string; notebook_id: number | null; author_id: number | null; page_size: PageSize }
   progress: { done: number; total: number; message: string }; error: string; pages: number | null; bytes: number | null
   created_at: string; spectra_total: number; spectra_done: number; spectra_drawn: number; spectra?: ArchiveSpectrum[]
 }
 export interface Options {
-  years: { year: number; records: number }[]; notebooks: { id: number; name: string }[]; authors: { id: number; name: string }[]
-  job: ArchiveJob | null
+  notebooks: { id: number; name: string }[]; authors: { id: number; name: string }[]; job: ArchiveJob | null
 }
 
 /** Spectra in the archive: the viewer's Export PNG drawing, at about 300 dpi across the width of a page
@@ -35,20 +38,65 @@ export function countLine(c: Counts): string {
   return `${plural(c.records, 'record')}: ${parts.join(', ')}`
 }
 
-/** The query for GET /api/archive/preview. */
-export function previewQuery(c: Choices): string {
+// ------------------------------------------------------------------ the days it covers
+
+const pad = (n: number) => String(n).padStart(2, '0')
+/** A day in this browser's calendar, as '2026-11-03'. */
+export const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+const dayOf = (s: string) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d) }
+const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)
+
+export interface QuickPick { label: string; from: string; to: string }
+
+/** The quick choices: this week (from Monday) and last week, this month and last, this year and last, and the four most
+ *  recent full calendar years. "This …" runs to today: nothing is signed in the future. */
+export function quickPicks(now = new Date()): QuickPick[] {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const monday = addDays(today, -((today.getDay() + 6) % 7))
+  const y = today.getFullYear(), m = today.getMonth()
+  const span = (label: string, a: Date, b: Date): QuickPick => ({ label, from: ymd(a), to: ymd(b) })
+  return [
+    span('This week', monday, today),
+    span('Last week', addDays(monday, -7), addDays(monday, -1)),
+    span('This month', new Date(y, m, 1), today),
+    span('Last month', new Date(y, m - 1, 1), new Date(y, m, 0)),
+    span('This year', new Date(y, 0, 1), today),
+    span('Last year', new Date(y - 1, 0, 1), new Date(y - 1, 11, 31)),
+    ...[1, 2, 3, 4].map(k => span(String(y - k), new Date(y - k, 0, 1), new Date(y - k, 11, 31))),
+  ]
+}
+
+/** What the page starts with: this year so far. */
+export const defaultSpan = (now = new Date()): QuickPick => quickPicks(now).find(p => p.label === 'This year')!
+
+/** Why From and To can't be used as they are, or '' when they can. */
+export function rangeProblem(from: string, to: string): string {
+  const ok = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && ymd(dayOf(s)) === s
+  if (!ok(from) || !ok(to)) return 'Choose a “From” and a “To” day.'
+  if (from > to) return '“From” is later than “To”: choose a “From” day on or before the “To” day.'
+  return ''
+}
+
+/** When From starts and the day after To starts, by this browser's clock, in UTC: what the server compares signing
+ *  times with, so a week is this person's week wherever Benchtop runs (and across a change of the clocks). */
+export function instants(from: string, to: string): { start: string; end: string } {
+  return { start: dayOf(from).toISOString(), end: addDays(dayOf(to), 1).toISOString() }
+}
+
+/** The days and the choices, as POST /api/archive/jobs takes them. */
+export function spanBody(c: Choices, tz = ''): Record<string, string | number | null> {
+  return { from_date: c.from, to_date: c.to, ...instants(c.from, c.to), tz, notebook_id: c.notebook_id, author_id: c.author_id,
+    page_size: c.page_size }
+}
+
+/** The query for GET /api/archive/preview: the same, without the page size. */
+export function previewQuery(c: Choices, tz = ''): string {
   const q = new URLSearchParams()
-  if (c.year != null) q.set('year', String(c.year))
-  if (c.notebook_id != null) q.set('notebook_id', String(c.notebook_id))
-  if (c.author_id != null) q.set('author_id', String(c.author_id))
+  for (const [k, v] of Object.entries(spanBody(c, tz))) if (v != null && v !== '' && k !== 'page_size') q.set(k, String(v))
   return q.toString()
 }
 
-/** The year to offer first: the one asked for if it has records, else the latest with records, else this year. */
-export function defaultYear(years: { year: number }[], asked: number | null, now = new Date()): number {
-  if (asked != null && years.some(y => y.year === asked)) return asked
-  return years.length ? Math.max(...years.map(y => y.year)) : now.getUTCFullYear()
-}
+// ------------------------------------------------------------------ the job
 
 /** The spectra still to draw, in order (on reopening the page, those drawn before are kept). */
 export const toDraw = (spectra: ArchiveSpectrum[]) => spectra.filter(s => !s.done)

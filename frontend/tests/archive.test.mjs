@@ -1,11 +1,16 @@
-// 0.34: the yearly archive page's helpers (src/archive.ts): what it says about the records and the job, the
-// choices it sends, and which spectra are left to draw when the page is opened again.
+// 0.34: the archive PDF page's helpers (src/archive.ts): the quick choices of days, From and To checked, the instants
+// sent to the server (in this browser's time zone), what it says about the records and the job, and which spectra are
+// left to draw when the page is opened again. Run in Vancouver's time zone, so a day isn't a UTC day.
+process.env.TZ = 'America/Vancouver'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { active, countLine, defaultYear, fraction, megabytes, previewQuery, PRINT, progressLine, toDraw } from '../src/archive.ts'
+import {
+  active, countLine, defaultSpan, fraction, instants, megabytes, previewQuery, PRINT, progressLine, quickPicks, rangeProblem, spanBody, toDraw,
+} from '../src/archive.ts'
 
 const job = (over = {}) => ({ state: 'drawing', progress: { done: 0, total: 85, message: '' }, spectra_total: 140, spectra_done: 11, error: '', ...over })
+const picks = now => Object.fromEntries(quickPicks(now).map(p => [p.label, `${p.from}..${p.to}`]))
 
 test('the count line says how many records and of which kind', () => {
   assert.equal(countLine({ records: 85, witnessed: 70, awaiting_witness: 12, voided: 3 }), '85 records: 70 witnessed, 12 awaiting witness, 3 voided')
@@ -13,17 +18,48 @@ test('the count line says how many records and of which kind', () => {
   assert.equal(countLine({ records: 0, witnessed: 0, awaiting_witness: 0, voided: 0 }), 'No records')
 })
 
-test('the choices go to the server as they are, and only those made', () => {
-  assert.equal(previewQuery({ year: 2026, notebook_id: null, author_id: null, page_size: 'a4' }), 'year=2026')
-  assert.equal(previewQuery({ year: 2025, notebook_id: 4, author_id: 7, page_size: 'letter' }), 'year=2025&notebook_id=4&author_id=7')
+test('quick choices: this and last week (from Monday), month and year, and the four full years before', () => {
+  // Saturday 7 November 2026, late in the evening in Vancouver (already Sunday in UTC)
+  assert.deepEqual(picks(new Date('2026-11-08T06:30:00Z')), {
+    'This week': '2026-11-02..2026-11-07', 'Last week': '2026-10-26..2026-11-01',
+    'This month': '2026-11-01..2026-11-07', 'Last month': '2026-10-01..2026-10-31',
+    'This year': '2026-01-01..2026-11-07', 'Last year': '2025-01-01..2025-12-31',
+    2025: '2025-01-01..2025-12-31', 2024: '2024-01-01..2024-12-31', 2023: '2023-01-01..2023-12-31', 2022: '2022-01-01..2022-12-31',
+  })
+  assert.deepEqual(quickPicks(new Date(2026, 10, 7)).map(p => p.label),
+    ['This week', 'Last week', 'This month', 'Last month', 'This year', 'Last year', '2025', '2024', '2023', '2022'])
 })
 
-test('the year offered first: the one asked for, else the latest with records, else this year', () => {
-  const years = [{ year: 2026 }, { year: 2024 }]
-  assert.equal(defaultYear(years, 2024), 2024)
-  assert.equal(defaultYear(years, 2019), 2026)
-  assert.equal(defaultYear(years, null), 2026)
-  assert.equal(defaultYear([], null, new Date('2031-03-01T00:00:00Z')), 2031)
+test('quick choices at the edges: a Monday, a Sunday, the 1st of January, a leap February', () => {
+  const mon = picks(new Date(2026, 10, 2, 9))
+  assert.equal(mon['This week'], '2026-11-02..2026-11-02')
+  assert.equal(mon['Last week'], '2026-10-26..2026-11-01')
+  assert.equal(picks(new Date(2026, 10, 8, 23, 59))['This week'], '2026-11-02..2026-11-08')
+  const jan1 = picks(new Date(2027, 0, 1, 0, 5))
+  assert.equal(jan1['This year'], '2027-01-01..2027-01-01')
+  assert.equal(jan1['Last month'], '2026-12-01..2026-12-31')
+  assert.equal(jan1['Last week'], '2026-12-21..2026-12-27')
+  assert.equal(picks(new Date(2024, 2, 10))['Last month'], '2024-02-01..2024-02-29')
+  assert.deepEqual(defaultSpan(new Date(2026, 10, 7)), { label: 'This year', from: '2026-01-01', to: '2026-11-07' })
+})
+
+test('From later than To is refused plainly; so is a day that is not a day', () => {
+  assert.equal(rangeProblem('2026-11-03', '2026-11-09'), '')
+  assert.equal(rangeProblem('2026-11-03', '2026-11-03'), '')
+  assert.match(rangeProblem('2026-11-09', '2026-11-03'), /“From” is later than “To”/)
+  assert.match(rangeProblem('', '2026-11-03'), /Choose a “From” and a “To” day/)
+  assert.match(rangeProblem('2026-02-30', '2026-03-03'), /Choose/)
+})
+
+test('the days go to the server as this browser\'s midnights, in UTC, across a change of the clocks too', () => {
+  assert.deepEqual(instants('2026-11-03', '2026-11-09'), { start: '2026-11-03T08:00:00.000Z', end: '2026-11-10T08:00:00.000Z' })
+  // clocks go back on 1 November 2026 in Vancouver: the first midnight is at UTC−7, the last at UTC−8
+  assert.deepEqual(instants('2026-10-26', '2026-11-08'), { start: '2026-10-26T07:00:00.000Z', end: '2026-11-09T08:00:00.000Z' })
+  const c = { from: '2026-11-03', to: '2026-11-09', notebook_id: 4, author_id: null, page_size: 'a4' }
+  assert.deepEqual(spanBody(c, 'America/Vancouver'), { from_date: '2026-11-03', to_date: '2026-11-09', start: '2026-11-03T08:00:00.000Z',
+    end: '2026-11-10T08:00:00.000Z', tz: 'America/Vancouver', notebook_id: 4, author_id: null, page_size: 'a4' })
+  assert.equal(previewQuery(c, 'America/Vancouver'), 'from_date=2026-11-03&to_date=2026-11-09&start=2026-11-03T08%3A00%3A00.000Z'
+    + '&end=2026-11-10T08%3A00%3A00.000Z&tz=America%2FVancouver&notebook_id=4')
 })
 
 test('what the page says while it works', () => {
@@ -64,7 +100,8 @@ test('the page draws with the viewer\'s own code, never a copy of it, and is rea
   assert.match(page, /import \{ prepareSpectrum, spectrumPng \} from '\.\.\/spectrumDraw'/)
   assert.doesNotMatch(page, /drawSpectrum\(/)
   assert.match(page, /canViewSpectrum/)
+  assert.match(page, /type="date"/, 'From and To are days')
   assert.match(readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8'), /<Route path="\/archive" element=\{<Archive \/>\} \/>/)
-  assert.match(readFileSync(new URL('../src/pages/Account.tsx', import.meta.url), 'utf8'), /to="\/archive">Yearly archive</)
+  assert.match(readFileSync(new URL('../src/pages/Account.tsx', import.meta.url), 'utf8'), /to="\/archive">Archive PDF</)
   assert.match(readFileSync(new URL('../src/pages/NotebookPage.tsx', import.meta.url), 'utf8'), /to=\{`\/archive\?notebook=\$\{nb\.id\}`\}/)
 })

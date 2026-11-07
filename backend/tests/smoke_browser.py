@@ -1982,12 +1982,12 @@ def supporting_info(browser, token: str) -> list[tuple[str, str, str, str]]:
 
 
 def yearly_archive(browser, token: str, record_token: str) -> list[tuple[str, str, str, str]]:
-    """0.34: a yearly archive of the demo lab, made on its page: the browser draws every spectrum and uploads it, the
+    """0.34: an archive PDF of the demo lab (this year so far), made on its page: the browser draws every spectrum and uploads it, the
     server lays out the PDF, it downloads; the PDF is PDF/A as far as pikepdf can tell (GitHub's tests then run veraPDF
     on it), holds every record's number, at least one spectrum picture and each record's data. A record's Download PDF
     is checked the same way. The page fits a phone, before and after. With BENCHTOP_PDF_SAMPLES set, both PDFs are
     saved there for veraPDF."""
-    print("Yearly archive: drawing the demo lab's spectra, laying out the PDF, on a phone…", flush=True)
+    print("Archive PDF: drawing the demo lab's spectra, laying out the PDF, on a phone…", flush=True)
     sys.path.insert(0, str(BACKEND / "tests"))
     import pdfa_checks
     H = {"Authorization": "Bearer " + token}
@@ -1998,7 +1998,7 @@ def yearly_archive(browser, token: str, record_token: str) -> list[tuple[str, st
         samples.mkdir(parents=True, exist_ok=True)
 
     def bad(kind: str, text: str) -> None:
-        found.append(("yearly archive", where["path"], kind, text))
+        found.append(("archive PDF", where["path"], kind, text))
 
     def watch(pg) -> None:
         pg.on("pageerror", lambda e: bad("page error", str(e)[:200]))
@@ -2022,12 +2022,6 @@ def yearly_archive(browser, token: str, record_token: str) -> list[tuple[str, st
         ctx.close()
 
     phone_fits("before")
-    opts = httpx.get(B + "/api/archive/options", headers=H).json()
-    if not opts["years"]:
-        bad("options", "the demo lab has no signed records to archive")
-        return found
-    year = opts["years"][0]["year"]
-    expect = httpx.get(f"{B}/api/archive/preview?year={year}", headers=H).json()
     ctx = browser.new_context(viewport={"width": 1300, "height": 900}, accept_downloads=True)
     ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
     pg = ctx.new_page()
@@ -2036,14 +2030,31 @@ def yearly_archive(browser, token: str, record_token: str) -> list[tuple[str, st
     try:
         pg.goto(B + "/archive")
         pg.wait_for_selector(".archive-count b", timeout=20000)
+        # From later than To: said at once, and nothing can be made
+        pg.fill("input[type=date] >> nth=0", "2026-11-09")
+        pg.fill("input[type=date] >> nth=1", "2026-11-03")
+        pg.wait_for_selector(".archive-count:has-text('later than')", timeout=5000)
+        if pg.is_enabled("button:has-text('Make the archive')"):
+            bad("from after to", "the Make the archive button still works")
+        # the demo lab's records are from the last few months: the 400 days to today hold them all, whatever today is
+        today = time.strftime("%Y-%m-%d")
+        first = time.strftime("%Y-%m-%d", time.localtime(time.time() - 400 * 86400))
+        with pg.expect_response(lambda r: f"/api/archive/preview?from_date={first}&to_date={today}" in r.url and r.status == 200,
+                                timeout=20000) as resp:
+            pg.fill("input[type=date] >> nth=1", today)
+            pg.fill("input[type=date] >> nth=0", first)
+        expect = resp.value.json()
+        pg.wait_for_selector(".archive-count b", timeout=20000)
         shown = pg.inner_text(".archive-count")
+        if not expect["records"]:
+            bad("count", "the demo lab has no signed records in the last 400 days")
         if f"{expect['records']} record" not in shown:
             bad("count", f"the page says “{shown}”, the server {expect['records']} records")
         with pg.expect_download(timeout=300000) as dl:
             pg.click("button:has-text('Make the archive')")
             pg.wait_for_selector(".archive-job progress", timeout=20000)
         d = dl.value
-        if not d.suggested_filename.startswith(f"Benchtop records {year}") or not d.suggested_filename.endswith(".pdf"):
+        if d.suggested_filename != f"{expect['title']}.pdf":
             bad("file name", d.suggested_filename)
         pdf = Path(d.path()).read_bytes()
         if samples:

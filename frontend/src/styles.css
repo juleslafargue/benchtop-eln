@@ -1536,7 +1536,9 @@ table.rxn-grid .used { display: inline-flex; flex-wrap: wrap; align-items: cente
   .si-moves { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
 }
 
-/* Yearly archive (0.34) */
+/* Archive PDF (0.34) */
+.archive-picks { gap: 6px; }
+.archive-picks .chip { padding: 3px 10px; font-size: 13px; }
 .archive-page { max-width: 900px; }
 .archive-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 14px; }
 .archive-fields .select { width: 100%; min-width: 0; }

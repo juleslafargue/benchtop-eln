@@ -156,7 +156,7 @@ jobs:
       - name: Open every page
         working-directory: backend
         env:
-          BENCHTOP_PDF_SAMPLES: /tmp/pdf-samples  # the yearly archive and a record's PDF it makes, for the next step
+          BENCHTOP_PDF_SAMPLES: /tmp/pdf-samples  # the archive PDF and a record's PDF it makes, for the next step
         run: python tests/smoke_browser.py
       - uses: actions/setup-java@v4
         with:

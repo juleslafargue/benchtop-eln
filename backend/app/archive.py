@@ -1,7 +1,9 @@
-"""The yearly archive (0.34): one archival PDF (PDF/A-3b) of a year's signed records, made to be printed and kept.
+"""The archive PDF (0.34): one archival PDF (PDF/A-3b) of the records signed over a span of days, made to be printed
+and kept: a year, a month, a week ("one week of records from one notebook").
 
-What goes in: records signed in a calendar year (UTC) that the person may open, optionally from one notebook and/or by
-one author, in the order they were signed. Witnessed and awaiting-witness records both count. Voided records go in,
+What goes in: records signed from one day to another (both included, in the person's own calendar days: the browser
+sends the instants its days start and end) that the person may open, optionally from one notebook and/or by one
+author, in the order they were signed. Witnessed and awaiting-witness records both count. Voided records go in,
 marked VOIDED with the reason and date (one voided before it was ever signed goes by the date it was voided). Drafts,
 templates and records imported read-only from other notebooks are left out.
 
@@ -28,7 +30,9 @@ import secrets
 import shutil
 import threading
 import time
-from datetime import datetime, timezone
+import calendar
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -58,6 +62,99 @@ class ArchiveError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status = status
+
+
+# ====================================================================== the days it covers
+
+MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November",
+          "December")
+MAX_DAYS = 366 * 50
+
+
+def _day(d: date) -> str:
+    return f"{d.day} {MONTHS[d.month - 1]} {d.year}"
+
+
+def _naive_utc(v: datetime) -> datetime:
+    return v.astimezone(timezone.utc).replace(tzinfo=None) if v.tzinfo else v
+
+
+@dataclass(frozen=True)
+class Span:
+    """From one day to another, both included. `start` and `end` are when the first day starts and the day after the
+    last starts, in UTC (as signatures are stored), as the person's own clock has them; `tz` names that clock."""
+    first: date
+    last: date
+    start: datetime
+    end: datetime
+    tz: str = "UTC"
+
+    @classmethod
+    def make(cls, first: date, last: date, start: datetime | None = None, end: datetime | None = None, tz: str = "") -> "Span":
+        if first > last:
+            raise ArchiveError(422, "“From” is later than “To”: choose a “From” day on or before the “To” day")
+        if (last - first).days > MAX_DAYS:
+            raise ArchiveError(422, "That's more than 50 years: choose a shorter span")
+        midnight = lambda d: datetime(d.year, d.month, d.day)  # noqa: E731
+        try:
+            s = _naive_utc(start) if start else midnight(first)
+            e = _naive_utc(end) if end else midnight(last + timedelta(days=1))
+            # the browser's own midnights are within a day of UTC's (time zones run from −12 to +14 hours)
+            ok = abs(s - midnight(first)) <= timedelta(hours=15) and abs(e - midnight(last + timedelta(days=1))) <= timedelta(hours=15)
+        except (OverflowError, ValueError):
+            ok = False
+        if not ok or s >= e:
+            raise ArchiveError(422, "The start and end times don't match the days chosen")
+        tz = re.sub(r"[^A-Za-z0-9_+\-/]", "", tz or "")[:64] or ("UTC" if not start else "local time")
+        return cls(first, last, s, e, tz)
+
+    @classmethod
+    def year(cls, y: int) -> "Span":
+        return cls.make(date(y, 1, 1), date(y, 12, 31))
+
+    def holds(self, when: datetime) -> bool:
+        return self.start <= when < self.end
+
+    @property
+    def whole_year(self) -> bool:
+        return self.first == date(self.first.year, 1, 1) and self.last == date(self.first.year, 12, 31)
+
+    def label(self) -> str:
+        """2026; November 2026; 3 November 2026; 3–9 November 2026; 28 October – 3 November 2026;
+        15 December 2025 – 4 January 2026."""
+        a, b = self.first, self.last
+        if self.whole_year:
+            return str(a.year)
+        if a.day == 1 and a.year == b.year and a.month == b.month and b.day == calendar.monthrange(b.year, b.month)[1]:
+            return f"{MONTHS[a.month - 1]} {a.year}"
+        if a == b:
+            return _day(a)
+        if a.year == b.year and a.month == b.month:
+            return f"{a.day}–{b.day} {MONTHS[a.month - 1]} {a.year}"
+        if a.year == b.year:
+            return f"{a.day} {MONTHS[a.month - 1]} – {_day(b)}"
+        return f"{_day(a)} – {_day(b)}"
+
+    def title(self) -> str:
+        return f"Benchtop records {self.label()}" if self.whole_year else f"Benchtop records, {self.label()}"
+
+    def phrase(self) -> str:
+        """For a sentence: "in 2026", "on 3 November 2026", "from 3 to 9 November 2026"."""
+        if self.whole_year:
+            return f"in {self.first.year}"
+        if self.first == self.last:
+            return f"on {_day(self.first)}"
+        return f"from {_day(self.first)} to {_day(self.last)}"
+
+    def params(self) -> dict[str, str]:
+        return {"from_date": self.first.isoformat(), "to_date": self.last.isoformat(), "start": self.start.isoformat() + "Z",
+                "end": self.end.isoformat() + "Z", "tz": self.tz}
+
+    @classmethod
+    def from_params(cls, p: dict[str, Any]) -> "Span":
+        return cls.make(date.fromisoformat(p["from_date"]), date.fromisoformat(p["to_date"]),
+                        datetime.fromisoformat(p["start"].replace("Z", "+00:00")), datetime.fromisoformat(p["end"].replace("Z", "+00:00")),
+                        p.get("tz", ""))
 
 
 # ====================================================================== a record's proof, carried inside the PDF
@@ -153,10 +250,10 @@ def candidates(session: Session, user: User, notebook_id: int | None = None, aut
     return out
 
 
-def select_records(session: Session, user: User, year: int, notebook_id: int | None = None, author_id: int | None = None
+def select_records(session: Session, user: User, span: Span, notebook_id: int | None = None, author_id: int | None = None
                    ) -> list[tuple[Experiment, dict[str, Any]]]:
-    """The records of one calendar year of signing (UTC)."""
-    return [(e, d) for e, d in candidates(session, user, notebook_id, author_id) if d["date"].year == year]
+    """The records signed within the span."""
+    return [(e, d) for e, d in candidates(session, user, notebook_id, author_id) if span.holds(d["date"])]
 
 
 def counts(rows: list[tuple[Experiment, dict[str, Any]]]) -> dict[str, int]:
@@ -209,7 +306,7 @@ def scope_text(session: Session, notebook_id: int | None, author_id: int | None)
 
 
 def options(session: Session, user: User) -> dict[str, Any]:
-    """For the page: the years with records, and the notebooks and authors they come from."""
+    """For the page: the years with records, and the notebooks and authors they come from (any date)."""
     rows = candidates(session, user)
     years: dict[int, int] = {}
     nbs: dict[int, str] = {}
@@ -226,10 +323,11 @@ def options(session: Session, user: User) -> dict[str, Any]:
             "authors": [{"id": i, "name": n} for i, n in sorted(authors.items(), key=lambda t: t[1].lower())]}
 
 
-def preview(session: Session, user: User, year: int, notebook_id: int | None, author_id: int | None) -> dict[str, Any]:
-    rows = select_records(session, user, year, notebook_id, author_id)
+def preview(session: Session, user: User, span: Span, notebook_id: int | None, author_id: int | None) -> dict[str, Any]:
+    rows = select_records(session, user, span, notebook_id, author_id)
     files = sum(len(spectra_of(session, e)) for e, _ in rows) if len(rows) <= 400 else None
-    return {**counts(rows), "files": files, "scope": scope_text(session, notebook_id, author_id), "year": year}
+    return {**counts(rows), "files": files, "scope": scope_text(session, notebook_id, author_id), "label": span.label(),
+            "title": span.title(), "phrase": span.phrase(), **span.params()}
 
 
 # ====================================================================== jobs, kept on disk
@@ -310,7 +408,7 @@ def _update(job_id: str, **changes: Any) -> dict[str, Any]:
         return job
 
 
-def start_job(session: Session, user: User, year: int, notebook_id: int | None, author_id: int | None,
+def start_job(session: Session, user: User, span: Span, notebook_id: int | None, author_id: int | None,
               page_size: str) -> dict[str, Any]:
     if page_size not in PAGE_SIZES:
         raise ArchiveError(422, "The page size is US Letter or A4")
@@ -319,9 +417,9 @@ def start_job(session: Session, user: User, year: int, notebook_id: int | None, 
         raise ArchiveError(404, "Notebook not found")
     if author_id is not None and session.get(User, author_id) is None:
         raise ArchiveError(404, "Person not found")
-    rows = select_records(session, user, year, notebook_id, author_id)
+    rows = select_records(session, user, span, notebook_id, author_id)
     if not rows:
-        raise ArchiveError(422, f"No records signed in {year} match; nothing to archive")
+        raise ArchiveError(422, f"No records you can open were signed {span.phrase()}; nothing to archive")
     sweep()
     with _LOCK:  # one job per person: starting again replaces the last one
         for p in scratch_dir().iterdir():
@@ -333,7 +431,7 @@ def start_job(session: Session, user: User, year: int, notebook_id: int | None, 
         (d / "pictures").mkdir(parents=True)
         spectra = [s for e, _ in rows for s in spectra_of(session, e)]
         job = {"id": job_id, "user_id": user.id, "run": _RUN, "created_at": datetime.now(timezone.utc).isoformat(),
-               "state": "drawing", "params": {"year": year, "notebook_id": notebook_id, "author_id": author_id, "page_size": page_size},
+               "state": "drawing", "params": {**span.params(), "notebook_id": notebook_id, "author_id": author_id, "page_size": page_size},
                "scope": scope_text(session, notebook_id, author_id), "counts": counts(rows),
                "records": [e.id for e, _ in rows], "spectra": spectra, "drawn": {},
                "progress": {"done": 0, "total": len(rows), "message": ""}, "error": "", "pages": None, "bytes": None}
@@ -344,7 +442,7 @@ def start_job(session: Session, user: User, year: int, notebook_id: int | None, 
 def job_out(job: dict[str, Any], with_spectra: bool = True) -> dict[str, Any]:
     drawn = job.get("drawn", {})
     out = {k: job[k] for k in ("id", "state", "params", "scope", "counts", "progress", "error", "pages", "bytes", "created_at")}
-    out["title"] = archive_title(job["params"]["year"])
+    out["title"] = Span.from_params(job["params"]).title()
     out["file_name"] = file_name(job)
     out["spectra_total"] = len(job["spectra"])
     out["spectra_done"] = sum(1 for s in job["spectra"] if str(s["attachment_id"]) in drawn)
@@ -354,18 +452,14 @@ def job_out(job: dict[str, Any], with_spectra: bool = True) -> dict[str, Any]:
     return out
 
 
-def archive_title(year: int) -> str:
-    return f"Benchtop records {year}"
-
-
 def file_name(job: dict[str, Any]) -> str:
-    return pdf_file_name(job["params"]["year"], job["scope"])
+    return pdf_file_name(Span.from_params(job["params"]), job["scope"])
 
 
-def pdf_file_name(year: int, scope: str) -> str:
-    """Benchtop records 2026.pdf, or Benchtop records 2026 – Notebook Suzuki couplings.pdf."""
+def pdf_file_name(span: Span, scope: str) -> str:
+    """Benchtop records 2026.pdf, or Benchtop records, 3–9 November 2026 – Notebook Suzuki couplings.pdf."""
     scope = "" if scope == "All records you can open" else f" – {scope}"
-    name = re.sub(r'[\\/:*?"<>|\u0000-\u001f“”]+', " ", f"{archive_title(year)}{scope}").strip()
+    name = re.sub(r'[\\/:*?"<>|\u0000-\u001f“”]+', " ", f"{span.title()}{scope}").strip()
     return re.sub(r"\s+", " ", name)[:150] + ".pdf"
 
 
@@ -478,7 +572,9 @@ def _run(job_id: str) -> None:
                 if user is None:
                     raise ArchiveError(404, "The account that started this archive is gone")
                 pictures = _pictures(job, d / "pictures")
-                data, info = build_pdf(session, user, **job["params"], pictures=pictures, progress=progress)
+                prm = job["params"]
+                data, info = build_pdf(session, user, Span.from_params(prm), prm["notebook_id"], prm["author_id"], prm["page_size"],
+                                       pictures=pictures, progress=progress)
             tmp = d / "archive.pdf.part"
             tmp.write_bytes(data)
             tmp.replace(d / "archive.pdf")
@@ -488,7 +584,7 @@ def _run(job_id: str) -> None:
         except (_Gone, FileNotFoundError):
             return
         except Exception as exc:  # noqa: BLE001 - said on the page; the job can be started again
-            log.exception("Yearly archive %s failed", job_id)
+            log.exception("Archive PDF %s failed", job_id)
             msg = str(exc) if isinstance(exc, (ArchiveError, pdfa.PdfError)) else "Something went wrong while laying out the PDF"
             try:
                 _update(job_id, state="failed", error=f"{msg}. Start it again; if it fails again, the server log says why.")
@@ -559,13 +655,13 @@ def _page(body: str, size: str, title: str) -> str:
             + _PAGE_CSS.format(size=size, fonts=pdfa.font_css()) + f"</style></head><body>{body}</body></html>")
 
 
-def _cover(title: str, scope: str, year: int, c: dict[str, int], user: User, made: datetime, size: str) -> str:
+def _cover(title: str, scope: str, span: Span, c: dict[str, int], user: User, made: datetime, size: str) -> str:
     witnessed, awaiting, voided = c["witnessed"], c["awaiting_witness"], c["voided"]
     parts = [f"{witnessed} witnessed", f"{awaiting} awaiting witness"] + ([f"{voided} voided"] if voided else [])
     return _page(f"""<div class='cover'><h1>{_esc(title)}</h1><div class='rule'></div>
 <p style='font-size:13pt'>{_esc(scope)}</p>
-<p style='font-size:11pt'><b>{c['records']} record{'' if c['records'] == 1 else 's'}</b> signed between 1 January and 31 December {year}
-(UTC), in the order they were signed: {', '.join(parts)}.</p>
+<p style='font-size:11pt'><b>{c['records']} record{'' if c['records'] == 1 else 's'}</b> signed {span.phrase()}
+({'days in UTC' if span.tz == 'UTC' else 'days in the ' + _esc(span.tz) + ' time zone'}), in the order they were signed: {', '.join(parts)}.</p>
 <p>Made by {_esc(_name(user))} on {_when(made)} with Benchtop ELN {__version__}.</p>
 <div style='margin-top:2.5cm' class='meta'>
 <p><b>What is in it.</b> Each record as Benchtop prints it, starting on a new page, with its spectra drawn as Benchtop's
@@ -678,7 +774,7 @@ def _overlay(pikepdf, sizes: list[tuple[float, float]], texts: list[str | None])
     return pikepdf.open(io.BytesIO(buf.getvalue()))
 
 
-def build_pdf(session: Session, user: User, year: int, notebook_id: int | None = None, author_id: int | None = None,
+def build_pdf(session: Session, user: User, span: Span, notebook_id: int | None = None, author_id: int | None = None,
               page_size: str = "letter", pictures: dict[int, dict] | None = None,
               progress: Callable[[int, int, str], None] | None = None) -> tuple[bytes, dict[str, Any]]:
     """The archive as PDF/A-3b bytes, and what is in it. Records are chosen again now, so one withdrawn or hidden from
@@ -690,10 +786,10 @@ def build_pdf(session: Session, user: User, year: int, notebook_id: int | None =
     pictures = pictures or {}
     progress = progress or (lambda *a: None)
     size = "a4" if page_size == "a4" else "letter"
-    title = archive_title(year)
-    rows = select_records(session, user, year, notebook_id, author_id)
+    title = span.title()
+    rows = select_records(session, user, span, notebook_id, author_id)
     if not rows:
-        raise ArchiveError(422, f"No records signed in {year} match any more; nothing to archive")
+        raise ArchiveError(422, f"No records you can open were signed {span.phrase()} any more; nothing to archive")
     made = datetime.now(timezone.utc)
     n = len(rows)
     parts: list[Any] = []
@@ -706,7 +802,7 @@ def build_pdf(session: Session, user: User, year: int, notebook_id: int | None =
         try:
             raw = pdfa.html_to_pdf(_one_record_html(session, exp, d, size, figs))
         except Exception as exc:  # noqa: BLE001 - one record that can't be laid out doesn't stop the archive
-            log.warning("Yearly archive: %s couldn't be laid out: %s", exp.eid, exc)
+            log.warning("Archive PDF: %s couldn't be laid out: %s", exp.eid, exc)
             raw = pdfa.html_to_pdf(_fallback_html(exp, str(exc) if isinstance(exc, pdfa.PdfError) else "an error", size))
         part = pikepdf.open(io.BytesIO(raw))
         parts.append(part)
@@ -725,8 +821,8 @@ def build_pdf(session: Session, user: User, year: int, notebook_id: int | None =
     progress(n, n, "Putting the archive together")
     c = counts(rows)
     scope = scope_text(session, notebook_id, author_id)
-    cover = pikepdf.open(io.BytesIO(pdfa.html_to_pdf(_cover(title, scope, year, c, user, made, size))))
-    how = pikepdf.open(io.BytesIO(pdfa.html_to_pdf(_how_to(n, proofs, size, title, pdf_file_name(year, scope)))))
+    cover = pikepdf.open(io.BytesIO(pdfa.html_to_pdf(_cover(title, scope, span, c, user, made, size))))
+    how = pikepdf.open(io.BytesIO(pdfa.html_to_pdf(_how_to(n, proofs, size, title, pdf_file_name(span, scope)))))
     # the contents give each record's first page, which depends on how long the contents are: lay them out with
     # placeholders first (the same width), then with the numbers
     for r in listed:
@@ -777,8 +873,8 @@ def build_pdf(session: Session, user: User, year: int, notebook_id: int | None =
     out.Root.PageMode = Name.UseOutlines
     progress(n, n, "Making it archival (PDF/A)")
     data = pdfa.make_pdfa(b"", pdf=out, title=f"{title}: {scope}" if scope != "All records you can open" else title,
-                          author=_name(user), subject=f"{scope}; {c['records']} records signed in {year}",
-                          keywords=f"Benchtop ELN, lab notebook, {year}", created=made, attachments=files)
+                          author=_name(user), subject=f"{scope}; {c['records']} records signed {span.phrase()}",
+                          keywords=f"Benchtop ELN, lab notebook, {span.label()}", created=made, attachments=files)
     for p in (cover, contents, how, *parts, over):
         p.close()
     return data, {"pages": total, "counts": c, "records": [r["eid"] for r in listed], "starts": starts,

@@ -173,8 +173,8 @@ export default function Guide() {
         during review or long after. Records whose author asked you to witness them are listed on
         the <Link to="/">dashboard</Link> under <b>Asked to witness</b>; below them, apart, are signed records nobody
         was asked to witness. Witness only a record you've read, and leave those whose author asked someone else.</p>
-      <p>Once a year, <Link to="/archive">Yearly archive</Link> (on your Account page and a notebook's page) makes one PDF of
-        the records signed that year, with their spectra drawn, to print and keep. Like every PDF Benchtop makes, it's an
+      <p><Link to="/archive">Archive PDF</Link> (on your Account page and a notebook's page) makes one PDF of the records
+        signed between two days (a year, a month, a week), with their spectra drawn, to print and keep. Like every PDF Benchtop makes, it's an
         archival PDF (PDF/A), with each record's data and the proof of its signatures inside it.</p>
     </>,
     finding: <>

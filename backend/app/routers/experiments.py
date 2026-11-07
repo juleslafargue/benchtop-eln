@@ -1392,7 +1392,7 @@ def _render_entry(e: Entry, atts: dict[int, Attachment], pdf: bool = False, figu
             h += (f"<tr><td>{html.escape(it.get('technique', ''))}</td><td>{html.escape(it.get('conditions', ''))}</td>"
                   f"<td>{html.escape(it.get('data', ''))}</td><td>{html.escape(a.filename) if a else ''}</td></tr>")
         h += "</table>"
-        if figures is not None:  # the yearly archive (0.34): each spectrum file drawn as the viewer draws it
+        if figures is not None:  # the archive PDF (0.34): each spectrum file drawn as the viewer draws it
             h += _figures_html(c.get("items", []), atts, figures)
     elif e.kind == EntryKind.references:
         h += _references_html(c.get("items") or [])
@@ -1507,7 +1507,7 @@ PAGE_SIZES = ("a4", "letter")
 def report_html(session, exp: Experiment, pdf: bool = False, *, page_size: str = "a4", footer: bool = True,
                 banner: str = "", figures: dict[int, dict] | None = None) -> str:
     """The printable record: every section, signatures and the content hash. pdf=True swaps in
-    rasters and print-safe styles for the PDF renderer, in the embedded fonts. The yearly archive (0.34) leaves out the
+    rasters and print-safe styles for the PDF renderer, in the embedded fonts. The archive PDF (0.34) leaves out the
     page footer (it stamps its own), puts a note under the header (`banner`) and draws the spectra (`figures`)."""
     atts = {a.id: a for a in session.exec(select(Attachment).where(Attachment.experiment_id == exp.id,
                                                                    Attachment.withdrawn_at == None))}  # noqa: E711

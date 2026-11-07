@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useApp } from '../App'
 import { api, downloadAuthed, when } from '../api'
 import {
-  active, countLine, defaultYear, fraction, megabytes, previewQuery, PRINT, progressLine, toDraw,
+  active, countLine, defaultSpan, fraction, megabytes, previewQuery, PRINT, progressLine, quickPicks, rangeProblem, spanBody, toDraw,
   type ArchiveJob, type ArchiveSpectrum, type Choices, type Options, type Preview,
 } from '../archive'
 import { hydrogensInFormula } from '../spectra'
@@ -12,14 +12,22 @@ import { canViewSpectrum } from '../viewable'
 
 const SIZE_KEY = 'benchtop.archive.pageSize'
 const readSize = (): Choices['page_size'] => { try { return localStorage.getItem(SIZE_KEY) === 'a4' ? 'a4' : 'letter' } catch { return 'letter' } }
+const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || '' } catch { return '' } })()
+const isDay = (s: string | null) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s)
 
-/** The yearly archive (0.34): a year's signed records as one archival PDF, to print and keep. */
+/** The archive PDF (0.34): the records signed from one day to another (a year, a month, a week) as one archival PDF,
+ *  to print and keep. */
 export default function Archive() {
   const { toast } = useApp()
   const [params] = useSearchParams()
   const [opts, setOpts] = useState<Options | null>(null)
   const [err, setErr] = useState('')
-  const [choices, setChoices] = useState<Choices>({ year: null, notebook_id: null, author_id: null, page_size: readSize() })
+  const [choices, setChoices] = useState<Choices>(() => {
+    const d = defaultSpan(), f = params.get('from'), t = params.get('to')
+    return { from: isDay(f) ? f! : d.from, to: isDay(t) ? t! : d.to, notebook_id: null, author_id: null, page_size: readSize() }
+  })
+  const picks = quickPicks()
+  const problem = rangeProblem(choices.from, choices.to)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [job, setJob] = useState<ArchiveJob | null>(null)
   const [drawing, setDrawing] = useState<number | undefined>()
@@ -93,19 +101,18 @@ export default function Archive() {
     api.get<Options>('/api/archive/options').then(o => {
       setOpts(o)
       const nb = Number(params.get('notebook')) || null
-      const asked = Number(params.get('year')) || null
-      setChoices(c => ({ ...c, year: defaultYear(o.years, asked), notebook_id: nb && o.notebooks.some(n => n.id === nb) ? nb : null }))
+      setChoices(c => ({ ...c, notebook_id: nb && o.notebooks.some(n => n.id === nb) ? nb : null }))
       resume(o.job)
     }).catch(e => setErr(e.message))
   }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (choices.year == null) return
-    let stale = false
     setPreview(null)
-    api.get<Preview>(`/api/archive/preview?${previewQuery(choices)}`).then(p => { if (!stale) setPreview(p) }).catch(e => toast(e.message))
+    if (problem) return
+    let stale = false
+    api.get<Preview>(`/api/archive/preview?${previewQuery(choices, TZ)}`).then(p => { if (!stale) setPreview(p) }).catch(e => toast(e.message))
     return () => { stale = true }
-  }, [choices.year, choices.notebook_id, choices.author_id, toast])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [choices.from, choices.to, choices.notebook_id, choices.author_id, problem, toast])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = (p: Partial<Choices>) => setChoices(c => {
     const next = { ...c, ...p }
@@ -114,11 +121,11 @@ export default function Archive() {
   })
 
   const start = async () => {
-    if (choices.year == null) return
+    if (problem) return
     setStarting(true)
     try {
       running.current = null
-      const j = await api.post<ArchiveJob>('/api/archive/jobs', choices)
+      const j = await api.post<ArchiveJob>('/api/archive/jobs', spanBody(choices, TZ))
       setJob(j)
       draw(j)
     } catch (e: any) { toast(e.message) } finally { setStarting(false) }
@@ -133,24 +140,27 @@ export default function Archive() {
   if (err) return <p className="error">{err}</p>
   if (!opts) return <p className="faint">Loading…</p>
   const busy = !!job && active(job.state)
-  const years = opts.years.length ? opts.years : [{ year: choices.year ?? new Date().getUTCFullYear(), records: 0 }]
 
   return (
     <div className="stack archive-page" style={{ gap: 18 }}>
       <div>
-        <h1 className="page-title">Yearly archive</h1>
-        <p className="lede">One PDF of a year's signed records, made to be printed and kept: each record as Benchtop prints it,
-          with its spectra drawn, in the order they were signed. It's an archival PDF (PDF/A): its fonts are inside it, and so is
+        <h1 className="page-title">Archive PDF</h1>
+        <p className="lede">One PDF of the records signed over a span of days (a year, a month, a week), made to be printed and
+          kept: each record as Benchtop prints it, with its spectra drawn, in the order they were signed. It's an archival PDF (PDF/A): its fonts are inside it, and so is
           each record's data with the proof of its signatures. Making it never changes a record.</p>
       </div>
 
       <section className="panel panel-pad stack" aria-labelledby="archive-what" style={{ gap: 14 }}>
         <h2 className="si-h2" id="archive-what">What goes in</h2>
+        <div className="row archive-picks" role="group" aria-label="Quick choices">
+          {picks.map(p => <button key={p.label} type="button" disabled={busy}
+            className={`chip${p.from === choices.from && p.to === choices.to ? ' on' : ''}`} onClick={() => set({ from: p.from, to: p.to })}>{p.label}</button>)}
+        </div>
         <div className="archive-fields">
-          <label className="field">Year signed
-            <select className="select" value={choices.year ?? ''} disabled={busy} onChange={e => set({ year: Number(e.target.value) })}>
-              {years.map(y => <option key={y.year} value={y.year}>{y.year}</option>)}
-            </select></label>
+          <label className="field">Signed from
+            <input className="input" type="date" value={choices.from} disabled={busy} required onChange={e => set({ from: e.target.value })} /></label>
+          <label className="field">To (included)
+            <input className="input" type="date" value={choices.to} disabled={busy} required onChange={e => set({ to: e.target.value })} /></label>
           <label className="field">Notebook
             <select className="select" value={choices.notebook_id ?? ''} disabled={busy} onChange={e => set({ notebook_id: e.target.value ? Number(e.target.value) : null })}>
               <option value="">All notebooks</option>
@@ -166,13 +176,15 @@ export default function Archive() {
               <option value="letter">US Letter</option><option value="a4">A4</option>
             </select></label>
         </div>
-        <p className="archive-count" role="status" aria-live="polite">
-          {preview ? <><b>{countLine(preview)}</b>{preview.records ? <> signed in {preview.year} (UTC){preview.files ? `, with ${preview.files} characterisation file${preview.files === 1 ? '' : 's'} to draw` : ''}.</> : <> signed in {preview.year} match.</>}</> : 'Counting…'}
+        <p className={`archive-count${problem ? ' error' : ''}`} role="status" aria-live="polite">
+          {problem || (preview ? <><b>{preview.records ? countLine(preview) : 'No records you can open'}</b> signed {preview.phrase}
+            {preview.records ? (preview.files ? `, with ${preview.files} characterisation file${preview.files === 1 ? '' : 's'} to draw.` : '.')
+              : ' with these choices: nothing to archive.'}</> : 'Counting…')}
         </p>
         <p className="help" style={{ margin: 0 }}>Only records you can open. Witnessed records and those awaiting a witness both go in, and each
           says which. Voided records go in too, marked <b>VOIDED</b> with the reason and date. Drafts are left out.</p>
         <div className="row">
-          <button className="btn primary" onClick={start} disabled={starting || busy || !preview?.records}>
+          <button className="btn primary" onClick={start} disabled={starting || busy || !!problem || !preview?.records}>
             {busy ? 'Making the archive…' : 'Make the archive'}</button>
           {job && !busy && <span className="faint archive-note">Making a new one replaces the one below.</span>}
         </div>

@@ -1,8 +1,8 @@
-"""0.34: archival PDFs (PDF/A-3b) and the yearly archive.
+"""0.34: archival PDFs (PDF/A-3b) and the archive PDF of the records signed over a span of days.
 
 Every PDF Benchtop makes is now PDF/A-3b: fonts embedded (DejaVu), an sRGB output intent, XMP metadata that says so,
-and the record's own data and timestamp proofs attached inside it. The yearly archive is one such PDF of a year's
-signed records: chosen by year of signing (UTC), notebook and author, only records the person may open, voided ones
+and the record's own data and timestamp proofs attached inside it. The archive is one such PDF of the records
+signed from one day to another (in the person's own calendar days), by notebook and author, only records the person may open, voided ones
 marked, drafts left out; spectra drawn by the browser and uploaded to a job only its owner can see. Making either never
 changes a record. veraPDF checks the files on GitHub (see .github/workflows/tests.yml); tests/pdfa_checks.py checks what
 can be checked here."""
@@ -14,7 +14,7 @@ import os
 import subprocess
 import time
 import zipfile
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 from PIL import Image
@@ -42,6 +42,15 @@ def tsa(monkeypatch):
     sitesettings.update("timestamps", {"enabled": True, "tsa_url": "http://tsa.example.org"})
     yield fake
     sitesettings.update("timestamps", {"enabled": False})
+
+
+def Y(year: int) -> str:
+    """The query for a calendar year (UTC days)."""
+    return f"from_date={year}-01-01&to_date={year}-12-31"
+
+
+def J(year: int) -> dict:
+    return {"from_date": f"{year}-01-01", "to_date": f"{year}-12-31"}
 
 
 def record(client, h, nb, title="Suzuki 3a", *, spectrum=True, description=""):
@@ -195,19 +204,20 @@ def test_year_boundaries_order_and_what_goes_in(client, users, notebook, admin):
     dated(voided_draft["id"], "2020-04-01T09:00:00")
     dated(withdrawn["id"], "2020-05-01T09:00:00")
 
-    p = client.get(f"/api/archive/preview?year=2020&notebook_id={nb}", headers=a).json()
-    assert p == {"records": 5, "witnessed": 1, "awaiting_witness": 2, "voided": 2, "files": 0,
-                 "scope": f"Notebook “{notebook['name']}”", "year": 2020}
+    p = client.get(f"/api/archive/preview?{Y(2020)}&notebook_id={nb}", headers=a).json()
+    assert {k: p[k] for k in ("records", "witnessed", "awaiting_witness", "voided", "files", "scope", "title")} == {
+        "records": 5, "witnessed": 1, "awaiting_witness": 2, "voided": 2, "files": 0,
+        "scope": f"Notebook “{notebook['name']}”", "title": "Benchtop records 2020"}
     with Session(engine) as s:
         from app.models import User
         alice = s.exec(select(User).where(User.username == "alice")).one()
-        rows = archive.select_records(s, alice, 2020, nb)
+        rows = archive.select_records(s, alice, archive.Span.year(2020), nb)
         assert [e.id for e, _ in rows] == [first["id"], voided["id"], voided_draft["id"], mid["id"], last["id"]]
         d = dict((e.id, d) for e, d in rows)
         assert d[mid["id"]]["witness"] is not None and d[first["id"]]["witness"] is None
         assert d[voided_draft["id"]]["author"] is None and d[voided_draft["id"]]["void"].comment == "Started in the wrong notebook"
-    assert client.get(f"/api/archive/preview?year=2019&notebook_id={nb}", headers=a).json()["records"] == 1
-    assert client.get(f"/api/archive/preview?year=2021&notebook_id={nb}", headers=a).json()["records"] == 1
+    assert client.get(f"/api/archive/preview?{Y(2019)}&notebook_id={nb}", headers=a).json()["records"] == 1
+    assert client.get(f"/api/archive/preview?{Y(2021)}&notebook_id={nb}", headers=a).json()["records"] == 1
     opts = client.get("/api/archive/options", headers=a).json()
     assert {2019, 2020, 2021} <= {y["year"] for y in opts["years"]}
     assert nb in [n["id"] for n in opts["notebooks"]]
@@ -215,7 +225,7 @@ def test_year_boundaries_order_and_what_goes_in(client, users, notebook, admin):
     # the PDF: the cover says what's left out, the contents list them in order, the voided ones say so
     with Session(engine) as s:
         alice = s.exec(select(User).where(User.username == "alice")).one()
-        pdf, info = archive.build_pdf(s, alice, 2020, nb, page_size="a4")
+        pdf, info = archive.build_pdf(s, alice, archive.Span.year(2020), nb, page_size="a4")
     assert pdfa_checks.problems(pdf) == []
     assert info["records"] == [first["eid"], voided["eid"], voided_draft["eid"], mid["eid"], last["eid"]]
     how = [p for t, p in pdfa_checks.outline(pdf) if t == "How to check this archive"][0]
@@ -259,24 +269,24 @@ def test_a_record_the_person_cant_open_is_never_in_it(client, users, admin):
     alice_id = client.get("/api/auth/me", headers=a).json()["id"]
     assert client.put(f"/api/experiments/{shared['id']}/shares/{alice_id}", headers=b, json={"permission": "view"}).status_code == 200
     bob_id = client.get("/api/auth/me", headers=b).json()["id"]
-    p = client.get(f"/api/archive/preview?year=2018&author_id={bob_id}", headers=a).json()
+    p = client.get(f"/api/archive/preview?{Y(2018)}&author_id={bob_id}", headers=a).json()
     assert p["records"] == 1
     # bob and the admin see both
-    assert client.get(f"/api/archive/preview?year=2018&author_id={bob_id}", headers=b).json()["records"] == 2
-    assert client.get(f"/api/archive/preview?year=2018&author_id={bob_id}", headers=admin).json()["records"] == 2
+    assert client.get(f"/api/archive/preview?{Y(2018)}&author_id={bob_id}", headers=b).json()["records"] == 2
+    assert client.get(f"/api/archive/preview?{Y(2018)}&author_id={bob_id}", headers=admin).json()["records"] == 2
     # choosing that notebook still gives alice only the record shared with her
-    assert client.get(f"/api/archive/preview?year=2018&notebook_id={private['id']}", headers=a).json()["records"] == 1
+    assert client.get(f"/api/archive/preview?{Y(2018)}&notebook_id={private['id']}", headers=a).json()["records"] == 1
     with Session(engine) as s:
         from app.models import User
         alice = s.exec(select(User).where(User.username == "alice")).one()
-        pdf, info = archive.build_pdf(s, alice, 2018, author_id=bob_id)
+        pdf, info = archive.build_pdf(s, alice, archive.Span.year(2018), author_id=bob_id)
     assert info["records"] == [shared["eid"]]
     how = [p for t, p in pdfa_checks.outline(pdf) if t == "How to check this archive"][0]
     text = pdfa_checks.text(pdf, pages=range(how - 1))
     assert hidden["eid"] not in text and "Bob's secret result" not in text
     assert f"{hidden['eid']}.json" not in pdfa_checks.attachments(pdf)
     # nor can she start an archive that would hold it
-    j = client.post("/api/archive/jobs", headers=a, json={"year": 2018, "author_id": bob_id, "page_size": "letter"}).json()
+    j = client.post("/api/archive/jobs", headers=a, json={**J(2018), "author_id": bob_id, "page_size": "letter"}).json()
     assert [s["eid"] for s in j["spectra"]] == [] and j["counts"]["records"] == 1
     client.delete(f"/api/archive/jobs/{j['id']}", headers=a)
 
@@ -294,7 +304,7 @@ def test_job_end_to_end_with_uploaded_spectra(client, users, notebook, tsa):
     dated(e2["id"], "2017-04-01T10:00:00")
     before = {e["id"]: (fingerprint(client, a, e), len(client.get(f"/api/experiments/{e['id']}", headers=a).json()["attachments"]))
               for e in (e1, e2)}
-    r = client.post("/api/archive/jobs", headers=a, json={"year": 2017, "notebook_id": notebook["id"], "page_size": "a4"})
+    r = client.post("/api/archive/jobs", headers=a, json={**J(2017), "notebook_id": notebook["id"], "page_size": "a4"})
     assert r.status_code == 201, r.text
     job = r.json()
     assert job["state"] == "drawing" and job["counts"]["records"] == 2 and job["spectra_total"] == 2
@@ -359,7 +369,7 @@ def test_a_job_open_when_benchtop_stopped_says_so_and_can_start_again(client, us
     sign(client, a, e)
     dated(e["id"], "2016-02-02T10:00:00")
     for state in ("drawing", "building", "queued"):
-        job = client.post("/api/archive/jobs", headers=a, json={"year": 2016, "notebook_id": notebook["id"], "page_size": "letter"}).json()
+        job = client.post("/api/archive/jobs", headers=a, json={**J(2016), "notebook_id": notebook["id"], "page_size": "letter"}).json()
         p = archive.scratch_dir() / job["id"] / "job.json"
         j = json.loads(p.read_text())
         j["state"], j["run"] = state, "an-earlier-run"  # as left by a Benchtop that has since stopped
@@ -368,7 +378,7 @@ def test_a_job_open_when_benchtop_stopped_says_so_and_can_start_again(client, us
         assert got["state"] == "stopped" and "Start it again" in got["error"]
         assert client.post(f"/api/archive/jobs/{job['id']}/build", headers=a).status_code == 409
     # starting again replaces it
-    new = client.post("/api/archive/jobs", headers=a, json={"year": 2016, "notebook_id": notebook["id"], "page_size": "letter"}).json()
+    new = client.post("/api/archive/jobs", headers=a, json={**J(2016), "notebook_id": notebook["id"], "page_size": "letter"}).json()
     assert client.get(f"/api/archive/jobs/{job['id']}", headers=a).status_code == 404
     assert new["state"] == "drawing"
     assert client.post(f"/api/archive/jobs/{new['id']}/build", headers=a).status_code == 202
@@ -380,7 +390,7 @@ def test_jobs_are_cleaned_up_after_a_day(client, users, notebook):
     e = record(client, a, notebook, "Old archive", spectrum=False)
     sign(client, a, e)
     dated(e["id"], "2015-02-02T10:00:00")
-    job = client.post("/api/archive/jobs", headers=a, json={"year": 2015, "notebook_id": notebook["id"], "page_size": "letter"}).json()
+    job = client.post("/api/archive/jobs", headers=a, json={**J(2015), "notebook_id": notebook["id"], "page_size": "letter"}).json()
     d = archive.scratch_dir() / job["id"]
     old = time.time() - archive.KEEP_SECONDS - 60
     os.utime(d / "job.json", (old, old))
@@ -391,8 +401,89 @@ def test_jobs_are_cleaned_up_after_a_day(client, users, notebook):
 
 def test_odd_requests_get_plain_answers(client, users):
     a = users["alice"]
-    assert client.get("/api/archive/preview?year=1800", headers=a).status_code == 422
-    assert client.post("/api/archive/jobs", headers=a, json={"year": 2016, "page_size": "a3"}).status_code == 422
-    assert client.post("/api/archive/jobs", headers=a, json={"year": 1999, "page_size": "a4"}).status_code == 422  # nothing signed then
-    assert client.post("/api/archive/jobs", headers=a, json={"year": 2016, "author_id": 999999, "page_size": "a4"}).status_code == 404
+    assert client.get(f"/api/archive/preview?{Y(1800)}", headers=a).status_code == 422
+    assert client.post("/api/archive/jobs", headers=a, json={**J(2016), "page_size": "a3"}).status_code == 422
+    assert client.post("/api/archive/jobs", headers=a, json={**J(1999), "page_size": "a4"}).status_code == 422  # nothing signed then
+    assert client.post("/api/archive/jobs", headers=a, json={**J(2016), "author_id": 999999, "page_size": "a4"}).status_code == 404
     assert client.get("/api/archive/options").status_code == 401
+
+
+# ====================================================================== any span of days, in the person's own days
+
+def test_a_week_in_vancouver_includes_its_first_and_last_seconds(client, users, notebook):
+    """3–9 November 2014 in Vancouver (UTC−8): from 08:00 UTC on the 3rd to 08:00 UTC on the 10th."""
+    a = users["alice"]
+    before = record(client, a, notebook, "Sunday 2 November, 23:59:59 in Vancouver", spectrum=False)
+    first = record(client, a, notebook, "Monday 3 November, 00:00:00 in Vancouver", spectrum=False)
+    last = record(client, a, notebook, "Sunday 9 November, 23:59:59 in Vancouver", spectrum=False)
+    after = record(client, a, notebook, "Monday 10 November, 00:00:00 in Vancouver", spectrum=False)
+    for e, when in ((before, "2014-11-03T07:59:59"), (first, "2014-11-03T08:00:00"), (last, "2014-11-10T07:59:59"),
+                    (after, "2014-11-10T08:00:00")):
+        sign(client, a, e)
+        dated(e["id"], when)
+    week = {"from_date": "2014-11-03", "to_date": "2014-11-09", "start": "2014-11-03T08:00:00Z", "end": "2014-11-10T08:00:00Z",
+            "tz": "America/Vancouver"}
+    q = "&".join(f"{k}={v}" for k, v in week.items()) + f"&notebook_id={notebook['id']}"
+    p = client.get(f"/api/archive/preview?{q}", headers=a).json()
+    assert p["records"] == 2 and p["title"] == "Benchtop records, 3–9 November 2014"
+    assert p["phrase"] == "from 3 November 2014 to 9 November 2014"
+    # the same days in UTC hold a different pair
+    utc = client.get(f"/api/archive/preview?from_date=2014-11-03&to_date=2014-11-09&notebook_id={notebook['id']}", headers=a).json()
+    assert utc["records"] == 2 and utc["tz"] == "UTC"
+    with Session(engine) as s:
+        from app.models import User
+        alice = s.exec(select(User).where(User.username == "alice")).one()
+        span = archive.Span.make(date(2014, 11, 3), date(2014, 11, 9), datetime(2014, 11, 3, 8), datetime(2014, 11, 10, 8),
+                                 "America/Vancouver")
+        assert [e.id for e, _ in archive.select_records(s, alice, span, notebook["id"])] == [first["id"], last["id"]]
+        utc_days = archive.Span.make(date(2014, 11, 3), date(2014, 11, 9))
+        assert [e.id for e, _ in archive.select_records(s, alice, utc_days, notebook["id"])] == [before["id"], first["id"]]
+        pdf, info = archive.build_pdf(s, alice, span, notebook["id"])
+    assert info["records"] == [first["eid"], last["eid"]]
+    cover = pdfa_checks.text(pdf, pages=[0])
+    assert "Benchtop records, 3–9 November 2014" in cover and "from 3 November 2014 to 9 November 2014" in cover
+    assert "America/Vancouver" in cover
+    assert pdfa_checks.problems(pdf) == []
+    job = client.post("/api/archive/jobs", headers=a, json={**week, "notebook_id": notebook["id"], "page_size": "letter"}).json()
+    assert job["title"] == "Benchtop records, 3–9 November 2014" and job["counts"]["records"] == 2
+    assert job["file_name"] == "Benchtop records, 3–9 November 2014 – Notebook NB.pdf"
+    client.delete(f"/api/archive/jobs/{job['id']}", headers=a)
+
+
+def test_from_after_to_and_an_empty_span_say_so_plainly(client, users, notebook):
+    a = users["alice"]
+    r = client.get("/api/archive/preview?from_date=2014-11-09&to_date=2014-11-03", headers=a)
+    assert r.status_code == 422 and "“From” is later than “To”" in r.json()["detail"]
+    r = client.post("/api/archive/jobs", headers=a, json={"from_date": "2014-11-09", "to_date": "2014-11-03", "page_size": "a4"})
+    assert r.status_code == 422 and "“From” is later than “To”" in r.json()["detail"]
+    empty = client.get(f"/api/archive/preview?from_date=1990-03-01&to_date=1990-03-07&notebook_id={notebook['id']}", headers=a).json()
+    assert empty["records"] == 0
+    r = client.post("/api/archive/jobs", headers=a, json={"from_date": "1990-03-01", "to_date": "1990-03-07", "page_size": "a4"})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "No records you can open were signed from 1 March 1990 to 7 March 1990; nothing to archive"
+    # start and end times that don't belong to the days chosen are refused, never used
+    r = client.get("/api/archive/preview?from_date=2014-11-03&to_date=2014-11-09&start=2014-10-01T00:00:00Z&end=2014-11-10T08:00:00Z",
+                   headers=a)
+    assert r.status_code == 422
+    r = client.get("/api/archive/preview?from_date=2014-11-03&to_date=2014-11-09&start=0001-01-01T00:00:00%2B14:00", headers=a)
+    assert r.status_code == 422
+
+
+def test_the_span_is_named_for_what_it_is():
+    S, d = archive.Span.make, date
+    assert S(d(2026, 1, 1), d(2026, 12, 31)).title() == "Benchtop records 2026"
+    assert S(d(2026, 1, 1), d(2026, 11, 7)).title() == "Benchtop records, 1 January – 7 November 2026"
+    assert S(d(2026, 11, 1), d(2026, 11, 30)).title() == "Benchtop records, November 2026"
+    assert S(d(2024, 2, 1), d(2024, 2, 29)).label() == "February 2024"
+    assert S(d(2026, 11, 3), d(2026, 11, 9)).label() == "3–9 November 2026"
+    assert S(d(2026, 11, 3), d(2026, 11, 3)).label() == "3 November 2026"
+    assert S(d(2026, 10, 27), d(2026, 11, 2)).label() == "27 October – 2 November 2026"
+    assert S(d(2025, 12, 29), d(2026, 1, 4)).label() == "29 December 2025 – 4 January 2026"
+    assert S(d(2026, 11, 3), d(2026, 11, 3)).phrase() == "on 3 November 2026"
+    assert S(d(2026, 1, 1), d(2026, 12, 31)).phrase() == "in 2026"
+    # a span across the change of clocks: its two ends are at different offsets from UTC
+    sp = S(d(2026, 10, 26), d(2026, 11, 8), datetime(2026, 10, 26, 7), datetime(2026, 11, 9, 8), "America/Vancouver")
+    assert sp.holds(datetime(2026, 10, 26, 7)) and not sp.holds(datetime(2026, 10, 26, 6, 59, 59))
+    assert sp.holds(datetime(2026, 11, 9, 7, 59, 59)) and not sp.holds(datetime(2026, 11, 9, 8))
+    with pytest.raises(archive.ArchiveError):
+        S(d(2026, 11, 9), d(2026, 11, 3))

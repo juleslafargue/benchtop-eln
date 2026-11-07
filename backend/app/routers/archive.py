@@ -1,9 +1,11 @@
-"""The yearly archive (0.34): one archival PDF of a year's signed records (see app/archive.py for how it runs).
+"""The archive PDF (0.34): one archival PDF of the records signed from one day to another, a year or a week (see
+app/archive.py for how it runs).
 
 Anyone signed in can make one, of the records they can open; it only reads. A job is seen, fed and downloaded only by
 the person who started it."""
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, Path as PathParam, Query, UploadFile
@@ -13,16 +15,28 @@ from pydantic import BaseModel, Field
 from .. import archive
 from ..security import DB, CurrentUser
 
-router = APIRouter(prefix="/api/archive", tags=["yearly archive"])
+router = APIRouter(prefix="/api/archive", tags=["archive PDF"])
 
-Year = Annotated[int, Query(ge=1970, le=2200)]
+Day = Annotated[date, Query(ge=date(1970, 1, 1), le=date(2200, 12, 31))]
 OptId = Annotated[int | None, Query(ge=1, le=2**31 - 1)]
 JobId = Annotated[str, PathParam(pattern="^[0-9a-f]{16}$")]
 AttId = Annotated[int, PathParam(ge=1, le=2**31 - 1)]
 
 
-class JobIn(BaseModel):
-    year: int = Field(ge=1970, le=2200)
+class Days(BaseModel):
+    """From one day to another, both included. `start` and `end` (optional): when the From day starts and the day after
+    To starts, by the person's own clock (the browser sends them); without them, the days are UTC days."""
+    from_date: date = Field(ge=date(1970, 1, 1), le=date(2200, 12, 31))
+    to_date: date = Field(ge=date(1970, 1, 1), le=date(2200, 12, 31))
+    start: datetime | None = None
+    end: datetime | None = None
+    tz: str = Field("", max_length=64)
+
+    def span(self) -> archive.Span:
+        return archive.Span.make(self.from_date, self.to_date, self.start, self.end, self.tz)
+
+
+class JobIn(Days):
     notebook_id: int | None = Field(None, ge=1, le=2**31 - 1)
     author_id: int | None = Field(None, ge=1, le=2**31 - 1)
     page_size: str = Field("letter", pattern="^(letter|a4)$")
@@ -44,9 +58,14 @@ def archive_options(user: CurrentUser, session: DB):
 
 
 @router.get("/preview")
-def archive_preview(user: CurrentUser, session: DB, year: Year, notebook_id: OptId = None, author_id: OptId = None):
+def archive_preview(user: CurrentUser, session: DB, from_date: Day, to_date: Day, start: datetime | None = None,
+                    end: datetime | None = None, tz: Annotated[str, Query(max_length=64)] = "", notebook_id: OptId = None,
+                    author_id: OptId = None):
     """How many records an archive with these choices holds, before building it."""
-    return archive.preview(session, user, year, notebook_id, author_id)
+    try:
+        return archive.preview(session, user, archive.Span.make(from_date, to_date, start, end, tz), notebook_id, author_id)
+    except archive.ArchiveError as e:
+        _fail(e)
 
 
 @router.post("/jobs", status_code=201)
@@ -54,7 +73,7 @@ def start_archive(body: JobIn, user: CurrentUser, session: DB):
     """Start an archive: the answer lists the records and the spectrum files for the browser to draw. Starting one
     replaces your earlier one."""
     try:
-        return archive.job_out(archive.start_job(session, user, body.year, body.notebook_id, body.author_id, body.page_size))
+        return archive.job_out(archive.start_job(session, user, body.span(), body.notebook_id, body.author_id, body.page_size))
     except archive.ArchiveError as e:
         _fail(e)
 
