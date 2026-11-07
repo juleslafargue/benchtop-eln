@@ -195,13 +195,18 @@ def draft(entries: list[Entry]) -> dict[str, Any]:
     char_para = "; ".join(data_bits) + ("." if data_bits else "")
 
     heading = product["name"] if product and product.get("name") else "Title compound"
-    html_out = f"<p><strong>{html.escape(heading)}.</strong> " + " ".join(html.escape(p) for p in paras) + "</p>"
+    exp_html = " ".join(html.escape(p) for p in paras)
+    html_out = f"<p><strong>{html.escape(heading)}.</strong> {exp_html}</p>"
+    char_html = ""
     if char_para:
-        safe = html.escape(char_para).replace("&lt;sub&gt;", "<sub>").replace("&lt;/sub&gt;", "</sub>")
-        safe = re.sub(r"\bJ = ", "<i>J</i> = ", safe)
-        html_out += f"<p>{safe}</p>"
+        char_html = html.escape(char_para).replace("&lt;sub&gt;", "<sub>").replace("&lt;/sub&gt;", "</sub>")
+        char_html = re.sub(r"\bJ = ", "<i>J</i> = ", char_html)
+        html_out += f"<p>{char_html}</p>"
     text = f"{heading}. " + " ".join(paras) + ("\n" + char_para.replace("<sub>f</sub>", "f") if char_para else "")
-    return {"text": text, "html": html_out, "missing": missing}
+    # the parts on their own too, for the Supporting Information builder (0.33), which sets its own heading
+    prod = {k: product.get(k) for k in ("name", "smiles", "formula", "mw")} if product else None
+    return {"text": text, "html": html_out, "missing": missing, "heading": heading, "experimental_html": exp_html,
+            "characterisation_html": char_html, "product": prod}
 
 
 def _article(phrase: str) -> str:

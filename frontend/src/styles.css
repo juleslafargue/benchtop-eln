@@ -1500,3 +1500,38 @@ table.rxn-grid .used { display: inline-flex; flex-wrap: wrap; align-items: cente
 /* a list cut short (0.31): how many of how many, and Show more */
 .notice.cut-short { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; border-left-color: var(--ink-3); }
 .archive-points { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+
+/* Supporting information (0.33) */
+.si-list-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+.si-list-row + .si-list-row { border-top: 1px solid var(--rule); }
+.si-doc { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 18px; align-items: start; }
+.si-check { position: sticky; top: 16px; }
+.si-h2 { font-size: 17px; font-weight: 600; margin: 0; }
+.si-head { padding: 14px 16px; align-items: center; border-bottom: 1px solid var(--rule); }
+.si-general { width: 100%; resize: vertical; font-size: 15px; line-height: 1.45; }
+.si-hint { margin: 0; font-size: 13px; }
+.si-compounds { list-style: none; margin: 0; padding: 0; }
+.si-compound { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 14px; padding: 14px 16px; align-items: start; }
+.si-compound + .si-compound { border-top: 1px solid var(--rule); }
+.si-thumb.mat-thumb { width: 112px; height: 72px; }
+.si-fields { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; }
+.si-fields .input { width: 100%; }
+.si-num { font-weight: 600; }
+.si-from { margin-top: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.si-from .status { margin-left: 4px; font-size: 12px; }
+.si-spectra { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.si-spectra .chip { cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 9px; }
+.si-moves { display: flex; flex-direction: column; gap: 4px; }
+.si-check-list { margin-top: 10px; }
+.si-pick-bar { margin-bottom: 10px; }
+.si-pick-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.si-pick { width: 100%; justify-content: flex-start; text-align: left; display: flex; flex-wrap: wrap; gap: 4px 8px; white-space: normal; }
+.si-pick > span { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 1000px) { .si-doc { grid-template-columns: minmax(0, 1fr); } .si-check { position: static; grid-row: 1; } }
+@media (max-width: 600px) {
+  .si-list-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .si-compound { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; padding: 12px; }
+  .si-thumb.mat-thumb { width: 72px; height: 48px; }
+  .si-fields { grid-template-columns: 70px minmax(0, 1fr); }
+  .si-moves { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
+}

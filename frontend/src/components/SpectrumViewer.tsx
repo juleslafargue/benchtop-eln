@@ -1,64 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '../App'
-import { applyOverrides, assign, groupLabel, predMult, PredictionPanel, usePrediction, type ConfirmedAssignments, type ObservedSignal, type Prediction } from './Prediction'
+import { applyOverrides, assign, groupLabel, predMult, PredictionPanel, usePrediction, type ConfirmedAssignments, type ObservedSignal } from './Prediction'
 import { baselineCorrect, phased } from '../fid'
 import Modal from './Modal'
 import { day, api } from '../api'
 import {
-  analyzeMultiplet, autoAnalyse1H, autoPeaks13C, findResidual, formatSignal, integrate, lowerBound, MULTIPLICITIES,
-  parseSpectrumBuffer, pickPeaks,
-  referenceChoices, shifted, snapToPeak, solventMarkers, type ImpurityResult, type Multiplet, type Spectrum,
+  analyzeMultiplet, autoAnalyse1H, autoPeaks13C, formatSignal, integrate, MULTIPLICITIES,
+  parseSpectrumBuffer,
+  referenceChoices, shifted, snapToPeak, solventMarkers, type Spectrum,
 } from '../spectra'
+import {
+  applyLabel, drawSpectrum, EXPORT, fidOptions, fmtX, geometry, header, is13C, isProton, LIGHT, OVERLAY_COLORS, peaksIn, predictedShifts,
+  PRED_COLOR, restoreAnalysis, signalTagsFor,
+  type Impurities, type Label, type Overlay, type Palette, type Region, type SavedAnalysis,
+} from '../spectrumDraw'
 
-export interface SavedAnalysis {
-  integrals: [number, number][]; ref_idx: number; ref_value: number; threshold: number
-  labels?: { mult: string; j: string }[]; offset?: number
-  impurities?: Pick<ImpurityResult, 'short' | 'name' | 'molPct' | 'wtPct' | 'signals'>[]
-  overlays?: number[]; overlay_mode?: 'stack' | 'overlay'
-  fid?: { ph0: number; ph1: number; lb: number | null }
-  assignments?: ConfirmedAssignments
-}
-interface Overlay { id: number; label: string; spec: Spectrum }
+export type { SavedAnalysis } from '../spectrumDraw'
 interface SpectrumListing { id: number; filename: string; eid: string; title: string; same_experiment: boolean; created_at: string }
-const PRED_COLOR = '#8c62d9'
-const OVERLAY_COLORS = ['#3a7ae6', '#c27a00', '#8c62d9', '#2a9d4b'] // validated for colour-blind separation and contrast on both themes
 interface StructureInfo { formula: string; total_h: number; exchangeable_h: number; h_environments: { count: number }[]; unique_carbons: number; total_carbons: number }
-interface Region { a: number; b: number }
-interface Label { mult: string; j: string }
 type Tool = 'zoom' | 'integrate' | 'reference'
 
-const M = { l: 14, r: 14, t: 28, b: 62 }
-const is13C = (s: Spectrum) => /13C/i.test(s.nucleus || '')
-const isProton = (s: Spectrum) => s.kind === 'nmr' && !is13C(s)
-const LIGHT = { ink: '#17212c', ink3: '#7a8896', accent: '#b8336a', rule: '#cbd5de', green: '#1d7466', paper: '#ffffff' }
-
-function niceTicks(lo: number, hi: number, n = 8): number[] {
-  const span = hi - lo
-  if (span <= 0) return []
-  const raw = span / n
-  const mag = 10 ** Math.floor(Math.log10(raw))
-  const step = [1, 2, 2.5, 5, 10].map(k => k * mag).find(s => s >= raw) || raw
-  const out: number[] = []
-  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10))
-  return out
-}
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim()
-const fmtX = (s: Spectrum, x: number) => s.kind === 'nmr' ? x.toFixed(is13C(s) ? 1 : 2) : s.kind === 'ir' ? Math.round(x).toString() : x.toFixed(1)
-
-function applyLabel(m: Multiplet, lab?: Label): Multiplet {
-  if (!lab) return m
-  const j = lab.j.trim() ? lab.j.split(/[,;/\s]+/).map(Number).filter(v => Number.isFinite(v) && v > 0) : m.j
-  const mult = lab.mult || m.mult
-  return { ...m, mult, j: mult === 's' || mult === 'br s' || mult === 'm' ? [] : j }
-}
-
-function header(s: Spectrum) {
-  if (s.kind === 'nmr') {
-    const nuc = (s.nucleus || '1H').replace(/^1H$/, '¹H').replace(/^13C$/, '¹³C').replace(/^19F$/, '¹⁹F')
-    return `${nuc} NMR (${s.frequency ? `${Math.round(s.frequency)} MHz` : '? MHz'}${s.solvent ? `, ${s.solvent}` : ''})`
-  }
-  return s.kind === 'ir' ? 'IR (cm⁻¹)' : s.kind === 'ms' ? 'MS (m/z)' : s.title
-}
 
 export function summarise(s: Spectrum, regions: (Region & { area: number })[], labels: Label[], refIdx: number, refH: number, peaks: { x: number }[]) {
   const head = header(s)
@@ -111,7 +73,7 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
   const drag = useRef<{ x0: number; x1: number } | null>(null)
   const restored = useRef(false)
   const [note, setNote] = useState<string | null>(null)
-  const [impurities, setImpurities] = useState<NonNullable<SavedAnalysis['impurities']>>(saved?.impurities || [])
+  const [impurities, setImpurities] = useState<Impurities>(saved?.impurities || [])
   const [structure, setStructure] = useState<StructureInfo | null>(null)
   const [overlays, setOverlays] = useState<Overlay[]>([])
   const [overlayMode, setOverlayMode] = useState<'stack' | 'overlay'>(saved?.overlay_mode || 'stack')
@@ -139,13 +101,7 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
   const [residual, setResidual] = useState<{ label: string; expected: number; found: number } | null>(null)
 
   // predicted product 1H shifts (confident, non-exchangeable groups) so auto-analysis doesn't call them solvent
-  const productShifts = async (): Promise<number[]> => {
-    if (!productSmiles) return []
-    try {
-      const p = await api.get<Prediction>(`/api/nmr/predict?smiles=${encodeURIComponent(productSmiles)}&nucleus=1H`)
-      return p.groups.filter(g => g.shift != null && !g.exchangeable && (g.confidence === 'high' || g.confidence === 'medium')).map(g => g.shift!)
-    } catch { return [] }
-  }
+  const productShifts = () => predictedShifts(productSmiles)
   const runAuto = async (s: Spectrum, announce = true, solventShift = 0) => {
     if (s.kind === 'nmr' && !is13C(s)) {
       const r = autoAnalyse1H(s, expectedH ?? null, solventShift, productMW ?? null, await productShifts())
@@ -168,24 +124,17 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
       if (!alive) return
       try {
         bufRef.current = buf
-        const s = await parseSpectrumBuffer(buf, filename, saved?.fid ? { ph0: saved.fid.ph0, ph1: saved.fid.ph1, lb: saved.fid.lb ?? undefined } : {})
+        const s = await parseSpectrumBuffer(buf, filename, fidOptions(saved))
         if (!alive) return
-        const off = saved?.offset || 0
-        setRaw(s); setOffset(off)
-        setView([s.x[0] + off, s.x[s.x.length - 1] + off])
-        if (saved?.integrals?.length) {
-          setRegions(saved.integrals.map(([a, b]) => ({ a, b })))
-          setLabels(saved.labels || saved.integrals.map(() => ({ mult: '', j: '' })))
-          setRefIdx(Math.min(saved.ref_idx ?? 0, saved.integrals.length - 1))
-          setRefH(saved.ref_value || 1)
+        const r = restoreAnalysis(s, saved)  // shared with the Supporting Information builder (spectrumDraw.ts)
+        setRaw(s); setOffset(r.offset)
+        setView(r.view)
+        if (r.saved) {
+          setRegions(r.saved.regions); setLabels(r.saved.labels); setRefIdx(r.saved.refIdx); setRefH(r.saved.refH)
         }
-        if (saved?.threshold) setThreshold(saved.threshold)
-        let solventShift = 0
-        if (s.kind === 'nmr' && !off) {
-          const res = findResidual(s)
-          if (res && Math.abs(res.found - res.expected) > 0.005) { setResidual(res); solventShift = res.found - res.expected }
-        }
-        if (!saved?.integrals?.length && s.kind === 'nmr' && !(is13C(s) && saved?.threshold)) runAuto(shifted(s, off), true, solventShift)
+        if (r.threshold) setThreshold(r.threshold)
+        if (r.residual) setResidual(r.residual)
+        if (r.auto) runAuto(shifted(s, r.offset), true, r.solventShift)
         setTimeout(() => { restored.current = true }, 0)
       } catch (e: any) { setErr(e.message) }
     }).catch(e => setErr(e.message))
@@ -200,14 +149,7 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
     }).catch(() => {})
   }, [raw]) // eslint-disable-line react-hooks/exhaustive-deps
   const withArea = useMemo(() => (spec ? regions.map(r => ({ ...r, area: integrate(spec, r.a, r.b) })) : []), [spec, regions])
-  const peaks = useMemo(() => {
-    if (!spec || !view || !showPeaks) return []
-    if (spec.kind === 'nmr' && is13C(spec)) { // carbon: signal-to-noise picking, solvent excluded
-      const lo = Math.min(view[0], view[1]), hi = Math.max(view[0], view[1])
-      return autoPeaks13C(spec, threshold >= 1 ? threshold : 6).peaks.filter(p => p.x >= lo && p.x <= hi)
-    }
-    return pickPeaks(spec, view[0], view[1], threshold, 50)
-  }, [spec, view, showPeaks, threshold])
+  const peaks = useMemo(() => (!spec || !view || !showPeaks ? [] : peaksIn(spec, view, threshold)), [spec, view, showPeaks, threshold])
   const markers = useMemo(() => (spec ? solventMarkers(spec) : []), [spec])
   const observed: ObservedSignal[] = useMemo(() => {
     if (!spec || spec.kind !== 'nmr') return []
@@ -219,16 +161,8 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
     })
   }, [spec, withArea, peaks, refIdx, refH])
   // one label per integrated 1H signal: "7.42 t, 2H", drawn above the multiplet
-  const signalTags = useMemo(() => {
-    if (!spec || !isProton(spec) || !showSignals) return []
-    const ref = withArea[refIdx]?.area
-    return withArea.map((r, i) => {
-      const m = applyLabel(analyzeMultiplet(spec, r.a, r.b), labels[i])
-      const h = ref ? r.area / ref * refH : 0
-      const shift = m.mult === 'm' ? `${m.hi.toFixed(2)}–${m.lo.toFixed(2)}` : m.shift.toFixed(2)
-      return { a: r.a, b: r.b, text: `${shift} ${m.mult}${h ? `, ${h < 0.95 ? h.toFixed(1) : Math.round(h)}H` : ''}` }
-    })
-  }, [spec, withArea, labels, refIdx, refH, showSignals])
+  const signalTags = useMemo(() => (!spec || !isProton(spec) || !showSignals ? [] : signalTagsFor(spec, withArea, labels, refIdx, refH)),
+    [spec, withArea, labels, refIdx, refH, showSignals])
 
   useEffect(() => {
     if (!restored.current || !onSave) return
@@ -279,274 +213,16 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
   }
 
   // ---------------------------------------------------------------- geometry
-  const geom = useCallback((w: number) => {
-    const [x0, x1] = view!
-    const span = x1 - x0 || 1
-    const toPx = (x: number) => spec!.reversed ? M.l + (x1 - x) / span * (w - M.l - M.r) : M.l + (x - x0) / span * (w - M.l - M.r)
-    const toX = (px: number) => spec!.reversed ? x1 - (px - M.l) / (w - M.l - M.r) * span : x0 + (px - M.l) / (w - M.l - M.r) * span
-    return { toPx, toX }
-  }, [spec, view])
+  const geom = useCallback((w: number) => geometry(spec!, view!, w), [spec, view])
 
-  // ---------------------------------------------------------------- drawing
-  const drawTo = useCallback((g: CanvasRenderingContext2D, w: number, h: number, pal: typeof LIGHT, forExport = false) => {
+  // ---------------------------------------------------------------- drawing (spectrumDraw.ts, shared with the Supporting Information builder)
+  const drawTo = useCallback((g: CanvasRenderingContext2D, w: number, h: number, pal: Palette, forExport = false) => {
     if (!spec || !view) return
-    const { toPx } = geom(w)
-    g.clearRect(0, 0, w, h)
-    if (forExport) { g.fillStyle = pal.paper; g.fillRect(0, 0, w, h) }
-    const [x0, x1] = view
-    const i0 = Math.max(0, lowerBound(spec.x, x0) - 1), i1 = Math.min(spec.x.length - 1, lowerBound(spec.x, x1) + 1)
-    let lo = Infinity, hi = -Infinity
-    for (let i = i0; i <= i1; i++) { if (spec.y[i] < lo) lo = spec.y[i]; if (spec.y[i] > hi) hi = spec.y[i] }
-    if (spec.isStick) lo = Math.min(0, lo)
-    const top = spec.dips ? hi : lo + (hi - lo) / yScale
-    const bottom = spec.dips ? hi - (hi - lo) / yScale : lo
-    const fullTop = M.t + (forExport ? 18 : 0), plotBottom = h - M.b
-    const stacked = overlays.length > 0 && overlayMode === 'stack'
-    const bands = overlays.length + 1
-    // stacked: this spectrum takes the bottom band and each comparison a band above it
-    // a strip along the top holds the signal labels, so they never sit on the trace
-    const tagStrip = signalTags.length ? 30 : 0
-    const predGroups = showPred && pred ? pred.groups.filter(g => g.shift !== null) : []
-    const predStrip = predGroups.length && !forExport ? 30 : 0
-    const plotTop = (stacked ? plotBottom - (plotBottom - fullTop) / bands : fullTop) + tagStrip + predStrip
-    const plotH = plotBottom - plotTop
-    const toPy = (y: number) => plotTop + (1 - (y - bottom) / (top - bottom || 1)) * plotH
-    const font = (px: number, weight = 400, italic = false) => `${italic ? 'italic ' : ''}${weight} ${px}px "Instrument Sans", system-ui, sans-serif`
-
-    if (forExport) { g.fillStyle = pal.ink; g.font = font(13, 600); g.textAlign = 'left'; g.fillText(header(spec), M.l, 18) }
-
-    // integral bands
-    withArea.forEach((r, k) => {
-      const a = toPx(r.a), b = toPx(r.b)
-      g.fillStyle = pal.green + (k === refIdx ? '26' : '14')
-      g.fillRect(Math.min(a, b), plotTop, Math.abs(b - a), plotH)
-    })
-    if (drag.current) {
-      const a = toPx(drag.current.x0), b = toPx(drag.current.x1)
-      g.fillStyle = (tool === 'integrate' ? pal.green : pal.accent) + '2a'
-      g.fillRect(Math.min(a, b), plotTop, Math.abs(b - a), plotH)
-    }
-
-    // trace (per-pixel min/max decimation)
-    g.save(); g.beginPath(); g.rect(M.l, plotTop - 2, w - M.l - M.r, plotH + 4); g.clip()
-    g.strokeStyle = pal.ink; g.lineWidth = forExport ? 1.2 : 1; g.beginPath()
-    if (spec.isStick) {
-      for (let i = i0; i <= i1; i++) { const px = toPx(spec.x[i]); g.moveTo(px, toPy(Math.max(0, bottom))); g.lineTo(px, toPy(spec.y[i])) }
-    } else {
-      let last = -1, mn = 0, mx = 0, first = true
-      for (let i = i0; i <= i1; i++) {
-        const px = Math.round(toPx(spec.x[i]))
-        if (px !== last) {
-          if (last >= 0) { g.lineTo(last, toPy(mn)); g.lineTo(last, toPy(mx)) }
-          last = px; mn = mx = spec.y[i]
-          if (first) { g.moveTo(px, toPy(spec.y[i])); first = false }
-        } else { if (spec.y[i] < mn) mn = spec.y[i]; if (spec.y[i] > mx) mx = spec.y[i] }
-      }
-      if (last >= 0) { g.lineTo(last, toPy(mn)); g.lineTo(last, toPy(mx)) }
-    }
-    g.stroke()
-    g.restore()
-
-    // comparison spectra
-    overlays.forEach((o, k) => {
-      const os = o.spec
-      const j0 = Math.max(0, lowerBound(os.x, Math.min(x0, x1)) - 1), j1 = Math.min(os.x.length - 1, lowerBound(os.x, Math.max(x0, x1)) + 1)
-      if (j1 <= j0) return
-      let olo = Infinity, ohi = -Infinity
-      for (let i = j0; i <= j1; i++) { if (os.y[i] < olo) olo = os.y[i]; if (os.y[i] > ohi) ohi = os.y[i] }
-      const bandH = (plotBottom - fullTop) / bands
-      const b0 = stacked ? plotBottom - (k + 1) * bandH : plotBottom, hgt = stacked ? bandH * 0.92 : plotH
-      const oy = (y: number) => b0 - ((y - olo) / ((ohi - olo) || 1)) * hgt * yScale
-      g.save(); g.beginPath(); g.rect(M.l, (stacked ? b0 - bandH : fullTop) - 2, w - M.l - M.r, (stacked ? bandH : plotBottom - fullTop) + 4); g.clip()
-      g.strokeStyle = OVERLAY_COLORS[k % OVERLAY_COLORS.length]; g.lineWidth = 1; g.globalAlpha = stacked ? 1 : 0.85; g.beginPath()
-      let last = -1, mn = 0, mx = 0, first = true
-      for (let i = j0; i <= j1; i++) {
-        const px = Math.round(toPx(os.x[i]))
-        if (px !== last) {
-          if (last >= 0) { g.lineTo(last, oy(mn)); g.lineTo(last, oy(mx)) }
-          last = px; mn = mx = os.y[i]
-          if (first) { g.moveTo(px, oy(os.y[i])); first = false }
-        } else { if (os.y[i] < mn) mn = os.y[i]; if (os.y[i] > mx) mx = os.y[i] }
-      }
-      if (last >= 0) { g.lineTo(last, oy(mn)); g.lineTo(last, oy(mx)) }
-      g.stroke(); g.restore()
-      g.font = font(11, 600); g.fillStyle = OVERLAY_COLORS[k % OVERLAY_COLORS.length]; g.textAlign = 'left'
-      g.fillText(o.label, M.l + 4, stacked ? b0 - bandH + 14 : fullTop + 14 + k * 14)
-    })
-    if (overlays.length) {
-      g.font = font(11, 600); g.fillStyle = pal.ink; g.textAlign = 'left'
-      g.fillText(forExport ? spec.title : 'This spectrum', M.l + 4, stacked ? plotTop + 14 : fullTop + 14 + overlays.length * 14)
-    }
-    g.save(); g.beginPath(); g.rect(M.l, plotTop - 2, w - M.l - M.r, plotH + 4); g.clip()
-
-    // integral curves: running integral over each region, scaled together
-    const maxArea = Math.max(...withArea.map(r => Math.abs(r.area)), 1e-12)
-    g.strokeStyle = pal.green; g.lineWidth = 1.4
-    for (const r of withArea) {
-      const lo2 = Math.min(r.a, r.b), hi2 = Math.max(r.a, r.b)
-      const j0 = lowerBound(spec.x, lo2), j1 = Math.min(lowerBound(spec.x, hi2), spec.x.length - 1)
-      const base = plotBottom - plotH * 0.08, height = plotH * 0.42 * (r.area / maxArea)
-      // accumulate in drawing direction (left to right on screen)
-      const idx: number[] = []
-      for (let j = j0; j <= j1; j++) idx.push(j)
-      if (spec.reversed) idx.reverse()
-      let acc = 0
-      g.beginPath()
-      idx.forEach((j, n) => {
-        if (n > 0) { const p = idx[n - 1]; acc += Math.abs(spec.x[j] - spec.x[p]) * (spec.y[j] + spec.y[p]) / 2 }
-        const px = toPx(spec.x[j]), py = base - (r.area ? acc / r.area : 0) * height
-        if (n === 0) g.moveTo(px, py); else g.lineTo(px, py)
-      })
-      g.stroke()
-    }
-    g.restore()
-
-    // solvent markers just above the axis
-    g.font = font(10, 400, true); g.fillStyle = pal.ink3; g.textAlign = 'center'
-    for (const m of markers) {
-      if (m.ppm < Math.min(x0, x1) || m.ppm > Math.max(x0, x1)) continue
-      const px = toPx(m.ppm)
-      g.beginPath(); g.moveTo(px - 4, plotBottom); g.lineTo(px + 4, plotBottom); g.lineTo(px, plotBottom - 6); g.closePath(); g.fill()
-      g.fillText(m.label, px, plotBottom - 9)
-    }
-
-    // residual lab solvents found by auto-analysis
-    g.font = font(10, 600); g.fillStyle = pal.accent; g.textAlign = 'center'
-    {
-      // stack labels that would overlap each other or a solvent-residual marker
-      const placed: { px: number; w: number; row: number }[] = markers.map(m => ({ px: toPx(m.ppm), w: g.measureText(m.label).width + 6, row: 0 }))
-      const labels = impurities.flatMap(imp => imp.signals.filter(p => p >= Math.min(x0, x1) && p <= Math.max(x0, x1)).map(p => ({ px: toPx(p), text: imp.short })))
-        .sort((a, b) => a.px - b.px)
-      for (const l of labels) {
-        const w = g.measureText(l.text).width + 6
-        let row = 0
-        while (placed.some(q => q.row === row && Math.abs(q.px - l.px) < (q.w + w) / 2)) row++
-        placed.push({ px: l.px, w, row })
-        g.fillRect(l.px - 0.5, plotBottom - 5, 1, 5)
-        g.fillText(l.text, l.px, plotBottom - 9 - row * 11)
-      }
-    }
-
-    // axis + ticks
-    g.strokeStyle = pal.rule; g.lineWidth = 1
-    g.beginPath(); g.moveTo(M.l, plotBottom + 0.5); g.lineTo(w - M.r, plotBottom + 0.5); g.stroke()
-    g.fillStyle = pal.ink3; g.font = font(11); g.textAlign = 'center'
-    for (const v of niceTicks(Math.min(x0, x1), Math.max(x0, x1), Math.max(3, Math.floor(w / 85)))) {
-      const px = toPx(v)
-      g.beginPath(); g.moveTo(px, plotBottom); g.lineTo(px, plotBottom + 4); g.stroke()
-      g.fillText(String(+v.toFixed(4)), px, plotBottom + 16)
-    }
-    g.textAlign = 'right'; g.fillText(spec.xLabel, w - M.r, plotBottom + 30)
-
-    // integral values below the axis (NMR convention)
-    const ref = withArea[refIdx]?.area
-    if (ref && withArea.every(r => Math.min(toPx(r.a), toPx(r.b)) > M.l + 62)) {
-      g.font = font(10.5, 400, true); g.fillStyle = pal.ink3; g.textAlign = 'left'; g.fillText('integrals', M.l, plotBottom + 34)
-    }
-    g.font = font(11, 600); g.fillStyle = pal.green; g.textAlign = 'center'
-    // each value goes in the first of three rows where it doesn't collide with one already placed
-    const usedRows: { px: number; w: number; row: number }[] = []
-    ;[...withArea].sort((p, q) => toPx((p.a + p.b) / 2) - toPx((q.a + q.b) / 2)).forEach(r => {
-      const a = toPx(r.a), b = toPx(r.b), px = (a + b) / 2
-      const text = ref ? (r.area / ref * refH).toFixed(2) : ''
-      const tw = g.measureText(text).width + 6
-      let row = 0
-      while (row < 2 && usedRows.some(q => q.row === row && Math.abs(q.px - px) < (q.w + tw) / 2)) row++
-      usedRows.push({ px, w: tw, row })
-      g.fillRect(Math.min(a, b), plotBottom + 22, Math.abs(b - a), 1.5)
-      if (row) g.fillRect(px - 0.4, plotBottom + 23.5, 0.8, row * 12)
-      if (text) g.fillText(text, px, plotBottom + 34 + row * 12)
-    })
-
-    // signal labels in the top strip, spread apart, each with a leader line down to its multiplet
-    if (signalTags.length) {
-      g.font = font(11, 600); g.textAlign = 'center'
-      const tags = signalTags.map(t => {
-        const lo2 = Math.min(t.a, t.b), hi2 = Math.max(t.a, t.b)
-        let top = -Infinity
-        for (let j = lowerBound(spec.x, lo2); j < spec.x.length && spec.x[j] <= hi2; j++) if (spec.y[j] > top) top = spec.y[j]
-        const px = toPx((t.a + t.b) / 2)
-        return { ...t, px, lx: px, peakY: Math.max(plotTop, toPy(top)), w: g.measureText(t.text).width + 10 }
-      }).filter(t => t.px >= M.l && t.px <= w - M.r).sort((p, q) => p.px - q.px)
-      const right = w - M.r
-      // push labels right until they don't overlap, then pull the row back inside the plot; false if they don't fit
-      const spread = () => {
-        tags.forEach(t => { t.lx = t.px })
-        for (let k = 1; k < tags.length; k++) tags[k].lx = Math.max(tags[k].lx, tags[k - 1].lx + (tags[k - 1].w + tags[k].w) / 2)
-        for (let k = tags.length - 1; k >= 0; k--) {
-          const lim = k === tags.length - 1 ? right - tags[k].w / 2 : tags[k + 1].lx - (tags[k + 1].w + tags[k].w) / 2
-          tags[k].lx = Math.min(tags[k].lx, lim)
-        }
-        return !tags.length || tags[0].lx >= M.l + tags[0].w / 2
-      }
-      if (!spread()) {
-        // too many for one row (a narrow window, or zoomed out): just the shifts, which the table spells out in full
-        tags.forEach(t => { t.text = t.text.split(' ')[0]; t.w = g.measureText(t.text).width + 10 })
-        if (!spread()) {
-          // still too many: those that have room where they are, the others left out until you zoom in
-          let edge = -Infinity
-          for (const t of tags) {
-            t.lx = Math.min(right - t.w / 2, Math.max(M.l + t.w / 2, t.px))
-            if (t.lx - t.w / 2 < edge) t.text = ''
-            else edge = t.lx + t.w / 2
-          }
-        }
-      }
-      const textY = plotTop - predStrip - tagStrip + 12
-      g.strokeStyle = pal.ink3; g.lineWidth = 0.8
-      for (const t of tags) {
-        if (!t.text) continue
-        g.beginPath(); g.moveTo(t.lx, textY + 4); g.lineTo(t.lx, textY + 9); g.lineTo(t.px, plotTop - 1); g.lineTo(t.px, Math.max(plotTop - 1, t.peakY - 4)); g.stroke()
-      }
-      g.fillStyle = pal.ink
-      for (const t of tags) g.fillText(t.text, t.lx, textY)
-    }
-
-    // predicted shifts (NMRShiftDB2): a lane of sticks just above the spectrum, height ~ number of nuclei, bar = typical spread
-    if (predStrip) {
-      const laneBottom = plotTop - 3, laneTop = plotTop - predStrip + 4
-      const maxN = Math.max(...predGroups.map(g => (pred!.nucleus === '1H' ? g.nH : g.atoms.length)), 1)
-      g.fillStyle = PRED_COLOR; g.strokeStyle = PRED_COLOR
-      g.font = font(10, 400, true); g.textAlign = 'left'
-      g.globalAlpha = 0.85; g.fillText('predicted', M.l + 2, laneTop + 8); g.globalAlpha = 1
-      for (const gr of predGroups) {
-        const v = gr.shift!
-        if (v < Math.min(x0, x1) || v > Math.max(x0, x1)) continue
-        const px = toPx(v)
-        const hgt = 5 + (laneBottom - laneTop - 5) * ((pred!.nucleus === '1H' ? gr.nH : gr.atoms.length) / maxN)
-        if (gr.sd) {
-          const a = toPx(v - gr.sd), b2 = toPx(v + gr.sd)
-          g.globalAlpha = 0.22; g.fillRect(Math.min(a, b2), laneBottom - 3, Math.max(1, Math.abs(b2 - a)), 3); g.globalAlpha = 1
-        }
-        g.lineWidth = gr.confidence === 'low' ? 1 : 2
-        g.setLineDash(gr.confidence === 'low' ? [2, 2] : [])
-        g.beginPath(); g.moveTo(px, laneBottom); g.lineTo(px, laneBottom - hgt); g.stroke()
-        g.setLineDash([])
-      }
-    }
-
-    // peak labels
-    if (showPeaks) {
-      g.fillStyle = pal.accent; g.strokeStyle = pal.accent; g.font = font(10)
-      let lastLabel = -1e9
-      for (const p of [...peaks].sort((a, b) => toPx(a.x) - toPx(b.x))) {
-        const px = toPx(p.x), py = toPy(p.y)
-        if (py < plotTop) continue
-        g.beginPath(); g.moveTo(px, py - 3); g.lineTo(px, py - 8); g.stroke()
-        const inSignal = signalTags.some(t => p.x >= Math.min(t.a, t.b) && p.x <= Math.max(t.a, t.b))
-        if (!inSignal && px - lastLabel > 11 && py > plotTop + 26) {
-          g.save(); g.translate(px + 3.5, py - 10); g.rotate(-Math.PI / 2); g.textAlign = 'left'; g.fillText(fmtX(spec, p.x), 0, 0); g.restore()
-          lastLabel = px
-        }
-      }
-    }
-
-    // hover crosshair
-    if (!forExport && hover !== null) {
-      const px = toPx(hover)
-      g.strokeStyle = pal.ink3; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(px + 0.5, plotTop); g.lineTo(px + 0.5, plotBottom); g.stroke(); g.setLineDash([])
-    }
-  }, [spec, view, yScale, withArea, refIdx, refH, peaks, showPeaks, tool, markers, hover, geom, impurities, overlays, overlayMode, signalTags, pred, showPred])
+    drawSpectrum(g, w, h, pal, {
+      spec, view, yScale, withArea, refIdx, refH, peaks, showPeaks, markers, impurities, overlays, overlayMode, signalTags, pred, showPred,
+      drag: drag.current ? { ...drag.current, integrate: tool === 'integrate' } : null, hover,
+    }, forExport)
+  }, [spec, view, yScale, withArea, refIdx, refH, peaks, showPeaks, tool, markers, hover, impurities, overlays, overlayMode, signalTags, pred, showPred])
 
   const draw = useCallback(() => {
     const c = canvas.current
@@ -656,7 +332,7 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
   }
   const setLabel = (k: number, p: Partial<Label>) => setLabels(ls => ls.map((l, j) => (j === k ? { ...l, ...p } : l)))
   const exportPng = () => {
-    const w = 1000, h = 420, scale = 2
+    const { w, h, scale } = EXPORT
     const c = document.createElement('canvas'); c.width = w * scale; c.height = h * scale
     const g = c.getContext('2d')!; g.scale(scale, scale)
     drawTo(g, w, h, LIGHT, true)

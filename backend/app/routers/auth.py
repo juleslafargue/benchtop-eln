@@ -57,7 +57,7 @@ def clean_orcid(value: str) -> str | None:
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 USERNAME = re.compile(r"^[a-z0-9][a-z0-9._-]{1,31}$")
-NAV_KEYS = ("dashboard", "inbox", "reactions", "compounds", "search", "materials", "inventory", "templates", "groups", "admin")
+NAV_KEYS = ("dashboard", "inbox", "reactions", "compounds", "si", "search", "materials", "inventory", "templates", "groups", "admin")
 PALETTES = ("benchtop", "notebook", "steel", "litmus", "contrast")  # frontend/scripts/themes.py
 PREF_KEYS = {"theme": ("system", "light", "dark"), "palette": PALETTES, "default_notebook_id": None, "spectrum_expanded": (True, False)}
 

@@ -529,3 +529,19 @@ class Publication(SQLModel, table=True):
     created_at: NaiveDatetime = Field(default_factory=utcnow)
     updated_at: NaiveDatetime = Field(default_factory=utcnow)
     published_at: Optional[NaiveDatetime] = None
+
+
+class SiDocument(SQLModel, table=True):
+    """A paper's Supporting Information (0.33): its title, the general text and which experiments' compounds go in it,
+    in order. It only points at experiments: building the Word file reads them and never changes them. Only its owner
+    can see it."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owner_id: int = Field(foreign_key="user.id", index=True)
+    title: str = ""
+    general: str = Field(default="", sa_column=Column(Text))
+    # [{experiment_id, number ("3a"), name ("" = the product's name), spectra (attachment ids; None = every NMR file)}]
+    items: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    page_size: str = "letter"  # letter | a4
+    version: int = 1  # goes up with each save; a save made from an older version is refused (409)
+    created_at: NaiveDatetime = Field(default_factory=utcnow)
+    updated_at: NaiveDatetime = Field(default_factory=utcnow)

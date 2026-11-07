@@ -10,6 +10,7 @@ const ITEMS = [
   { key: 'inbox', to: '/inbox', label: 'Inbox' },
   { key: 'reactions', to: '/reactions', label: 'Reactions' },
   { key: 'compounds', to: '/compounds', label: 'Compounds' },
+  { key: 'si', to: '/si', label: 'Supporting information' },
   { key: 'search', to: '/search', label: 'Search' },
   { key: 'materials', to: '/materials', label: 'Materials' },
   { key: 'inventory', to: '/inventory', label: 'Inventory' },
