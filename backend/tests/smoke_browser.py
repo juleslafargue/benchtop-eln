@@ -14,6 +14,7 @@ On data from an older version, upgraded by this one (the oldest demo lab is 0.9.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -114,7 +115,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
     mats = mats["items"] if isinstance(mats, dict) else mats
     nbs = httpx.get(B + "/api/notebooks", headers=H).json()
     pages = (["/", "/guide", "/templates", "/materials", f"/materials/{mats[0]['id']}", "/inventory", "/search?q=suzuki", "/reactions",
-              "/compounds", "/si", "/account", "/groups"] + [f"/notebooks/{n['id']}" for n in nbs]
+              "/compounds", "/si", "/archive", "/account", "/groups"] + [f"/notebooks/{n['id']}" for n in nbs]
              + [f"/experiments/{e['id']}" for e in exps] + [f"/bench/{exps[0]['id']}", "/inbox"])
     # Admin's tabs (0.26), each at its own address
     ADMIN = ["/admin"] + [f"/admin/{t}" for t in ("backups", "instruments", "email", "signing", "integrations", "audit")]
@@ -220,6 +221,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += cut_short_lists(browser, tok["hweiss"])
         problems += scanning(browser, tok["slaurent"])
         problems += supporting_info(browser, tok["slaurent"])
+        problems += yearly_archive(browser, tok["hweiss"], tok["slaurent"])
         browser.close()
     return problems
 
@@ -1976,6 +1978,120 @@ def supporting_info(browser, token: str) -> list[tuple[str, str, str, str]]:
         bad("error", str(e).splitlines()[0][:160])
     ctx.close()
     httpx.delete(f"{B}/api/si-documents/{doc_id}", headers=H)
+    return found
+
+
+def yearly_archive(browser, token: str, record_token: str) -> list[tuple[str, str, str, str]]:
+    """0.34: a yearly archive of the demo lab, made on its page: the browser draws every spectrum and uploads it, the
+    server lays out the PDF, it downloads; the PDF is PDF/A as far as pikepdf can tell (GitHub's tests then run veraPDF
+    on it), holds every record's number, at least one spectrum picture and each record's data. A record's Download PDF
+    is checked the same way. The page fits a phone, before and after. With BENCHTOP_PDF_SAMPLES set, both PDFs are
+    saved there for veraPDF."""
+    print("Yearly archive: drawing the demo lab's spectra, laying out the PDF, on a phone…", flush=True)
+    sys.path.insert(0, str(BACKEND / "tests"))
+    import pdfa_checks
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": "/archive"}
+    samples = Path(os.environ["BENCHTOP_PDF_SAMPLES"]) if os.environ.get("BENCHTOP_PDF_SAMPLES") else None
+    if samples:
+        samples.mkdir(parents=True, exist_ok=True)
+
+    def bad(kind: str, text: str) -> None:
+        found.append(("yearly archive", where["path"], kind, text))
+
+    def watch(pg) -> None:
+        pg.on("pageerror", lambda e: bad("page error", str(e)[:200]))
+        pg.on("console", lambda m: m.type == "error" and not any(i in m.text for i in IGNORE) and bad("console error", m.text[:200]))
+        pg.on("response", lambda r: "/api/archive" in r.url and r.status >= 400 and bad(f"HTTP {r.status}", r.url.replace(B, "")))
+
+    def phone_fits(label: str) -> None:
+        ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+        pg = ctx.new_page()
+        where["path"] = f"/archive (phone, {label})"
+        try:
+            pg.goto(B + "/archive")
+            pg.wait_for_selector(".archive-count b", timeout=20000)
+            pg.wait_for_load_state("networkidle")
+            over = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+            if over > 2:
+                bad("too wide", f"page is {over}px wider than the screen")
+        except Exception as e:  # noqa: BLE001
+            bad("error", str(e).splitlines()[0][:160])
+        ctx.close()
+
+    phone_fits("before")
+    opts = httpx.get(B + "/api/archive/options", headers=H).json()
+    if not opts["years"]:
+        bad("options", "the demo lab has no signed records to archive")
+        return found
+    year = opts["years"][0]["year"]
+    expect = httpx.get(f"{B}/api/archive/preview?year={year}", headers=H).json()
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900}, accept_downloads=True)
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    watch(pg)
+    where["path"] = "/archive"
+    try:
+        pg.goto(B + "/archive")
+        pg.wait_for_selector(".archive-count b", timeout=20000)
+        shown = pg.inner_text(".archive-count")
+        if f"{expect['records']} record" not in shown:
+            bad("count", f"the page says “{shown}”, the server {expect['records']} records")
+        with pg.expect_download(timeout=300000) as dl:
+            pg.click("button:has-text('Make the archive')")
+            pg.wait_for_selector(".archive-job progress", timeout=20000)
+        d = dl.value
+        if not d.suggested_filename.startswith(f"Benchtop records {year}") or not d.suggested_filename.endswith(".pdf"):
+            bad("file name", d.suggested_filename)
+        pdf = Path(d.path()).read_bytes()
+        if samples:
+            (samples / "archive-demo.pdf").write_bytes(pdf)
+        for p in pdfa_checks.problems(pdf):
+            bad("PDF/A", p)
+        files = pdfa_checks.attachments(pdf)
+        eids = sorted({n.split(".")[0].split("-signature-")[0] for n in files})
+        if len(eids) != expect["records"]:
+            bad("attachments", f"{len(eids)} records' data inside, {expect['records']} expected")
+        text = pdfa_checks.text(pdf)
+        missing = [e for e in eids if e not in text]
+        if missing:
+            bad("text", f"no {', '.join(missing[:5])} in the PDF's text")
+        if pdfa_checks.images(pdf, min_width=1500) < 1:
+            bad("spectra", "no spectrum picture in the PDF")
+        if not [t for t, _ in pdfa_checks.outline(pdf) if t.startswith("EXP-")]:
+            bad("bookmarks", "no bookmark for the records")
+        job = httpx.get(B + "/api/archive/options", headers=H).json()["job"]
+        if not job or job["state"] != "done" or job["spectra_done"] != job["spectra_total"]:
+            bad("job", f"the job says {job and (job['state'], job['spectra_done'], job['spectra_total'])}")
+        elif job["spectra_drawn"] < 1:
+            bad("spectra", "the browser drew no spectrum")
+        pg.wait_for_selector(".archive-done button:has-text('Download PDF')", timeout=10000)
+    except Exception as e:  # noqa: BLE001
+        bad("error", str(e).splitlines()[0][:160])
+    ctx.close()
+    phone_fits("after")
+    # one record's Download PDF: the same checks (and a file for veraPDF)
+    where["path"] = "Download PDF"
+    R = {"Authorization": "Bearer " + record_token}
+    try:
+        exps = httpx.get(B + "/api/experiments?limit=200", headers=R).json()
+        pick = next((e for e in exps if e["status"] == "witnessed"), exps[0])
+        r = httpx.get(f"{B}/api/experiments/{pick['id']}/export?format=pdf", headers=R, timeout=60)
+        if r.status_code != 200:
+            bad("HTTP", f"{r.status_code} for {pick['eid']}'s PDF")
+        else:
+            for p in pdfa_checks.problems(r.content):
+                bad("PDF/A", f"{pick['eid']}: {p}")
+            data = json.loads(pdfa_checks.attachments(r.content).get(f"{pick['eid']}.json", b"{}") or b"{}")
+            served = httpx.get(f"{B}/api/experiments/{pick['id']}/export?format=json", headers=R).json()
+            if data.get("content_hash") != served["content_hash"]:
+                bad("record data", f"{pick['eid']}'s PDF carries another fingerprint")
+            if samples:
+                (samples / "record.pdf").write_bytes(r.content)
+    except Exception as e:  # noqa: BLE001
+        bad("error", str(e).splitlines()[0][:160])
     return found
 
 

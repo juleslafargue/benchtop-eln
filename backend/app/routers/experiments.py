@@ -1274,15 +1274,15 @@ def _inline_images(h: str, atts: dict[int, Attachment], pdf: bool = False) -> st
     return _IMG_REF.sub(sub, h)
 
 
-def _render_entry_safe(e: Entry, atts: dict[int, Attachment], pdf: bool = False) -> str:
+def _render_entry_safe(e: Entry, atts: dict[int, Attachment], pdf: bool = False, figures: dict[int, dict] | None = None) -> str:
     try:
-        return _render_entry(e, atts, pdf)
+        return _render_entry(e, atts, pdf, figures)
     except Exception:
         log.exception("Couldn't render entry %s", e.id)
         return f"<section><h2>{html.escape(e.title or '')}</h2><p><i>This section couldn't be shown in the report.</i></p></section>"
 
 
-def _render_entry(e: Entry, atts: dict[int, Attachment], pdf: bool = False) -> str:
+def _render_entry(e: Entry, atts: dict[int, Attachment], pdf: bool = False, figures: dict[int, dict] | None = None) -> str:
     c = e.content or {}
     h = f"<section><h2>{html.escape(e.title)}</h2>"
     if e.kind == EntryKind.text:
@@ -1319,8 +1319,8 @@ def _render_entry(e: Entry, atts: dict[int, Attachment], pdf: bool = False) -> s
                 ("actual_mass_mg", "Actual (mg)"), ("yield_pct", "Yield %")]
         if pdf:  # an A4 page has no room for the formula column
             cols = [col for col in cols if col[0] != "formula"]
-        widths = {"role": "11%", "name": "27%"} if pdf else {}
-        h += "<table><tr>" + "".join(f"<th{(' width=' + chr(34) + widths[k] + chr(34)) if k in widths else ''}>{t}</th>" for k, t in cols) + "</tr>"
+        widths = {"role": "10%", "name": "22%"} if pdf else {}  # the numbers need the room in DejaVu Sans (0.34)
+        h += ("<table class='rxn-table'><tr>" if pdf else "<table><tr>") + "".join(f"<th{(' width=' + chr(34) + widths[k] + chr(34)) if k in widths else ''}>{t}</th>" for k, t in cols) + "</tr>"
         for r in c.get("rows", []):
             h += "<tr>" + "".join(
                 f"<td>{_fmt(r.get(k))}{' ★' if k == 'role' and r.get('limiting') else ''}</td>"
@@ -1392,6 +1392,8 @@ def _render_entry(e: Entry, atts: dict[int, Attachment], pdf: bool = False) -> s
             h += (f"<tr><td>{html.escape(it.get('technique', ''))}</td><td>{html.escape(it.get('conditions', ''))}</td>"
                   f"<td>{html.escape(it.get('data', ''))}</td><td>{html.escape(a.filename) if a else ''}</td></tr>")
         h += "</table>"
+        if figures is not None:  # the yearly archive (0.34): each spectrum file drawn as the viewer draws it
+            h += _figures_html(c.get("items", []), atts, figures)
     elif e.kind == EntryKind.references:
         h += _references_html(c.get("items") or [])
     elif e.kind == EntryKind.file:
@@ -1403,6 +1405,35 @@ def _render_entry(e: Entry, atts: dict[int, Attachment], pdf: bool = False) -> s
         if c.get("caption"):
             h += f"<p>{html.escape(str(c['caption']))}</p>"
     return h + "</section>"
+
+
+def _figures_html(items: list, atts: dict[int, Attachment], figures: dict[int, dict]) -> str:
+    """The characterisation files of a record, each as a picture with its caption (technique, conditions, file name
+    and the file's SHA-256), or, for one that couldn't be drawn, its name and fingerprint."""
+    import base64
+
+    out, seen = [], set()
+    for it in items:
+        aid = it.get("attachment_id") if isinstance(it, dict) else None
+        a = atts.get(aid) if isinstance(aid, int) else None
+        if a is None or aid in seen:
+            continue
+        seen.add(aid)
+        f = figures.get(aid) or {}
+        what = " ".join(x for x in (html.escape(str(it.get("technique") or "").strip()),
+                                    f"({html.escape(str(it.get('conditions')).strip())})" if str(it.get("conditions") or "").strip() else "") if x)
+        fp = f"<span class='mono fp'>SHA-256 {a.sha256}</span>"
+        if f.get("png"):
+            w = 680  # the width of the text on A4 or US Letter
+            hgt = max(1, round(w * f["height"] / f["width"]))
+            src = "data:image/png;base64," + base64.b64encode(f["png"]).decode()
+            # one table row: the picture and its caption stay on the same page
+            out.append(f"<table class='fig'><tr><td><img src='{src}' width='{w}' height='{hgt}'>"
+                       f"<p class='caption'>{what + ' · ' if what else ''}{html.escape(a.filename)}<br>{fp}</p></td></tr></table>")
+        else:
+            why = f" ({html.escape(f['error'])})" if f.get("error") else ""
+            out.append(f"<p class='caption nofig'>Not drawn{why}: {what + ' · ' if what else ''}{html.escape(a.filename)}<br>{fp}</p>")
+    return "".join(out)
 
 
 def _references_html(items: list) -> str:
@@ -1442,28 +1473,26 @@ def export_experiment(exp_id: int, user: CurrentUser, session: DB, format: str =
         return Response(md, media_type="text/markdown; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="{exp.eid} {safe_name(exp.title)}.md"'.encode("latin-1", "replace").decode("latin-1")})
     if format == "json":
-        return {"experiment": experiment_summary(session, exp), "snapshot": snapshot(session, exp),
-                "content_hash": content_hash(session, exp), "signatures": signatures_out(session, exp.id)}
+        from ..archive import record_proof
+        return record_proof(session, exp)
     if format == "pdf":
         return _pdf_response(session, exp)
     return HTMLResponse(report_html(session, exp))
 
 
 def pdf_bytes(session, exp: Experiment) -> bytes:
-    """The record as an A4 PDF (Download PDF; also what is published on Zenodo)."""
-    import io
+    """The record as an A4 PDF/A-3b file (Download PDF; also what is published on Zenodo), carrying the record's own
+    data and its timestamp proofs inside it (0.34). Only the file is made: the record is only read."""
+    from .. import pdfa
+    from ..archive import proof_attachments
     try:
-        from xhtml2pdf import pisa
-    except ImportError:
-        raise HTTPException(503, "PDF export needs one more package: stop Benchtop and start it again so it can install it") from None
-    out = io.BytesIO()
-    try:
-        res = pisa.CreatePDF(report_html(session, exp, pdf=True), dest=out, encoding="utf-8")
-    except RecursionError:
-        raise HTTPException(422, "This record's formatting is too complex for a PDF; the printable report (Print) still works") from None
-    if res.err:
-        raise HTTPException(500, "Couldn't make the PDF; the printable report (Print) still works")
-    return out.getvalue()
+        raw = pdfa.html_to_pdf(report_html(session, exp, pdf=True))
+        owner = session.get(User, exp.owner_id)
+        return pdfa.make_pdfa(raw, title=f"{exp.eid} {exp.title}", author=(owner.full_name or owner.username) if owner else "",
+                              subject=f"Benchtop ELN record {exp.eid} ({exp.status.value})", attachments=proof_attachments(session, exp))
+    except pdfa.PdfError as e:
+        status = 503 if "package" in str(e) else 422 if "too complex" in str(e) else 500
+        raise HTTPException(status, str(e)) from None
 
 
 def _pdf_response(session, exp: Experiment) -> Response:
@@ -1472,14 +1501,19 @@ def _pdf_response(session, exp: Experiment) -> Response:
     return Response(pdf_bytes(session, exp), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
-def report_html(session, exp: Experiment, pdf: bool = False) -> str:
+PAGE_SIZES = ("a4", "letter")
+
+
+def report_html(session, exp: Experiment, pdf: bool = False, *, page_size: str = "a4", footer: bool = True,
+                banner: str = "", figures: dict[int, dict] | None = None) -> str:
     """The printable record: every section, signatures and the content hash. pdf=True swaps in
-    rasters and print-safe styles for the PDF renderer."""
+    rasters and print-safe styles for the PDF renderer, in the embedded fonts. The yearly archive (0.34) leaves out the
+    page footer (it stamps its own), puts a note under the header (`banner`) and draws the spectra (`figures`)."""
     atts = {a.id: a for a in session.exec(select(Attachment).where(Attachment.experiment_id == exp.id,
                                                                    Attachment.withdrawn_at == None))}  # noqa: E711
     owner = session.get(User, exp.owner_id)
     sigs = signatures_out(session, exp.id)
-    body = "".join(_render_entry_safe(e, atts, pdf) for e in live_entries(session, exp.id))
+    body = "".join(_render_entry_safe(e, atts, pdf, figures) for e in live_entries(session, exp.id))
     def stamp(s):
         t = s.get("timestamp")
         if not t:
@@ -1489,12 +1523,25 @@ def report_html(session, exp: Experiment, pdf: bool = False) -> str:
         return "pending" if t["status"] == "pending" else "not obtained"
     sig_html = "".join(
         f"<tr><td>{html.escape(s['meaning'])}</td><td>{html.escape(s['signer_name'] or s['user']['username'])}</td>"
-        f"<td>{s['signed_at']}</td><td>{html.escape(s['comment'])}</td><td><code>{s['content_hash'][:16]}…</code></td><td>{stamp(s)}</td></tr>"
+        f"<td>{s['signed_at'][:16].replace('T', ' ') if pdf else s['signed_at']}</td><td>{html.escape(s['comment'])}</td><td><code class='mono'>{s['content_hash'][:16]}…</code></td><td>{stamp(s)}</td></tr>"
         for s in sigs) or "<tr><td colspan=6>Not signed</td></tr>"
+    heads = (("Meaning", "11%"), ("Signer", "17%"), ("Signed (UTC)", "13%"), ("Comment", "24%"), ("Content hash", "19%"),
+             ("Trusted timestamp", "16%"))
+    sig_head = "".join(f"<th width='{w}'>{t}</th>" if pdf else f"<th>{t}</th>" for t, w in heads)
     pdf_fix = pdf  # glyphs the PDF's built-in fonts lack
-    pdf_css = ("@page{size:a4;margin:1.6cm 1.5cm 1.8cm 1.5cm;@frame footer{-pdf-frame-content:pdffoot;bottom:.6cm;margin-left:1.5cm;margin-right:1.5cm;height:.8cm}}"
-               "body{font-family:Helvetica;font-size:10pt;line-height:1.35} h1{font-size:17pt} h2{font-size:12.5pt;margin:.6em 0 .2em}"
-               "table{font-size:8.5pt} td,th{padding:2px 4px} section{margin:.8em 0} #pdffoot{font-size:7.5pt;color:#666}") if pdf else ""
+    size = page_size if page_size in PAGE_SIZES else "a4"
+    if pdf:
+        from ..pdfa import font_css
+        foot_frame = "@frame footer{-pdf-frame-content:pdffoot;bottom:.6cm;margin-left:1.5cm;margin-right:1.5cm;height:.8cm}" if footer else ""
+        pdf_css = (f"@page{{size:{size};margin:1.6cm 1.5cm 1.8cm 1.5cm;{foot_frame}}}"
+                   "body{font-size:10pt;line-height:1.35} h1{font-size:17pt} h2{font-size:12.5pt;margin:.6em 0 .2em}"
+                   "table{font-size:8.5pt} td,th{padding:2px 4px;overflow-wrap:break-word} section{margin:.8em 0} #pdffoot{font-size:7.5pt;color:#555}"
+                   "footer{border-top:0;margin-top:1.2em;font-size:8pt} table.rxn-table{font-size:7.5pt} .rxn-table td,.rxn-table th{padding:2px 2px}"
+                   "table.fig td{border:0;padding:0} .caption{font-size:8pt;margin:.2em 0 .7em 0} .fp{font-size:6.5pt}"
+                   ".banner{border:2px solid #000;padding:4px 6px;margin:.4em 0 .8em 0;font-size:9.5pt}"
+                   ".banner.void{border:3px solid #000}" + font_css())
+    else:
+        pdf_css = ""
     doc = f"""<!doctype html><html><head><meta charset="utf-8"><title>{exp.eid} {html.escape(exp.title)}</title>
 <style>body{{font:14px/1.5 system-ui,sans-serif;max-width:900px;margin:2rem auto;color:#111}}
 header{{border-bottom:2px solid #111;margin-bottom:1rem}} h1{{margin:.2rem 0}} .meta{{color:#555}}
@@ -1504,12 +1551,12 @@ code{{font-size:11px}} ul[data-type=taskList]{{list-style:none;padding-left:.2em
 li[data-checked=true]::before{{content:'\\2611  '}} li[data-type=taskItem] div,li[data-type=taskItem] p{{display:inline}} blockquote{{border-left:3px solid #999;margin:.5rem 0;padding:.2rem .8rem;background:#f6f6f6}} mark{{background:#fff3a0}}
 .refs li{{margin-bottom:.35rem}} .refs a{{overflow-wrap:anywhere}}
 footer{{margin-top:2rem;border-top:1px solid #999;font-size:11px;color:#555}}{pdf_css}</style></head><body>
-{f'<div id="pdffoot">{exp.eid} · {html.escape(exp.title[:80])} · {html.escape(exp.status.value)} · page <pdf:pagenumber> of <pdf:pagecount></div>' if pdf else ''}
+{f'<div id="pdffoot">{exp.eid} · {html.escape(exp.title[:80])} · {html.escape(exp.status.value)} · page <pdf:pagenumber> of <pdf:pagecount></div>' if pdf and footer else ''}
 <header><div class="meta">{exp.eid} · {html.escape(exp.status.value.upper())}</div><h1>{html.escape(exp.title)}</h1>
 <div class="meta">Author: {html.escape(owner.full_name or owner.username)} · Created {exp.created_at:%Y-%m-%d %H:%M} UTC · Last modified {exp.updated_at:%Y-%m-%d %H:%M} UTC</div>
-<p>{html.escape(exp.description)}</p></header>{body}
-<section><h2>Signatures</h2><table><tr><th>Meaning</th><th>Signer</th><th>Signed (UTC)</th><th>Comment</th><th>Content hash</th><th>Trusted timestamp</th></tr>{sig_html}</table></section>
-<footer>Record content hash (SHA-256): <code>{content_hash(session, exp)}</code><br>Generated by Benchtop ELN {utcnow():%Y-%m-%d %H:%M} UTC</footer>
+<p>{html.escape(exp.description)}</p></header>{banner}{body}
+<section><h2>Signatures</h2><table><tr>{sig_head}</tr>{sig_html}</table></section>
+<footer>Record content hash (SHA-256): <code class="mono">{content_hash(session, exp)}</code><br>Generated by Benchtop ELN {utcnow():%Y-%m-%d %H:%M} UTC</footer>
 </body></html>"""
     if pdf_fix:
         doc = doc.replace(" ★", " (limiting)").replace("⏱ ", "").replace("⏱", "")

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { THEMES } from '../themeList'
 import { applyPalette } from '../theme'
 import { ApiTokens } from '../components/Integrations'
@@ -90,6 +91,11 @@ export default function Account() {
           </div>
           <p className="help" style={{ margin: 0 }}>Each record comes with its printable report, so it can be read without any software. To bring records
             in from another notebook, open a notebook and choose <b>Import .eln…</b></p>
+          <div className="spread" style={{ alignItems: 'center', gap: 12, borderTop: '1px solid var(--rule)', paddingTop: 10 }}>
+            <span>A year's signed records as one archival PDF to print and keep, with their spectra drawn and the proof of
+              each signature inside it.</span>
+            <Link className="btn" to="/archive">Yearly archive</Link>
+          </div>
         </div></div>
 
         <div><h2>Sample codes</h2><p className="help">Short labels for your samples, like JL-013, that instruments understand. Type one as the sample

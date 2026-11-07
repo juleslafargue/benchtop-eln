@@ -1535,3 +1535,13 @@ table.rxn-grid .used { display: inline-flex; flex-wrap: wrap; align-items: cente
   .si-fields { grid-template-columns: 70px minmax(0, 1fr); }
   .si-moves { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
 }
+
+/* Yearly archive (0.34) */
+.archive-page { max-width: 900px; }
+.archive-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 14px; }
+.archive-fields .select { width: 100%; min-width: 0; }
+.archive-count { margin: 0; font-size: 15px; }
+.archive-progress { width: 100%; height: 10px; accent-color: var(--accent); }
+.archive-done { justify-content: space-between; border-left-color: var(--witnessed); }
+.archive-done > span { flex: 1 1 260px; }
+.archive-note { font-size: 13px; }

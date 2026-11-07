@@ -155,7 +155,54 @@ jobs:
           path: frontend/dist
       - name: Open every page
         working-directory: backend
+        env:
+          BENCHTOP_PDF_SAMPLES: /tmp/pdf-samples  # the yearly archive and a record's PDF it makes, for the next step
         run: python tests/smoke_browser.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: The PDFs are valid PDF/A-3b (veraPDF, the reference validator)
+        env:
+          VERAPDF: "1.30.3"
+          VERAPDF_SHA256: b512bf24945503a33fc10738ecffc1f2dccaaf8593a448e94ee9ac86a9559a59
+        run: |
+          curl -fsSL -o /tmp/verapdf.zip "https://software.verapdf.org/releases/1.30/verapdf-greenfield-$VERAPDF-installer.zip"
+          echo "$VERAPDF_SHA256  /tmp/verapdf.zip" | sha256sum -c -
+          unzip -q /tmp/verapdf.zip -d /tmp/verapdf-installer
+          cat > /tmp/verapdf-auto.xml <<'XML'
+          <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+          <AutomatedInstallation langpack="eng">
+            <com.izforge.izpack.panels.htmlhello.HTMLHelloPanel id="welcome"/>
+            <com.izforge.izpack.panels.target.TargetPanel id="install_dir"><installpath>/tmp/verapdf</installpath></com.izforge.izpack.panels.target.TargetPanel>
+            <com.izforge.izpack.panels.packs.PacksPanel id="sdk_pack_select">
+              <pack index="0" name="veraPDF GUI" selected="true"/>
+              <pack index="1" name="veraPDF CLI" selected="true"/>
+              <pack index="2" name="veraPDF Documentation" selected="false"/>
+              <pack index="3" name="veraPDF Sample Plugins" selected="false"/>
+            </com.izforge.izpack.panels.packs.PacksPanel>
+            <com.izforge.izpack.panels.install.InstallPanel id="install"/>
+            <com.izforge.izpack.panels.finish.FinishPanel id="finish"/>
+          </AutomatedInstallation>
+          XML
+          java -jar "/tmp/verapdf-installer/verapdf-greenfield-$VERAPDF/verapdf-izpack-installer-$VERAPDF.jar" /tmp/verapdf-auto.xml
+          /tmp/verapdf/verapdf --version
+          ls -l /tmp/pdf-samples
+          test -s /tmp/pdf-samples/archive-demo.pdf && test -s /tmp/pdf-samples/record.pdf
+          failed=0
+          for f in /tmp/pdf-samples/*.pdf; do
+            echo "::group::veraPDF report for $(basename "$f")"
+            /tmp/verapdf/verapdf --flavour 3b --format text --verbose "$f" || true
+            echo "::endgroup::"
+            /tmp/verapdf/verapdf --flavour 3b --format mrr "$f" > "$f.xml" || true
+            if ! grep -q 'isCompliant="true"' "$f.xml" || grep -q 'isCompliant="false"' "$f.xml"; then
+              echo "::error title=PDF/A::$(basename "$f") is not valid PDF/A-3b; the rules it fails:"
+              grep -o '<rule [^>]*status="failed"[^>]*>' "$f.xml" | head -40
+              grep -A3 '<rule [^>]*status="failed"' "$f.xml" | grep -o '<description>[^<]*' | sort -u | head -40
+              failed=1
+            fi
+          done
+          exit $failed
       - name: Open every page on the oldest demo lab (0.9.3), upgraded
         working-directory: backend
         run: python tests/smoke_browser.py --upgraded v0.9.3

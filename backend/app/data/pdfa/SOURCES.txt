@@ -1,0 +1,16 @@
+What is in this folder, where it came from and its licence. Benchtop embeds these in every PDF it makes, so the
+PDFs are self-contained archival files (PDF/A-3b) that look the same on any computer, now and later (0.34).
+
+DejaVu fonts, version 2.37 (DejaVuSans.ttf, DejaVuSans-Bold.ttf, DejaVuSans-Oblique.ttf, DejaVuSans-BoldOblique.ttf,
+DejaVuSansMono.ttf, DejaVuSansMono-Bold.ttf), unchanged.
+  From: https://dejavu-fonts.github.io/ (release file dejavu-fonts-ttf-2.37.tar.bz2, SHA-256
+        fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7)
+  Licence: the Bitstream Vera fonts licence with the DejaVu changes in the public domain (LICENSE-DejaVu.txt). It allows
+        using, copying, embedding and redistributing the fonts, including with other software.
+  Why DejaVu: it has every character chemists type (δ µ ° ± → ≡ Å, ₀–₉, ⁰–⁹, ⁺ ⁻, ¹H, ¹³C, CDCl₃, ≤ ≥ ≈ ✓); Noto Sans
+        lacks → ≡ ≤ ≥ ≈.
+
+sRGB-v2-micro.icc (456 bytes), an sRGB colour profile (ICC version 2), unchanged. PDF/A needs one to say what the
+colours in the file mean (the "output intent").
+  From: https://github.com/saucecontrol/Compact-ICC-Profiles (profiles/sRGB-v2-micro.icc), by Clinton Ingram
+  Licence: CC0 1.0 Universal, public domain dedication (LICENSE-sRGB-v2-micro.txt)

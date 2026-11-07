@@ -17,6 +17,7 @@ import Search from './pages/Search'
 import Reactions from './pages/Reactions'
 import Compounds from './pages/Compounds'
 import SupportingInfo from './pages/SupportingInfo'
+import Archive from './pages/Archive'
 import Templates from './pages/Templates'
 import Admin from './pages/Admin'
 import Account from './pages/Account'
@@ -164,6 +165,7 @@ export default function App() {
           <Route path="/reactions" element={<Reactions />} />
           <Route path="/compounds" element={<Compounds />} />
           <Route path="/si/:id?" element={<SupportingInfo />} />
+          <Route path="/archive" element={<Archive />} />
           <Route path="/account" element={<Account />} />
           <Route path="/groups" element={<Groups />} />
           <Route path="/inbox" element={<Inbox />} />
