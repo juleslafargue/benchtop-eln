@@ -4,4 +4,5 @@
 pytest>=8
 playwright>=1.45
 pyyaml>=6
+fonttools>=4.40  # tests/pdfa_checks.py: font widths against the embedded fonts (PDF/A rule 6.2.11.5)
 schemathesis>=4.3,<5  # API fuzzing: tests/fuzz_api.py

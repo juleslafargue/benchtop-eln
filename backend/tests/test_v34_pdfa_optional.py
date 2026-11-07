@@ -43,6 +43,7 @@ def test_without_the_pdfa_package_a_record_pdf_is_an_ordinary_pdf(client, users,
     found = pdfa_checks.problems(pdf)
     assert any("pdfaid" in p or "XMP" in p for p in found), "it mustn't claim to be PDF/A"
     assert not [p for p in found if "not embedded" in p or ".notdef" in p], "the fonts are embedded all the same"
+    assert pdfa_checks.width_mismatches(pdf) == [], "and their widths match the embedded fonts, PDF/A or not"
     text = pdfa_checks.text(pdf)
     assert exp["eid"] in text and "CDCl₃" in text and "A → B" in text and "PDF/A" not in text
 
@@ -70,6 +71,7 @@ def test_without_the_pdfa_package_the_archive_is_made_and_says_where_the_proofs_
     assert pdf.startswith(b"%PDF-") and pdfa_checks.page_count(pdf) == done["pages"]
     assert pdfa_checks.attachments(pdf) == {}
     assert not [p for p in pdfa_checks.problems(pdf) if "not embedded" in p or ".notdef" in p]
+    assert pdfa_checks.width_mismatches(pdf) == []
     assert pdfa_checks.images(pdf, min_width=1000) == 1
     marks = pdfa_checks.outline(pdf)
     assert [t for t, _ in marks][:2] == ["Cover", "Contents"] and marks[-1][0] == "How to check this archive"

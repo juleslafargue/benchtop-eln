@@ -69,10 +69,15 @@ def _setup() -> None:
         from reportlab.pdfbase.ttfonts import TTFont
         from xhtml2pdf import default as x2p_default
 
+        def font(name: str, file: str) -> TTFont:
+            f = TTFont(name, str(ASSETS / file))
+            _fix_advances(f.face)
+            return f
+
         for name, file in FONT_FILES.items():
-            pdfmetrics.registerFont(TTFont(name, str(ASSETS / file)))
+            pdfmetrics.registerFont(font(name, file))
         for name, target in _BUILTIN.items():
-            pdfmetrics.registerFont(TTFont(name, str(ASSETS / FONT_FILES[target])))
+            pdfmetrics.registerFont(font(name, FONT_FILES[target]))
         # which face is bold / italic. Registering a TrueType font maps all four styles of its own name to itself, which
         # leaves ReportLab reading "Helvetica" as bold italic: put the families back. Italic first, so a face used for
         # two styles (the monospaced one has no italic) reads as upright.
@@ -97,6 +102,26 @@ def _setup() -> None:
         faces = [set(TTFontFile(str(ASSETS / FONT_FILES[f])).charToGlyph) for f in FONT_FILES if f.startswith("DejaVuSans-") or f == SANS]
         _glyphs.update(set.intersection(*faces))
         _ready = True
+
+
+def _fix_advances(face) -> None:
+    """Correct ReportLab's copy of a font's advance widths before it makes subsets of it (PDF/A rule 6.2.11.5).
+
+    A TrueType font may list a full advance width only for its first numberOfHMetrics glyphs; every later glyph shares
+    the last one. ReportLab's reader (ttfonts.TTFontFile, as of ReportLab 5.1) stores that shared width already scaled to
+    1/1000 em for the later glyphs, and its subsets then write it into the embedded font as if it were in font units:
+    602 for DejaVu Sans Mono's characters instead of 1233 (of 2048), so the embedded program disagreed with the
+    widths in the PDF's font dictionary, which are right. Here the later glyphs get the unscaled width back."""
+    import struct
+
+    try:
+        n = struct.unpack(">H", face.get_table("hhea")[34:36])[0]
+    except Exception:  # noqa: BLE001 - a font without the table: nothing to correct
+        return
+    hm = face.hmetrics
+    if 0 < n < len(hm):
+        shared = hm[n - 1][0]
+        face.hmetrics = hm[:n] + [(shared, lsb) for _, lsb in hm[n:]]
 
 
 def font_css() -> str:

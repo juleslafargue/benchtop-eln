@@ -162,6 +162,9 @@ def problems(data: bytes) -> list[str]:
                 out.append(f"font {f.BaseFont} maps codes {zero[:5]} to .notdef")
         if sub == Name.TrueType and int(fd.get("/Flags", 0)) & 4 and "/Encoding" in f:
             out.append(f"symbolic TrueType font {f.BaseFont} has an /Encoding")
+    bad = width_mismatches(data)
+    if bad:
+        out.append(f"{len(bad)} glyph widths in font dictionaries differ from their embedded fonts (6.2.11.5), e.g. {bad[:3]}")
     # no JavaScript, no actions that run things, annotations that print
     names = root.get("/Names", {})
     if "/JavaScript" in names or "/AA" in root or ("/OpenAction" in root and isinstance(root.OpenAction, pikepdf.Dictionary)
@@ -191,6 +194,59 @@ def problems(data: bytes) -> list[str]:
         ef = o.get("/EF", {}).get("/F")
         if ef is None or "/Subtype" not in ef or "/Params" not in ef or "/ModDate" not in ef.Params:
             out.append(f"attachment {name}: its file has no MIME type or modification date")
+    return out
+
+
+def width_mismatches(data: bytes) -> list[tuple[str, int, float, float]]:
+    """PDF/A rule 6.2.11.5, as veraPDF checks it: for each character code a page draws with an embedded TrueType font,
+    the width in the font dictionary (/Widths from /FirstChar; /W through /CIDToGIDMap for CID fonts) matches the
+    embedded program's advance (hmtx) × 1000 / unitsPerEm, within 1. Returns (font, code, dictionary width, program
+    width) for each that doesn't. Needs fontTools (requirements-dev.txt only)."""
+    from fontTools.ttLib import TTFont
+
+    pdf = pikepdf.open(io.BytesIO(data))
+    used = used_codes(pdf)
+    out: list[tuple[str, int, float, float]] = []
+    for f in _fonts(pdf):
+        fd = f.get("/FontDescriptor")
+        if fd is None or "/FontFile2" not in fd:
+            continue
+        codes = used.get(f.objgen, set())
+        if not codes and f.get("/Subtype") != Name.CIDFontType2:
+            continue
+        t = TTFont(io.BytesIO(fd.FontFile2.read_bytes()), lazy=True)
+        upm, hm, order = t["head"].unitsPerEm, t["hmtx"].metrics, t.getGlyphOrder()
+        adv = lambda gid: hm[order[gid]][0] * 1000 / upm  # noqa: E731
+        if f.get("/Subtype") == Name.CIDFontType2:
+            gidmap = f.get("/CIDToGIDMap")
+            raw = gidmap.read_bytes() if isinstance(gidmap, pikepdf.Stream) else None
+            w = f.get("/W", [])
+            i = 0
+            while i < len(w):
+                first = int(w[i])
+                if isinstance(w[i + 1], pikepdf.Array):
+                    pairs = [(first + k, float(v)) for k, v in enumerate(w[i + 1])]
+                    i += 2
+                else:
+                    pairs = [(c, float(w[i + 2])) for c in range(first, int(w[i + 1]) + 1)]
+                    i += 3
+                for cid, width in pairs:
+                    gid = int.from_bytes(raw[2 * cid: 2 * cid + 2], "big") if raw else cid
+                    if gid < len(order) and abs(width - adv(gid)) > 1:
+                        out.append((str(f.get("/BaseFont")), cid, width, round(adv(gid), 2)))
+            continue
+        cmap: dict[int, str] = {}
+        for tb in t["cmap"].tables:
+            cmap.update(tb.cmap)
+        first = int(f.get("/FirstChar", 0))
+        widths = f.get("/Widths", [])
+        for code in sorted(codes):
+            if not first <= code < first + len(widths):
+                continue
+            g = cmap.get(code, order[0])
+            prog = hm[g][0] * 1000 / upm
+            if abs(float(widths[code - first]) - prog) > 1:
+                out.append((str(f.get("/BaseFont")), code, float(widths[code - first]), round(prog, 2)))
     return out
 
 
