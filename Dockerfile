@@ -16,8 +16,8 @@ WORKDIR /app
 # Benchtop can't start (checked by the "Lab-server setup" job in the tests: ldd lists nothing else missing)
 RUN apt-get update && apt-get install -y --no-install-recommends libxrender1 libxext6 libexpat1 \
     && rm -rf /var/lib/apt/lists/*
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt "psycopg[binary]>=3.2"
+COPY backend/requirements.txt backend/requirements-pdfa.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-pdfa.txt "psycopg[binary]>=3.2"
 COPY backend/app ./app
 COPY plugins ./plugins
 COPY --from=web /web/dist ./static

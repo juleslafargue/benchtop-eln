@@ -100,7 +100,7 @@ export default function NotebookPage() {
           {nb.experiment_count > 0 && <button className="btn" title="Every experiment here you can open, in the shared format of lab notebooks (.eln)"
             onClick={() => { toast('Preparing the export…'); downloadAuthed(`/api/notebooks/${nb.id}/export.eln`, `${nb.name.replace(/[\\/:*?"<>|#^[\]{}%]+/g, ' ').slice(0, 80)} - ${new Date().toISOString().slice(0, 10)}.eln`, false, true).catch(e => toast(e.message)) }}>Export (.eln)</button>}
           {(nb.status_counts.signed ?? 0) + (nb.status_counts.witnessed ?? 0) + (nb.status_counts.voided ?? 0) > 0 &&
-            <Link className="btn" to={`/archive?notebook=${nb.id}`} title="This notebook's records signed over a year, a month or a week, as one archival PDF to print and keep">Archive PDF</Link>}
+            <Link className="btn" to={`/archive?notebook=${nb.id}`} title="This notebook's records signed over a year, a month or a week, as one PDF to print and keep">Archive PDF</Link>}
           {canWrite && !nb.archived && <button className="btn" onClick={() => setImporting(true)} title="Bring experiments in from eLabFTW, RSpace, another Benchtop…">Import .eln…</button>}
           {canWrite && !nb.archived && <button className="btn primary" onClick={() => setCreating(true)}>New experiment</button>}
         </div>

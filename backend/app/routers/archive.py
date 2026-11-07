@@ -12,7 +12,7 @@ from fastapi import APIRouter, File, HTTPException, Path as PathParam, Query, Up
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .. import archive
+from .. import archive, pdfa
 from ..security import DB, CurrentUser
 
 router = APIRouter(prefix="/api/archive", tags=["archive PDF"])
@@ -54,7 +54,14 @@ def _fail(e: archive.ArchiveError):
 def archive_options(user: CurrentUser, session: DB):
     """The years with signed records you can open, the notebooks and authors they come from, and your latest job."""
     job = archive.current_job(user)
-    return {**archive.options(session, user), "job": archive.job_out(job) if job else None}
+    return {**archive.options(session, user), "job": archive.job_out(job) if job else None, "pdfa": pdfa.available()}
+
+
+@router.get("/pdfa")
+def pdfa_state(user: CurrentUser):
+    """Whether this Benchtop makes archival PDFs (PDF/A): the package for it installs only where a ready-made one exists
+    for the computer. Without it, PDFs are ordinary PDFs, with nothing attached."""
+    return {"available": pdfa.available()}
 
 
 @router.get("/preview")

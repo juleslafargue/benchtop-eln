@@ -1487,6 +1487,8 @@ def pdf_bytes(session, exp: Experiment) -> bytes:
     from ..archive import proof_attachments
     try:
         raw = pdfa.html_to_pdf(report_html(session, exp, pdf=True))
+        if not pdfa.available():  # the PDF/A package isn't installed on this computer: an ordinary PDF, nothing attached
+            return raw
         owner = session.get(User, exp.owner_id)
         return pdfa.make_pdfa(raw, title=f"{exp.eid} {exp.title}", author=(owner.full_name or owner.username) if owner else "",
                               subject=f"Benchtop ELN record {exp.eid} ({exp.status.value})", attachments=proof_attachments(session, exp))

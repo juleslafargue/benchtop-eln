@@ -2022,6 +2022,9 @@ def yearly_archive(browser, token: str, record_token: str) -> list[tuple[str, st
         ctx.close()
 
     phone_fits("before")
+    # requirements-dev.txt installs the PDF/A package, so here the PDFs must be PDF/A (checked below, and by veraPDF)
+    if not httpx.get(B + "/api/archive/pdfa", headers=H).json().get("available"):
+        bad("PDF/A", "the PDF/A package isn't installed for this check: pip install -r requirements-pdfa.txt")
     ctx = browser.new_context(viewport={"width": 1300, "height": 900}, accept_downloads=True)
     ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
     pg = ctx.new_page()
@@ -2030,6 +2033,8 @@ def yearly_archive(browser, token: str, record_token: str) -> list[tuple[str, st
     try:
         pg.goto(B + "/archive")
         pg.wait_for_selector(".archive-count b", timeout=20000)
+        if pg.is_visible(".archive-pdfa-off"):
+            bad("PDF/A", "the page says PDF/A is off")
         # From later than To: said at once, and nothing can be made
         pg.fill("input[type=date] >> nth=0", "2026-11-09")
         pg.fill("input[type=date] >> nth=1", "2026-11-03")

@@ -52,6 +52,21 @@ ensure_python_env() {
     "$VENV/bin/python" -m pip install --quiet -r "$BACKEND/requirements.txt"
     printf '%s' "$want" > "$stamp"
   fi
+  ensure_pdfa
+}
+
+# Archival PDFs (PDF/A, 0.34) need one more package, which doesn't exist ready-made for every computer. It's installed
+# only as a ready-made package (pip never compiles it); where there is none, Benchtop carries on and makes ordinary PDFs.
+# Tried again only when a requirements file changes (an update, a rollback), not at every start.
+ensure_pdfa() {
+  local file="$BACKEND/requirements-pdfa.txt" stamp="$VENV/.requirements-pdfa-tried" want
+  [ -f "$file" ] || return 0
+  want="$(cksum < "$BACKEND/requirements.txt") $(cksum < "$file")"
+  [ "$(cat "$stamp" 2>/dev/null)" = "$want" ] && return 0
+  if ! "$VENV/bin/python" -m pip install --quiet --only-binary=:all: -r "$file" >/dev/null 2>&1; then
+    say "PDFs will be ordinary PDFs on this computer: the PDF/A package isn't available for it."
+  fi
+  printf '%s' "$want" > "$stamp"
 }
 
 ui_is_stale() {

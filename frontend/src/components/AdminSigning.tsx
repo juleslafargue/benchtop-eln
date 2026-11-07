@@ -2,6 +2,21 @@ import { useEffect, useState } from 'react'
 import { useApp } from '../App'
 import { api, when } from '../api'
 
+/** Whether this Benchtop makes archival PDFs (0.34): the PDF/A package installs only where a ready-made one exists. */
+export function PdfaStatusPanel() {
+  const [on, setOn] = useState<boolean | null>(null)
+  useEffect(() => { api.get<{ available: boolean }>('/api/archive/pdfa').then(x => setOn(x.available)).catch(() => setOn(null)) }, [])
+  if (on === null) return null
+  return (
+    <section className="stack" style={{ gap: 6 }}>
+      <h2 style={{ fontSize: 17 }}>Archival PDFs (PDF/A)</h2>
+      <p className="faint pdfa-state" style={{ margin: 0 }}>{on
+        ? 'On: every PDF (Download PDF, Zenodo, Archive PDF) is PDF/A-3b, with the record\'s data and timestamp proofs inside it.'
+        : 'Off on this computer: the PDF/A package isn\'t installed (there is no ready-made one for this computer). PDFs are ordinary PDFs with the same pages, and nothing is attached to them.'}</p>
+    </section>
+  )
+}
+
 interface EmailSettings {
   host: string; port: number; security: 'starttls' | 'ssl' | 'none'; username: string; password: string; password_set: boolean
   from_address: string; from_name: string; base_url: string; fixed: string[]; configured: boolean; link_base: string; waiting?: number

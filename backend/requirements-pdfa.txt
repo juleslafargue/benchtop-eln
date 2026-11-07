@@ -1,0 +1,5 @@
+# Archival PDFs (PDF/A, 0.34). Optional: ./benchtop installs these only as ready-made packages (wheels), and where none
+# exists for a computer, Benchtop carries on and makes ordinary PDFs. 9.11.0 still has wheels for Intel Macs (macOS 13+)
+# and Python up to 3.14; 10.17.0 has them for Python 3.15 (its only Mac wheel is for arm64 on macOS 15).
+pikepdf==9.11.0; python_version < "3.15"
+pikepdf==10.17.0; python_version >= "3.15"

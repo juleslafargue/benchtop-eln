@@ -22,7 +22,7 @@ export interface ArchiveJob {
   created_at: string; spectra_total: number; spectra_done: number; spectra_drawn: number; spectra?: ArchiveSpectrum[]
 }
 export interface Options {
-  notebooks: { id: number; name: string }[]; authors: { id: number; name: string }[]; job: ArchiveJob | null
+  notebooks: { id: number; name: string }[]; authors: { id: number; name: string }[]; job: ArchiveJob | null; pdfa: boolean
 }
 
 /** Spectra in the archive: the viewer's Export PNG drawing, at about 300 dpi across the width of a page

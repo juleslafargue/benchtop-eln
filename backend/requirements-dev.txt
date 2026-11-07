@@ -1,5 +1,6 @@
 # For running the tests (not needed to use Benchtop)
 -r requirements.txt
+-r requirements-pdfa.txt
 pytest>=8
 playwright>=1.45
 pyyaml>=6

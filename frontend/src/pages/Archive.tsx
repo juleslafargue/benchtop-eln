@@ -146,9 +146,13 @@ export default function Archive() {
       <div>
         <h1 className="page-title">Archive PDF</h1>
         <p className="lede">One PDF of the records signed over a span of days (a year, a month, a week), made to be printed and
-          kept: each record as Benchtop prints it, with its spectra drawn, in the order they were signed. It's an archival PDF (PDF/A): its fonts are inside it, and so is
-          each record's data with the proof of its signatures. Making it never changes a record.</p>
+          kept: each record as Benchtop prints it, with its spectra drawn, in the order they were signed.{opts.pdfa
+            ? ' It\'s an archival PDF (PDF/A): its fonts are inside it, and so is each record\'s data with the proof of its signatures.'
+            : ' Its fonts are inside it.'} Making it never changes a record.</p>
       </div>
+      {!opts.pdfa && <p className="notice archive-pdfa-off" role="note">On this computer the PDF is an ordinary PDF, not PDF/A: the PDF/A
+        package isn't installed here (there is no ready-made one for this computer). The records' data and timestamp proofs aren't
+        attached to it; the PDF's last page says where they are in Benchtop.</p>}
 
       <section className="panel panel-pad stack" aria-labelledby="archive-what" style={{ gap: 14 }}>
         <h2 className="si-h2" id="archive-what">What goes in</h2>

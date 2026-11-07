@@ -15,6 +15,8 @@ this module then makes them archival:
 
 Only the PDF file is made here; nothing about a record, and nothing a signature covers, is read or changed.
 pikepdf (qpdf) does the PDF/A part; tests/pdfa_checks.py checks the result, and GitHub's tests run veraPDF on it.
+pikepdf is optional (requirements-pdfa.txt): where no ready-made package exists for a computer, Benchtop still makes
+ordinary PDFs, in the same embedded fonts, and says nowhere that they are PDF/A (see available()).
 """
 from __future__ import annotations
 
@@ -148,11 +150,22 @@ def _pdf_date(d: datetime) -> str:
     return d.strftime("D:%Y%m%d%H%M%S+00'00'")
 
 
+def available() -> bool:
+    """Whether the PDF/A package (pikepdf) is installed. It's optional: the launcher installs it only where a ready-made
+    package exists for the computer (requirements-pdfa.txt). Without it, PDFs are ordinary PDFs, with the same pages and
+    embedded fonts, but no PDF/A metadata or colour profile and nothing attached."""
+    try:
+        import pikepdf  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _pikepdf():
     try:
         import pikepdf
     except ImportError:
-        raise PdfError("PDF export needs one more package (pikepdf): stop Benchtop and start it again so it can install it") from None
+        raise PdfError("Archival PDFs need the PDF/A package (pikepdf), which isn't installed on this computer") from None
     return pikepdf
 
 

@@ -18,48 +18,52 @@ test('the count line says how many records and of which kind', () => {
   assert.equal(countLine({ records: 0, witnessed: 0, awaiting_witness: 0, voided: 0 }), 'No records')
 })
 
+// Every date here is in the past, where Vancouver's clock rules are settled: time-zone data changes with the law
+// (British Columbia's permanent daylight time, for one), and a test of a future date would follow it.
 test('quick choices: this and last week (from Monday), month and year, and the four full years before', () => {
-  // Saturday 7 November 2026, late in the evening in Vancouver (already Sunday in UTC)
-  assert.deepEqual(picks(new Date('2026-11-08T06:30:00Z')), {
-    'This week': '2026-11-02..2026-11-07', 'Last week': '2026-10-26..2026-11-01',
-    'This month': '2026-11-01..2026-11-07', 'Last month': '2026-10-01..2026-10-31',
-    'This year': '2026-01-01..2026-11-07', 'Last year': '2025-01-01..2025-12-31',
-    2025: '2025-01-01..2025-12-31', 2024: '2024-01-01..2024-12-31', 2023: '2023-01-01..2023-12-31', 2022: '2022-01-01..2022-12-31',
+  // Saturday 9 November 2024, late in the evening in Vancouver (UTC−8: already Sunday in UTC)
+  assert.deepEqual(picks(new Date('2024-11-10T06:30:00Z')), {
+    'This week': '2024-11-04..2024-11-09', 'Last week': '2024-10-28..2024-11-03',
+    'This month': '2024-11-01..2024-11-09', 'Last month': '2024-10-01..2024-10-31',
+    'This year': '2024-01-01..2024-11-09', 'Last year': '2023-01-01..2023-12-31',
+    2023: '2023-01-01..2023-12-31', 2022: '2022-01-01..2022-12-31', 2021: '2021-01-01..2021-12-31', 2020: '2020-01-01..2020-12-31',
   })
-  assert.deepEqual(quickPicks(new Date(2026, 10, 7)).map(p => p.label),
-    ['This week', 'Last week', 'This month', 'Last month', 'This year', 'Last year', '2025', '2024', '2023', '2022'])
+  assert.deepEqual(quickPicks(new Date(2024, 10, 9)).map(p => p.label),
+    ['This week', 'Last week', 'This month', 'Last month', 'This year', 'Last year', '2023', '2022', '2021', '2020'])
 })
 
 test('quick choices at the edges: a Monday, a Sunday, the 1st of January, a leap February', () => {
-  const mon = picks(new Date(2026, 10, 2, 9))
-  assert.equal(mon['This week'], '2026-11-02..2026-11-02')
-  assert.equal(mon['Last week'], '2026-10-26..2026-11-01')
-  assert.equal(picks(new Date(2026, 10, 8, 23, 59))['This week'], '2026-11-02..2026-11-08')
-  const jan1 = picks(new Date(2027, 0, 1, 0, 5))
-  assert.equal(jan1['This year'], '2027-01-01..2027-01-01')
-  assert.equal(jan1['Last month'], '2026-12-01..2026-12-31')
-  assert.equal(jan1['Last week'], '2026-12-21..2026-12-27')
+  const mon = picks(new Date(2024, 10, 4, 9))
+  assert.equal(mon['This week'], '2024-11-04..2024-11-04')
+  assert.equal(mon['Last week'], '2024-10-28..2024-11-03')
+  assert.equal(picks(new Date(2024, 10, 10, 23, 59))['This week'], '2024-11-04..2024-11-10')
+  const jan1 = picks(new Date(2025, 0, 1, 0, 5))
+  assert.equal(jan1['This year'], '2025-01-01..2025-01-01')
+  assert.equal(jan1['Last month'], '2024-12-01..2024-12-31')
+  assert.equal(jan1['Last week'], '2024-12-23..2024-12-29')
   assert.equal(picks(new Date(2024, 2, 10))['Last month'], '2024-02-01..2024-02-29')
-  assert.deepEqual(defaultSpan(new Date(2026, 10, 7)), { label: 'This year', from: '2026-01-01', to: '2026-11-07' })
+  assert.deepEqual(defaultSpan(new Date(2024, 10, 9)), { label: 'This year', from: '2024-01-01', to: '2024-11-09' })
 })
 
 test('From later than To is refused plainly; so is a day that is not a day', () => {
-  assert.equal(rangeProblem('2026-11-03', '2026-11-09'), '')
-  assert.equal(rangeProblem('2026-11-03', '2026-11-03'), '')
-  assert.match(rangeProblem('2026-11-09', '2026-11-03'), /“From” is later than “To”/)
-  assert.match(rangeProblem('', '2026-11-03'), /Choose a “From” and a “To” day/)
-  assert.match(rangeProblem('2026-02-30', '2026-03-03'), /Choose/)
+  assert.equal(rangeProblem('2024-11-11', '2024-11-17'), '')
+  assert.equal(rangeProblem('2024-11-11', '2024-11-11'), '')
+  assert.match(rangeProblem('2024-11-17', '2024-11-11'), /“From” is later than “To”/)
+  assert.match(rangeProblem('', '2024-11-11'), /Choose a “From” and a “To” day/)
+  assert.match(rangeProblem('2025-02-30', '2025-03-03'), /Choose/)
 })
 
 test('the days go to the server as this browser\'s midnights, in UTC, across a change of the clocks too', () => {
-  assert.deepEqual(instants('2026-11-03', '2026-11-09'), { start: '2026-11-03T08:00:00.000Z', end: '2026-11-10T08:00:00.000Z' })
-  // clocks go back on 1 November 2026 in Vancouver: the first midnight is at UTC−7, the last at UTC−8
-  assert.deepEqual(instants('2026-10-26', '2026-11-08'), { start: '2026-10-26T07:00:00.000Z', end: '2026-11-09T08:00:00.000Z' })
-  const c = { from: '2026-11-03', to: '2026-11-09', notebook_id: 4, author_id: null, page_size: 'a4' }
-  assert.deepEqual(spanBody(c, 'America/Vancouver'), { from_date: '2026-11-03', to_date: '2026-11-09', start: '2026-11-03T08:00:00.000Z',
-    end: '2026-11-10T08:00:00.000Z', tz: 'America/Vancouver', notebook_id: 4, author_id: null, page_size: 'a4' })
-  assert.equal(previewQuery(c, 'America/Vancouver'), 'from_date=2026-11-03&to_date=2026-11-09&start=2026-11-03T08%3A00%3A00.000Z'
-    + '&end=2026-11-10T08%3A00%3A00.000Z&tz=America%2FVancouver&notebook_id=4')
+  assert.deepEqual(instants('2024-11-11', '2024-11-17'), { start: '2024-11-11T08:00:00.000Z', end: '2024-11-18T08:00:00.000Z' })
+  // the clocks went back on 3 November 2024 in Vancouver: the first midnight is at UTC−7, the last at UTC−8
+  assert.deepEqual(instants('2024-10-28', '2024-11-10'), { start: '2024-10-28T07:00:00.000Z', end: '2024-11-11T08:00:00.000Z' })
+  // and forward on 9 March 2025: the other way round
+  assert.deepEqual(instants('2025-03-03', '2025-03-16'), { start: '2025-03-03T08:00:00.000Z', end: '2025-03-17T07:00:00.000Z' })
+  const c = { from: '2024-11-11', to: '2024-11-17', notebook_id: 4, author_id: null, page_size: 'a4' }
+  assert.deepEqual(spanBody(c, 'America/Vancouver'), { from_date: '2024-11-11', to_date: '2024-11-17', start: '2024-11-11T08:00:00.000Z',
+    end: '2024-11-18T08:00:00.000Z', tz: 'America/Vancouver', notebook_id: 4, author_id: null, page_size: 'a4' })
+  assert.equal(previewQuery(c, 'America/Vancouver'), 'from_date=2024-11-11&to_date=2024-11-17&start=2024-11-11T08%3A00%3A00.000Z'
+    + '&end=2024-11-18T08%3A00%3A00.000Z&tz=America%2FVancouver&notebook_id=4')
 })
 
 test('what the page says while it works', () => {

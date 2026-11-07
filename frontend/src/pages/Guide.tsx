@@ -174,8 +174,9 @@ export default function Guide() {
         the <Link to="/">dashboard</Link> under <b>Asked to witness</b>; below them, apart, are signed records nobody
         was asked to witness. Witness only a record you've read, and leave those whose author asked someone else.</p>
       <p><Link to="/archive">Archive PDF</Link> (on your Account page and a notebook's page) makes one PDF of the records
-        signed between two days (a year, a month, a week), with their spectra drawn, to print and keep. Like every PDF Benchtop makes, it's an
-        archival PDF (PDF/A), with each record's data and the proof of its signatures inside it.</p>
+        signed between two days (a year, a month, a week), with their spectra drawn, to print and keep. Where Benchtop's PDF/A
+        package installs (most Macs and Linux computers), every PDF it makes is an archival PDF (PDF/A), with each record's
+        data and the proof of its signatures inside it.</p>
     </>,
     finding: <>
       <ul>

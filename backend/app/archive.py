@@ -655,7 +655,8 @@ def _page(body: str, size: str, title: str) -> str:
             + _PAGE_CSS.format(size=size, fonts=pdfa.font_css()) + f"</style></head><body>{body}</body></html>")
 
 
-def _cover(title: str, scope: str, span: Span, c: dict[str, int], user: User, made: datetime, size: str) -> str:
+def _cover(title: str, scope: str, span: Span, c: dict[str, int], user: User, made: datetime, size: str,
+           archival: bool = True) -> str:
     witnessed, awaiting, voided = c["witnessed"], c["awaiting_witness"], c["voided"]
     parts = [f"{witnessed} witnessed", f"{awaiting} awaiting witness"] + ([f"{voided} voided"] if voided else [])
     return _page(f"""<div class='cover'><h1>{_esc(title)}</h1><div class='rule'></div>
@@ -670,11 +671,19 @@ a witness are both included, and each says which. Voided records are included an
 and date; a record voided before it was ever signed is placed by the date it was voided.</p>
 <p><b>What is left out.</b> Drafts (records not signed), templates, records imported read-only from other notebooks, and
 records you can't open.</p>
-<p><b>Inside this PDF.</b> Each record's own data (what its signatures cover, its fingerprint and its signatures) and the
+{INSIDE if archival else NOT_INSIDE}</div></div>""", size, title)
+
+
+INSIDE = """<p><b>Inside this PDF.</b> Each record's own data (what its signatures cover, its fingerprint and its signatures) and the
 proofs of its trusted timestamps are attached to this file; the last page says how to open and check them. The
 instrument files themselves are not attached: they are in Benchtop, and in the record's .eln export, each with the
 SHA-256 fingerprint printed under its spectrum here.</p>
-<p>This file is a PDF/A-3 document, the archival form of PDF: its fonts and colour profile are inside it.</p></div></div>""", size, title)
+<p>This file is a PDF/A-3 document, the archival form of PDF: its fonts and colour profile are inside it.</p>"""
+# where the PDF/A package isn't installed (0.34): an ordinary PDF, with its fonts inside it but nothing attached
+NOT_INSIDE = """<p><b>The proofs.</b> On the computer that made it, Benchtop couldn't attach each record's data and the
+proofs of its trusted timestamps to this file (the PDF/A package isn't installed there). They are in Benchtop: each
+signature's <i>Proof</i> download on the record's page, and the record's .eln export, which also holds the instrument
+files, each with the SHA-256 fingerprint printed under its spectrum here. The last page says how to check them.</p>"""
 
 
 def _contents(rows: list[dict[str, Any]], size: str, title: str) -> str:
@@ -699,8 +708,10 @@ s = json.dumps(d['snapshot'], sort_keys=True, separators=(',', ':'))
 print(hashlib.sha256(s.encode()).hexdigest())" EXP-00012.json"""
 
 
-def _how_to(n_records: int, n_proofs: int, size: str, title: str, pdf_name: str = "archive.pdf") -> str:
+def _how_to(n_records: int, n_proofs: int, size: str, title: str, pdf_name: str = "archive.pdf", archival: bool = True) -> str:
     f = _esc(f'"{pdf_name}"' if " " in pdf_name else pdf_name)
+    if not archival:
+        return _how_to_plain(size, title)
     return _page(f"""<div style='font-size:8.8pt'><h2>How to check this archive</h2>
 <h3>What is attached inside this PDF</h3>
 <p>{n_records + n_proofs} files are attached to this PDF (PDF/A-3 associated files). For each record:</p>
@@ -745,6 +756,42 @@ Benchtop's <i>Verify integrity</i> recomputes it this way. A match shows the att
 the printed pages are a rendering of it, for reading.</p></div>""", size, title)
 
 
+def _how_to_plain(size: str, title: str) -> str:
+    """The last page of an archive made where the PDF/A package isn't installed: nothing is attached, so it points to
+    where the same files are."""
+    return _page(f"""<div style='font-size:8.8pt'><h2>How to check this archive</h2>
+<h3>Where each record's data and proofs are</h3>
+<p>This PDF was made on a computer where Benchtop couldn't attach files to it (the PDF/A package isn't installed there),
+so each record's data and its timestamp proofs are not inside it. They are in Benchtop:</p>
+<p>• the record's <b>.eln export</b> (<i>Export (.eln)</i> on a notebook's page, or the record's own export): its
+<span class='mono'>record.benchtop.json</span> holds the record's data (<i>snapshot</i>, everything its signatures cover,
+and <i>content_hash</i>, its fingerprint), with every attached file and, in its signatures folder, each timestamp proof;<br>
+• each signature's <b>Proof</b> download on the record's page (the timestamp token, the exact text that was timestamped,
+the service's certificates and a README).</p>
+<p>Each characterisation file's SHA-256 is printed under its spectrum (or in its place) here; check a file from the .eln
+export against it with <span class='mono'>shasum -a 256 &lt;file&gt;</span> (macOS) or
+<span class='mono'>sha256sum &lt;file&gt;</span> (Linux).</p>
+<h3>Checking a signature's trusted timestamp, without Benchtop</h3>
+<p>Each signature was also certified by an independent RFC 3161 timestamp service; only a fingerprint of the signature
+was sent to it, never the record. Unzip the signature's Proof, then (macOS / Linux):</p>
+<pre class='mono'>openssl ts -verify -data signature.json -in token.tst -token_in \\
+    -CAfile /etc/ssl/cert.pem -untrusted tsa-certs.pem</pre>
+<p>(On Debian and Ubuntu the trusted certificates are in <span class='mono'>/etc/ssl/certs/ca-certificates.crt</span>.)
+"Verification: OK" means the service certifies that this signature (record, meaning, signer, time and the SHA-256 of
+the record's content, <i>content_sha256</i>) existed at the time shown. To link it to the record itself, compare
+<i>content_sha256</i> with the record's fingerprint, printed in the contents and at the foot of the record here.
+Years from now the service's certificate may have expired or no longer be on your computer's trusted list; openssl then
+can't verify the token until you give it the service's root certificate (from the service's own website).</p>
+<h3>Checking a record's fingerprint</h3>
+<p>The fingerprint is the SHA-256 of the record's <i>snapshot</i> written as compact JSON, with keys in sorted order, the
+way Python's json module writes it (sort_keys=True, separators=(',', ':'), non-ASCII characters escaped). With Python 3,
+from the record's <span class='mono'>record.benchtop.json</span>:</p>
+<pre class='mono'>{_esc(HOW_TO_RECOMPUTE.replace("EXP-00012.json", "record.benchtop.json"))}</pre>
+<p>The result should equal <i>content_hash</i> in the same file, the fingerprint printed here, and <i>content_sha256</i>
+in each of its timestamps. Other JSON tools may write numbers or characters differently and give another SHA-256;
+Benchtop's <i>Verify integrity</i> recomputes it this way.</p></div>""", size, title)
+
+
 def _one_record_html(session: Session, exp: Experiment, d: dict[str, Any], size: str, figures: dict[int, dict]) -> str:
     from .routers.experiments import report_html
     return report_html(session, exp, pdf=True, page_size=size, footer=False, banner=_banner(session, exp, d, content_hash(session, exp)),
@@ -757,7 +804,7 @@ def _fallback_html(exp: Experiment, why: str, size: str) -> str:
                  "<i>Print</i> on the record's page.</p>", size, exp.eid)
 
 
-def _overlay(pikepdf, sizes: list[tuple[float, float]], texts: list[str | None]):
+def _footer_pdf(sizes: list[tuple[float, float]], texts: list[str | None]) -> bytes:
     """One page per page of the archive with its footer (none where the text is None), in the embedded font."""
     from reportlab.pdfgen import canvas
 
@@ -771,18 +818,101 @@ def _overlay(pikepdf, sizes: list[tuple[float, float]], texts: list[str | None])
             c.drawCentredString(w / 2, 0.9 * 28.3465, t)
         c.showPage()
     c.save()
-    return pikepdf.open(io.BytesIO(buf.getvalue()))
+    return buf.getvalue()
+
+
+def _page_count(raw: bytes) -> int:
+    import pypdf  # xhtml2pdf's own dependency: always there
+    return len(pypdf.PdfReader(io.BytesIO(raw)).pages)
+
+
+def _footers(marks: list[str], title: str) -> list[str | None]:
+    total = len(marks)
+    return [None if k == 0 else f"{title} · {mk + ' · ' if mk.startswith(('EXP', 'TPL')) else ''}page {k + 1} of {total}"
+            for k, mk in enumerate(marks)]
+
+
+def _assemble_pikepdf(sections: list[tuple[str, str, bytes]], title: str):
+    """The sections (bookmark, footer mark, PDF) as one pikepdf.Pdf: bookmarks, footers, font subsets named apart."""
+    import pikepdf
+    from pikepdf import Array, Name, OutlineItem
+
+    out = pikepdf.new()
+    keep: list[Any] = []
+    starts, marks = [], []
+    for label, mark, raw in sections:
+        src = pikepdf.open(io.BytesIO(raw))
+        keep.append(src)
+        starts.append((label, len(out.pages)))
+        out.pages.extend(src.pages)
+        marks += [mark] * len(src.pages)
+    # links inside a record pointed at places in its own file; in the archive they'd point nowhere
+    for page in out.pages:
+        annots = page.obj.get("/Annots")
+        if annots is None:
+            continue
+        page.obj.Annots = Array([a for a in annots if not ("/Dest" in a or (a.get("/A") is not None and a.A.get("/S") == Name.GoTo))])
+    sizes = [(float(p.mediabox[2]) - float(p.mediabox[0]), float(p.mediabox[3]) - float(p.mediabox[1])) for p in out.pages]
+    texts = _footers(marks, title)
+    over = pikepdf.open(io.BytesIO(_footer_pdf(sizes, texts)))
+    keep.append(over)
+    for k, page in enumerate(out.pages):
+        if texts[k]:
+            page.add_overlay(over.pages[k])
+    pdfa.rename_subsets(out)
+    with out.open_outline() as outline:
+        outline.root.extend([OutlineItem(label, page) for label, page in starts])
+    out.Root.PageMode = Name.UseOutlines
+    return out, keep, starts, len(out.pages)
+
+
+def _assemble_pypdf(sections: list[tuple[str, str, bytes]], title: str, meta: dict[str, str]) -> tuple[bytes, list, int]:
+    """The same, with pypdf, where the PDF/A package isn't installed: an ordinary PDF, nothing attached."""
+    import pypdf
+    from pypdf.generic import ArrayObject, NameObject
+
+    out = pypdf.PdfWriter()
+    starts, marks = [], []
+    for label, mark, raw in sections:
+        src = pypdf.PdfReader(io.BytesIO(raw))
+        starts.append((label, len(out.pages)))
+        for page in src.pages:
+            out.add_page(page)
+        marks += [mark] * len(src.pages)
+    texts = _footers(marks, title)
+    sizes = [(float(p.mediabox.width), float(p.mediabox.height)) for p in out.pages]
+    over = pypdf.PdfReader(io.BytesIO(_footer_pdf(sizes, texts)))
+    n = 0
+    for k, page in enumerate(out.pages):
+        annots = page.get("/Annots")
+        if annots is not None:
+            page[NameObject("/Annots")] = ArrayObject([a for a in annots.get_object() if not (
+                "/Dest" in a.get_object() or (a.get_object().get("/A") is not None and a.get_object()["/A"].get("/S") == "/GoTo"))])
+        if texts[k]:
+            page.merge_page(over.pages[k])
+        fonts = page.get("/Resources", {}).get("/Font", {})
+        for _, ref in (fonts.items() if fonts else []):  # each font subset its own name, as with pikepdf
+            f = ref.get_object()
+            if "/BaseFont" in f:
+                tag = "".join(chr(65 + (n // 26 ** j) % 26) for j in range(6))
+                n += 1
+                f[NameObject("/BaseFont")] = NameObject("/" + tag + "+" + str(f["/BaseFont"])[1:].split("+", 1)[-1])
+    for label, page in starts:
+        out.add_outline_item(label, page)
+    out.page_mode = "/UseOutlines"
+    out.add_metadata(meta)
+    buf = io.BytesIO()
+    out.write(buf)
+    return buf.getvalue(), starts, len(out.pages)
 
 
 def build_pdf(session: Session, user: User, span: Span, notebook_id: int | None = None, author_id: int | None = None,
               page_size: str = "letter", pictures: dict[int, dict] | None = None,
               progress: Callable[[int, int, str], None] | None = None) -> tuple[bytes, dict[str, Any]]:
-    """The archive as PDF/A-3b bytes, and what is in it. Records are chosen again now, so one withdrawn or hidden from
-    this person since the job started is left out."""
-    pikepdf = pdfa._pikepdf()
-    from pikepdf import Array, Name, OutlineItem
-
+    """The archive as PDF/A-3b bytes (an ordinary PDF where the PDF/A package isn't installed), and what is in it.
+    Records are chosen again now, so one withdrawn or hidden from this person since the job started is left out."""
     pdfa._setup()
+    archival = pdfa.available()
     pictures = pictures or {}
     progress = progress or (lambda *a: None)
     size = "a4" if page_size == "a4" else "letter"
@@ -792,7 +922,7 @@ def build_pdf(session: Session, user: User, span: Span, notebook_id: int | None 
         raise ArchiveError(422, f"No records you can open were signed {span.phrase()} any more; nothing to archive")
     made = datetime.now(timezone.utc)
     n = len(rows)
-    parts: list[Any] = []
+    parts: list[bytes] = []
     listed: list[dict[str, Any]] = []
     files: list[pdfa.Attachment] = []
     proofs = 0
@@ -804,8 +934,7 @@ def build_pdf(session: Session, user: User, span: Span, notebook_id: int | None 
         except Exception as exc:  # noqa: BLE001 - one record that can't be laid out doesn't stop the archive
             log.warning("Archive PDF: %s couldn't be laid out: %s", exp.eid, exc)
             raw = pdfa.html_to_pdf(_fallback_html(exp, str(exc) if isinstance(exc, pdfa.PdfError) else "an error", size))
-        part = pikepdf.open(io.BytesIO(raw))
-        parts.append(part)
+        parts.append(raw)
         a, w, v = d["author"], d["witness"], d["void"]
         nb = session.get(Notebook, exp.notebook_id) if exp.notebook_id else None
         listed.append({"eid": exp.eid, "title": exp.title, "author": _name(session.get(User, exp.owner_id)),
@@ -814,68 +943,45 @@ def build_pdf(session: Session, user: User, span: Span, notebook_id: int | None 
                        "witness": f"{w.signer_name or w.signer_username} {w.signed_at:%Y-%m-%d %H:%M}" if w
                        else ("awaiting witness" if exp.status == ExperimentStatus.signed else "—"),
                        "voided": f"{v.signed_at:%Y-%m-%d}" if v else "", "hash": content_hash(session, exp),
-                       "pages": len(part.pages), "status": exp.status.value})
-        att = proof_attachments(session, exp)
-        proofs += len(att) - 1
-        files.extend(att)
+                       "pages": _page_count(raw), "status": exp.status.value})
+        if archival:
+            att = proof_attachments(session, exp)
+            proofs += len(att) - 1
+            files.extend(att)
     progress(n, n, "Putting the archive together")
     c = counts(rows)
     scope = scope_text(session, notebook_id, author_id)
-    cover = pikepdf.open(io.BytesIO(pdfa.html_to_pdf(_cover(title, scope, span, c, user, made, size))))
-    how = pikepdf.open(io.BytesIO(pdfa.html_to_pdf(_how_to(n, proofs, size, title, pdf_file_name(span, scope)))))
+    cover = pdfa.html_to_pdf(_cover(title, scope, span, c, user, made, size, archival))
+    how = pdfa.html_to_pdf(_how_to(n, proofs, size, title, pdf_file_name(span, scope), archival))
     # the contents give each record's first page, which depends on how long the contents are: lay them out with
     # placeholders first (the same width), then with the numbers
     for r in listed:
         r["page"] = "0000"
-    contents = pikepdf.open(io.BytesIO(pdfa.html_to_pdf(_contents(listed, size, title))))
+    contents = pdfa.html_to_pdf(_contents(listed, size, title))
     for _ in range(3):
-        at = len(cover.pages) + len(contents.pages) + 1
+        at = _page_count(cover) + _page_count(contents) + 1
         for r in listed:
             r["page"], at = at, at + r["pages"]
-        again = pikepdf.open(io.BytesIO(pdfa.html_to_pdf(_contents(listed, size, title))))
-        same = len(again.pages) == len(contents.pages)
+        again = pdfa.html_to_pdf(_contents(listed, size, title))
+        same = _page_count(again) == _page_count(contents)
         contents = again
         if same:
             break
-    out = pikepdf.new()
-    starts: list[tuple[str, int]] = []
-    marks = []  # each page's record, for the footer
-    for label, src in (("Cover", cover), ("Contents", contents)):
-        starts.append((label, len(out.pages)))
-        out.pages.extend(src.pages)
-        marks += [label] * len(src.pages)
-    for r, part in zip(listed, parts):
-        starts.append((f"{r['eid']} {r['title']}{' (VOIDED)' if r['voided'] else ''}", len(out.pages)))
-        out.pages.extend(part.pages)
-        marks += [r["eid"] + (" (VOIDED)" if r["voided"] else "")] * len(part.pages)
-    starts.append(("How to check this archive", len(out.pages)))
-    out.pages.extend(how.pages)
-    marks += ["How to check this archive"] * len(how.pages)
-    total = len(out.pages)
-    # links inside a record pointed at places in its own file; in the archive they'd point nowhere
-    for page in out.pages:
-        annots = page.obj.get("/Annots")
-        if annots is None:
-            continue
-        keep = [a for a in annots if not ("/Dest" in a or (a.get("/A") is not None and a.A.get("/S") == Name.GoTo))]
-        page.obj.Annots = Array(keep)
-    # footer: the archive's title, the record, page X of Y (none on the cover)
-    sizes = [(float(p.mediabox[2]) - float(p.mediabox[0]), float(p.mediabox[3]) - float(p.mediabox[1])) for p in out.pages]
-    texts = [None if k == 0 else f"{title} · {mk + ' · ' if mk.startswith(('EXP', 'TPL')) else ''}page {k + 1} of {total}"
-             for k, mk in enumerate(marks)]
-    over = _overlay(pikepdf, sizes, texts)
-    for k, page in enumerate(out.pages):
-        if texts[k]:
-            page.add_overlay(over.pages[k])
-    pdfa.rename_subsets(out)
-    with out.open_outline() as outline:
-        outline.root.extend([OutlineItem(label, page) for label, page in starts])
-    out.Root.PageMode = Name.UseOutlines
-    progress(n, n, "Making it archival (PDF/A)")
-    data = pdfa.make_pdfa(b"", pdf=out, title=f"{title}: {scope}" if scope != "All records you can open" else title,
-                          author=_name(user), subject=f"{scope}; {c['records']} records signed {span.phrase()}",
-                          keywords=f"Benchtop ELN, lab notebook, {span.label()}", created=made, attachments=files)
-    for p in (cover, contents, how, *parts, over):
-        p.close()
+    sections = [("Cover", "Cover", cover), ("Contents", "Contents", contents)]
+    sections += [(f"{r['eid']} {r['title']}{' (VOIDED)' if r['voided'] else ''}", r["eid"] + (" (VOIDED)" if r["voided"] else ""), raw)
+                 for r, raw in zip(listed, parts)]
+    sections.append(("How to check this archive", "How to check this archive", how))
+    doc_title = f"{title}: {scope}" if scope != "All records you can open" else title
+    subject = f"{scope}; {c['records']} records signed {span.phrase()}"
+    if archival:
+        out, keep, starts, total = _assemble_pikepdf(sections, title)
+        progress(n, n, "Making it archival (PDF/A)")
+        data = pdfa.make_pdfa(b"", pdf=out, title=doc_title, author=_name(user), subject=subject,
+                              keywords=f"Benchtop ELN, lab notebook, {span.label()}", created=made, attachments=files)
+        for k in keep:
+            k.close()
+    else:
+        data, starts, total = _assemble_pypdf(sections, title, {"/Title": doc_title, "/Author": _name(user), "/Subject": subject,
+                                                                  "/Creator": f"Benchtop ELN {__version__}"})
     return data, {"pages": total, "counts": c, "records": [r["eid"] for r in listed], "starts": starts,
-                  "attachments": [f.name for f in files]}
+                  "attachments": [f.name for f in files], "archival": archival}

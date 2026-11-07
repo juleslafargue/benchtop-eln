@@ -92,8 +92,7 @@ export default function Account() {
           <p className="help" style={{ margin: 0 }}>Each record comes with its printable report, so it can be read without any software. To bring records
             in from another notebook, open a notebook and choose <b>Import .eln…</b></p>
           <div className="spread" style={{ alignItems: 'center', gap: 12, borderTop: '1px solid var(--rule)', paddingTop: 10 }}>
-            <span>The records signed over a year, a month or a week as one archival PDF to print and keep, with their spectra drawn and the proof of
-              each signature inside it.</span>
+            <span>The records signed over a year, a month or a week as one PDF to print and keep, with their spectra drawn.</span>
             <Link className="btn" to="/archive">Archive PDF</Link>
           </div>
         </div></div>

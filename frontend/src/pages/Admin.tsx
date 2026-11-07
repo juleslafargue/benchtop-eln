@@ -6,7 +6,7 @@ import { api, displayName, when, type AuditEvent, type Role, type User } from '.
 import Modal from '../components/Modal'
 import { Plugins, Webhooks } from '../components/Integrations'
 import { ZenodoSettingsPanel } from '../components/Publish'
-import { EmailSettingsPanel, TimestampSettingsPanel, WitnessSettingsPanel } from '../components/AdminSigning'
+import { EmailSettingsPanel, PdfaStatusPanel, TimestampSettingsPanel, WitnessSettingsPanel } from '../components/AdminSigning'
 import InstrumentsPanel from '../components/AdminInstruments'
 import PasswordField from '../components/PasswordField'
 import { auditSentence, type AuditNames } from '../auditText'
@@ -359,7 +359,7 @@ export default function Admin() {
       {tab === 'backups' && <Backups />}
       {tab === 'instruments' && <InstrumentsPanel />}
       {tab === 'email' && <EmailSettingsPanel />}
-      {tab === 'signing' && <><WitnessSettingsPanel /><TimestampSettingsPanel /></>}
+      {tab === 'signing' && <><WitnessSettingsPanel /><TimestampSettingsPanel /><PdfaStatusPanel /></>}
       {tab === 'integrations' && <><Plugins /><Webhooks /><ZenodoSettingsPanel /><NmrData /></>}
       {tab === 'audit' && <AuditTrail />}
     </div>

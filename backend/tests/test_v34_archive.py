@@ -481,9 +481,10 @@ def test_the_span_is_named_for_what_it_is():
     assert S(d(2025, 12, 29), d(2026, 1, 4)).label() == "29 December 2025 – 4 January 2026"
     assert S(d(2026, 11, 3), d(2026, 11, 3)).phrase() == "on 3 November 2026"
     assert S(d(2026, 1, 1), d(2026, 12, 31)).phrase() == "in 2026"
-    # a span across the change of clocks: its two ends are at different offsets from UTC
-    sp = S(d(2026, 10, 26), d(2026, 11, 8), datetime(2026, 10, 26, 7), datetime(2026, 11, 9, 8), "America/Vancouver")
-    assert sp.holds(datetime(2026, 10, 26, 7)) and not sp.holds(datetime(2026, 10, 26, 6, 59, 59))
-    assert sp.holds(datetime(2026, 11, 9, 7, 59, 59)) and not sp.holds(datetime(2026, 11, 9, 8))
+    # a span across the change of clocks (Vancouver, 3 November 2024): its two ends are at different offsets from UTC.
+    # The browser works the offsets out; past dates here, since time-zone rules change with the law.
+    sp = S(d(2024, 10, 28), d(2024, 11, 10), datetime(2024, 10, 28, 7), datetime(2024, 11, 11, 8), "America/Vancouver")
+    assert sp.holds(datetime(2024, 10, 28, 7)) and not sp.holds(datetime(2024, 10, 28, 6, 59, 59))
+    assert sp.holds(datetime(2024, 11, 11, 7, 59, 59)) and not sp.holds(datetime(2024, 11, 11, 8))
     with pytest.raises(archive.ArchiveError):
         S(d(2026, 11, 9), d(2026, 11, 3))

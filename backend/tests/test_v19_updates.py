@@ -83,7 +83,8 @@ def make_program(dest: Path, v: str) -> Path:
     """The parts of Benchtop the launcher needs, as a Git repository at version v."""
     dest.mkdir(parents=True)
     ign = shutil.ignore_patterns("__pycache__", "*.pyc")
-    for f in ("benchtop", "Benchtop.command", ".gitignore", "backend/requirements.txt", "frontend/package.json"):
+    for f in ("benchtop", "Benchtop.command", ".gitignore", "backend/requirements.txt", "backend/requirements-pdfa.txt",
+              "frontend/package.json"):
         (dest / f).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / f, dest / f)
     for d in ("backend/app", "frontend/src", "deploy", "docs"):
@@ -110,6 +111,8 @@ def _attach_env(root: Path, venv: Path, build_ui: bool = True) -> None:
     (root / "backend/.venv").symlink_to(venv)
     want = subprocess.run("cksum < requirements.txt", shell=True, cwd=root / "backend", capture_output=True, text=True).stdout.strip()
     (venv / ".requirements-installed").write_text(want)  # the same requirements everywhere: "already installed"
+    pdfa = subprocess.run("cksum < requirements-pdfa.txt", shell=True, cwd=root / "backend", capture_output=True, text=True).stdout.strip()
+    (venv / ".requirements-pdfa-tried").write_text(f"{want} {pdfa}")  # and the PDF/A package already tried (0.34)
     if build_ui:
         _built_ui(root)
 
