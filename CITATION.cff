@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use Benchtop ELN in your research, please cite it as below."
+type: software
+title: "Benchtop ELN"
+abstract: >-
+  A free, open-source electronic lab notebook for synthetic chemistry that runs on the lab's own computer:
+  reaction drawing with stoichiometry, in-browser NMR processing, a chemical inventory, author-and-witness
+  signatures with trusted timestamps, .eln exchange with other notebooks, and archival PDF/A exports.
+authors:
+  - given-names: Jules
+    family-names: Lafargue
+license: Apache-2.0
+repository-code: "https://github.com/juleslafargue/benchtop-eln"
+url: "https://juleslafargue.github.io/benchtop-eln/"
+keywords:
+  - electronic lab notebook
+  - ELN
+  - synthetic chemistry
+  - NMR
+  - research data management
+  - open science
