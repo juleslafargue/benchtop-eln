@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { api, type User } from '../api'
+import { api, suggestUsername, type User } from '../api'
 import PasswordField from '../components/PasswordField'
 import Logo from '../components/Logo'
 
@@ -10,7 +10,7 @@ export function Setup({ onLogin }: { onLogin: (token: string, user: User) => voi
   const [valid, setValid] = useState(false)
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })
-  const suggested = f.full_name.trim().split(/\s+/)[0]?.toLowerCase().replace(/[^a-z0-9._-]/g, '') || ''
+  const suggested = suggestUsername(f.full_name)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()

@@ -40,6 +40,7 @@ export default function SignDialog({ exp, action, onDone, onClose }: {
   // typed into the sections since it opened, so it isn't shown even for a moment (0.30.1)
   const [empty, setEmpty] = useState('')
   useEffect(() => {
+    if (action === 'witness' || action === 'reject') { setEmpty(reminderText(exp.entries)); return }  // 0.35: what the author was shown
     if (action !== 'sign') return
     let live = true
     api.get<Experiment>(`/api/experiments/${exp.id}`).then(x => { if (live) setEmpty(reminderText(x.entries)) }).catch(() => {})
@@ -66,6 +67,8 @@ export default function SignDialog({ exp, action, onDone, onClose }: {
         <p className="notice" style={{ margin: 0 }}>{c.meaning}</p>
         {action === 'sign' && empty && <p className="sign-reminder" role="note"><b>Still empty:</b> {empty}. <span className="faint">You can sign anyway; once signed,
           later results go in a follow-up.</span></p>}
+        {(action === 'witness' || action === 'reject') && empty && <p className="sign-reminder" role="note"><b>Still empty when it was signed:</b> {empty}.{' '}
+          <span className="faint">The author was shown this before signing.</span></p>}
         {action === 'sign' && people && <label className="field">Ask someone to witness it
           <select className="select" value={witnessId} onChange={e => setWitnessId(e.target.value ? Number(e.target.value) : '')}>
             <option value="">No one in particular (anyone with access can witness)</option>

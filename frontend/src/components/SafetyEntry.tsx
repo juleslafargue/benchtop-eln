@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, when } from '../api'
+import { useApp } from '../App'
 import type { EntryEditorProps } from './EntryCard'
 import { ago, Pictogram, SignalWord, type SafetySummary } from './Safety'
 
@@ -44,6 +45,7 @@ function drift(s: Snapshot | null, a: Assessment | null): string | null {
 
 export default function SafetyEntry({ content, onChange, readOnly, experimentId }: EntryEditorProps) {
   const [a, setA] = useState<Assessment | null>(null)
+  const admin = useApp().user.role === 'admin'  // the note that PubChem is switched off is for whoever can switch it on
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const snap: Snapshot | null = content.snapshot || null
@@ -74,11 +76,11 @@ export default function SafetyEntry({ content, onChange, readOnly, experimentId 
 
   return (
     <div className="risk">
-      {!readOnly && a && !a.pubchem_enabled && <p className="notice" style={{ margin: 0 }}>PubChem lookups are switched off on this server, so only hazard data
+      {!readOnly && admin && a && !a.pubchem_enabled && <p className="notice" style={{ margin: 0 }}>PubChem lookups are switched off on this server, so only hazard data
         fetched earlier is shown. For a chemical without it, check the supplier's SDS and note what matters under Controls and PPE.</p>}
       {err && <p className="error">{err}</p>}
       {changed && <div className="sp-note warn" role="status"><span><b>{changed}</b> {readOnly ? 'This signed record keeps what was known when it was signed.' : 'Review the warnings and record them again.'}</span>
-        {!readOnly && a && <button className="btn sm primary" onClick={() => set('snapshot', snapOf(a))}>Record current hazards</button>}</div>}
+        {!readOnly && a && <button className="btn sm primary" onClick={() => set('snapshot', snapOf(a))}>Save the current hazards with the record</button>}</div>}
 
       {shown.length === 0 ? <p className="faint">{busy ? 'Checking the reaction…' : 'Add reagents to the reaction table and their hazards will appear here.'}</p> : <>
         {pictos.length > 0 && <div className="row" style={{ gap: 6 }}>{pictos.map(p => <Pictogram key={p} code={p} size={44} />)}</div>}
@@ -106,20 +108,21 @@ export default function SafetyEntry({ content, onChange, readOnly, experimentId 
 
       <div className="form-grid">
         <label className="field">Controls and PPE<textarea className="input" rows={4} disabled={readOnly} value={content.controls || ''} onChange={e => set('controls', e.target.value)}
-          placeholder="Fume hood, nitrile gloves, inert atmosphere, blast shield…" /></label>
+          placeholder={readOnly ? undefined : 'Fume hood, nitrile gloves, inert atmosphere, blast shield…'} /></label>
         <label className="field">Waste disposal<textarea className="input" rows={4} disabled={readOnly} value={content.waste || ''} onChange={e => set('waste', e.target.value)}
-          placeholder="Halogenated / non-halogenated, aqueous, heavy metals, quench before disposal…" /></label>
+          placeholder={readOnly ? undefined : 'Halogenated / non-halogenated, aqueous, heavy metals, quench before disposal…'} /></label>
       </div>
       <label className="field">Emergency and spills<textarea className="input" rows={2} disabled={readOnly} value={content.emergency || ''} onChange={e => set('emergency', e.target.value)}
-        placeholder="Spill kit, quench procedure, first aid, who to call…" /></label>
+        placeholder={readOnly ? undefined : 'Spill kit, quench procedure, first aid, who to call…'} /></label>
 
       <div className="spread" style={{ gap: 8 }}>
         <span className="faint" style={{ fontSize: 12.5 }}>
-          {snap ? `Hazards recorded in this notebook ${when(snap.taken_at)}.` : 'Hazards are not yet recorded in the notebook.'} Data from PubChem (EU CLP, ECHA and other public sources), refreshed every {a?.refresh_days ?? 30} days.
+          {snap ? `Hazards saved with the record ${when(snap.taken_at)}.` : <>Hazards not saved with the record yet. <b>Save these hazards with the record</b> keeps
+            what's known today in it, so the signed record still shows it if the data changes later.</>} Data from PubChem (EU CLP, ECHA and other public sources), refreshed every {a?.refresh_days ?? 30} days.
           The supplier's SDS takes precedence.</span>
         {!readOnly && <span className="row" style={{ gap: 6 }}>
           {a?.pubchem_enabled !== false && <button className="btn sm" disabled={busy} onClick={() => load(true)}>{busy ? 'Checking…' : 'Re-check PubChem'}</button>}
-          {a && <button className="btn sm primary" disabled={!a.chemicals.length || a.pending > 0} onClick={() => set('snapshot', snapOf(a))}>{snap ? 'Record again' : 'Record hazards in notebook'}</button>}
+          {a && <button className="btn sm primary" disabled={!a.chemicals.length || a.pending > 0} onClick={() => set('snapshot', snapOf(a))}>{snap ? 'Save them again' : 'Save these hazards with the record'}</button>}
         </span>}
       </div>
     </div>

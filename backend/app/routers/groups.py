@@ -49,6 +49,7 @@ def _manage(session, user: User, g: LabGroup) -> None:
 class GroupIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = ""
+    i_lead: bool = False  # 0.35: the admin making the group leads it ("I lead this group", ticked by default in the app)
 
 
 @router.get("/groups")
@@ -65,6 +66,9 @@ def create_group(body: GroupIn, user: Admin, session: DB):
     session.add(g)
     session.flush()
     audit.record(session, user, "create", "group", g.id, name=g.name)
+    if body.i_lead:
+        session.add(GroupMember(group_id=g.id, user_id=user.id, role="lead"))
+        audit.record(session, user, "group_member", "group", g.id, member=user.username, role="lead")
     session.commit()
     return group_out(session, g, user)
 

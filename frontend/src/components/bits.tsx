@@ -126,7 +126,8 @@ export function NumInput({ value, onCommit, disabled, className, label, nd = 4, 
       style={chars > 5 ? { minWidth: `calc(${chars.toFixed(1)}ch + 10px)` } : undefined}
       aria-label={label} inputMode={unit ? 'text' : 'decimal'} className={[className, problem && 'num-bad'].filter(Boolean).join(' ') || undefined}
       disabled={disabled} value={text} aria-invalid={problem ? true : undefined} aria-describedby={problem && !onProblem ? problemId : undefined}
-      title={unit ? unit === 'C' ? 'Temperature in °C' : `Number in ${unit}, or type a unit (e.g. ${UNIT_EXAMPLE[unit]})` : undefined}
+      title={[sig && value != null && !draft && String(value) !== shown ? `${value}${unit && unit !== 'C' ? ` ${unit}` : ''} in full` : '',
+        unit ? unit === 'C' ? 'Temperature in °C' : `Number in ${unit}, or type a unit (e.g. ${UNIT_EXAMPLE[unit]})` : ''].filter(Boolean).join('. ') || undefined}
       onFocus={() => { if (!problem) setDraft(null) }}
       onBlur={commit}
       onKeyDown={e => {

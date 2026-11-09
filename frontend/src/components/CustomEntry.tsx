@@ -31,10 +31,10 @@ function Input({ f, v, set, readOnly, compact, label }: { f: CField; v: any; set
       <option value="">{compact ? '' : 'Choose…'}</option>
       {(f.options || []).map(o => <option key={o} value={o}>{o}</option>)}
     </select>)
-  if (f.type === 'longtext') return <textarea className="input" rows={compact ? 1 : 3} value={v ?? ''} placeholder={f.placeholder} onChange={e => set(e.target.value)} {...common} />
+  if (f.type === 'longtext') return <textarea className="input" rows={compact ? 1 : 3} value={v ?? ''} placeholder={readOnly ? undefined : f.placeholder} onChange={e => set(e.target.value)} {...common} />
   if (f.type === 'number') return <NumInput f={f} v={v} set={set} compact={compact} common={common} />
   const type = f.type === 'date' ? 'date' : f.type === 'datetime' ? 'datetime-local' : 'text'
-  return <input className="input" type={type} value={type === 'datetime-local' ? String(v ?? '').slice(0, 16) : v ?? ''} placeholder={f.placeholder}
+  return <input className="input" type={type} value={type === 'datetime-local' ? String(v ?? '').slice(0, 16) : v ?? ''} placeholder={readOnly ? undefined : f.placeholder}
     onChange={e => set(e.target.value || null)} {...common} />
 }
 
@@ -46,7 +46,7 @@ function NumInput({ f, v, set, compact, common }: { f: CField; v: any; set: (v: 
   const problem = amountProblem(text)  // "1,000": one thousand, or one? (0.30.1: it was kept as 1)
   return (
     <span className="cf-num">
-      <input className={`input${problem ? ' num-bad' : ''}`} inputMode="decimal" value={text} placeholder={f.placeholder} onFocus={() => setFocus(true)}
+      <input className={`input${problem ? ' num-bad' : ''}`} inputMode="decimal" value={text} placeholder={common.disabled ? undefined : f.placeholder} onFocus={() => setFocus(true)}
         onBlur={() => setFocus(false)} aria-invalid={problem ? true : undefined}
         onChange={e => { const t = e.target.value; setText(t); const n = Number(t.replace(',', '.')); set(t.trim() === '' || amountProblem(t) ? null : Number.isFinite(n) ? n : null) }} {...common} />
       {f.unit && !compact && <span className="cf-unit">{f.unit}</span>}

@@ -10,7 +10,7 @@ export default function PurificationEntry(props: EntryEditorProps) {
   const text = (k: string, label: string, placeholder = '', w?: number) => (
     <label className="cond" style={w ? { width: w } : { flex: '1 1 160px' }}>
       <span>{label}</span>
-      <input className="input" disabled={readOnly} placeholder={placeholder} value={content[k] ?? ''} onChange={e => set({ [k]: e.target.value })} />
+      <input className="input" disabled={readOnly} placeholder={readOnly ? undefined : placeholder} value={content[k] ?? ''} onChange={e => set({ [k]: e.target.value })} />
     </label>
   )
   return (

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ErrorBoundary from './ErrorBoundary'
 import { KindIcon } from './AddSection'
-import { api, isUnreachable, unreachable, type Attachment, type Entry } from '../api'
+import { api, isUnreachable, unreachable, PURIFICATION_LABELS, type Attachment, type Entry } from '../api'
 import TextEntry from './TextEntry'
 import ReactionEntry from './ReactionEntry'
 import TableEntry from './TableEntry'
@@ -14,6 +14,7 @@ import ScreenEntry from './ScreenEntry'
 import CustomEntry from './CustomEntry'
 import ReferencesEntry from './ReferencesEntry'
 import { useCollapsed } from '../collapse'
+import { isEmpty } from '../signCheck'
 import { useApp } from '../App'
 import { browserStore, clearDraft, draftSituation, draftText, loadDraft, saveDraft, sweepDrafts, tabId, type Draft } from '../drafts'
 
@@ -251,6 +252,27 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
   const [collapsed, setCollapsed] = useCollapsed(`entry.${entry.id}`)
   const props: EntryEditorProps = { content, onChange: change, readOnly, experimentId, attachments, onAttachmentsChanged, context, label: title || KIND_LABEL[entry.kind] }
   const stateText = { saved: `v${version}`, dirty: 'Unsaved', saving: 'Saving…', error: 'Not saved' }[state]
+  // 0.35: a section nobody filled in, in a record you can only read, is one line ("Aim — nothing written"); a safety
+  // section always shows, since what it says about hazards matters even when short. A purification method on its own
+  // (0.34 and earlier started every section at "column") is shown, as it's part of the record.
+  const blank = readOnly && !offer && entry.kind !== 'safety' && isEmpty({ kind: entry.kind, title, content })
+    && !(entry.kind === 'purification' && content?.method)
+  if (blank) return (
+    <section className="entry entry-blank" id={`entry-${entry.id}`} aria-label={title}>
+      <h2 className="vh">{title || KIND_LABEL[entry.kind]}</h2>
+      <header className="entry-head collapsed">
+        <span className="entry-blank-title"><b>{title || KIND_LABEL[entry.kind]}</b> <span className="faint">— {entry.kind === 'text' ? 'nothing written' : 'nothing recorded'}</span></span>
+        <span className="entry-actions">
+          {onComment && <button className="btn ghost sm entry-comments" onClick={onComment} aria-label={comments ? `${comments} open comment${comments === 1 ? '' : 's'} on this section` : 'Comment on this section'}
+            title="Comment on this section">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" /></svg>
+            {comments ? <span className="n">{comments}</span> : null}</button>}
+          {version > 1 && <button className="btn ghost sm" onClick={() => setShowVersions(true)} aria-label={`History of ${title}`}>History</button>}
+        </span>
+      </header>
+      {showVersions && <VersionsDialog entryId={entry.id} kind={entry.kind} onClose={() => setShowVersions(false)} />}
+    </section>
+  )
 
   return (
     <section className="entry" id={`entry-${entry.id}`} aria-label={title}>
@@ -336,7 +358,7 @@ function peek(kind: string, c: any): string {
     return cut([rows.filter((r: any) => r.role !== 'product').map((r: any) => r.name).filter(Boolean).slice(0, 4).join(', '),
       prod ? `→ ${prod.name || 'product'}${prod.yield_pct != null ? ` (${Math.round(prod.yield_pct)}%)` : ''}` : ''].filter(Boolean).join(' '))
   }
-  if (kind === 'purification') return cut([c.method, c.eluent, c.isolated_mg != null ? `${c.isolated_mg} mg` : ''].filter(Boolean).join(' · '))
+  if (kind === 'purification') return cut([PURIFICATION_LABELS[c.method] || c.method, c.eluent, c.isolated_mg != null ? `${c.isolated_mg} mg` : ''].filter(Boolean).join(' · '))
   if (kind === 'characterization') return cut((c.items || []).map((i: any) => i.technique).filter(Boolean).join(', '))
   if (kind === 'file') return `${(c.attachment_ids || []).length} file${(c.attachment_ids || []).length === 1 ? '' : 's'}`
   if (kind === 'table') return `${(c.rows || []).length} row${(c.rows || []).length === 1 ? '' : 's'} × ${(c.columns || []).length} columns`

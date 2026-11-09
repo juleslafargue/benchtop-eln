@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -12,6 +12,23 @@ from ..config import settings
 from ..security import DB, Admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+@router.get("/address")
+def server_address(request: Request, _: Admin):
+    """The address people in the lab open Benchtop at, for the message an admin sends someone they've added (0.35: the
+    message gave the address of the computer the admin was on, "localhost" on the server itself). As the phone link
+    works it out: the public address, then this computer's address on the network, then the address in use now."""
+    if settings.public_url:
+        return {"address": settings.public_url, "reachable": True, "note": ""}
+    if settings.lan_url:
+        return {"address": settings.lan_url, "reachable": True, "note": "They must be on the same network as this computer."}
+    host = request.url.hostname or ""
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return {"address": None, "reachable": False,
+                "note": "Benchtop is running just for this computer, so nobody else can reach it yet. Start it with "
+                        "./benchtop lab to share it on your network, and send them the address it shows."}
+    return {"address": None, "reachable": True, "note": ""}
 
 
 @router.get("/backups")

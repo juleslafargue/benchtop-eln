@@ -33,7 +33,7 @@ export default function SimilarReactions({ rows, experimentId, readOnly, onUse }
   // only structures and roles matter; typing amounts shouldn't re-run the search
   const key = useMemo(() => JSON.stringify(rows.filter(r => r.smiles).map(r => [r.role, r.smiles, r.limiting ? 1 : 0, r.name])), [rows])
   const [res, setRes] = useState<{ results: SimilarReaction[]; searched: number } | null>(null)
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)  // 0.35: a line to open, not a box that's always open
   const [all, setAll] = useState(false)
   const [using, setUsing] = useState<SimilarReaction | null>(null)
 
@@ -53,6 +53,7 @@ export default function SimilarReactions({ rows, experimentId, readOnly, onUse }
   const have = new Set(rows.flatMap(r => [r.smiles, (r.name || '').toLowerCase()]).filter(Boolean))
   const toAdd = (s: SimilarReaction) => s.condition_rows.filter(r => !(r.smiles && have.has(r.smiles)) && !(r.name && have.has(r.name.toLowerCase())))
 
+  if (!res.results.length) return <p className="similar-none faint">Have we done this before? Nothing similar among the {res.searched} reaction{res.searched === 1 ? '' : 's'} you can see.</p>
   return (
     <section className={`similar${open ? ' open' : ''}`} aria-label="Similar reactions">
       <button className="similar-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>

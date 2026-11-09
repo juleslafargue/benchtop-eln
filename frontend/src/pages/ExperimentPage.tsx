@@ -16,6 +16,8 @@ import FollowUpDialog from '../components/FollowUpDialog'
 import { useBackTarget } from '../components/BackButton'
 import { parseSpectrumBuffer, techniqueFor } from '../spectra'
 import { DoiLine, PublishPanel } from '../components/Publish'
+import { reminderText } from '../signCheck'
+import { sigLine } from '../display'
 import type { Attachment, Entry, User, UserBrief } from '../api'
 
 const STATUS_WORD = { open: 'Draft', signed: 'Signed', witnessed: 'Witnessed', voided: 'Voided', locked: 'Locked' }
@@ -131,7 +133,7 @@ function SampleCodes({ exp, editable, onChange }: { exp: Experiment; editable: b
             <button className="btn ghost sm" onClick={() => setTyping(false)}>Cancel</button></span>
           : <><button className="btn sm" disabled={busy} onClick={() => add()}>New sample code</button>
             <button className="btn ghost sm" onClick={() => setTyping(true)} title="A number you've already written on a vial">Use a number I already have…</button></>
-        : <Link className="faint" to="/account" style={{ fontSize: 13 }}>Set your initials in Account to give samples codes</Link>)}
+        : null)}
     </div>
   )
 }
@@ -157,13 +159,17 @@ function TimestampLine({ s, eid }: { s: Signature; eid: string }) {
 function SignatureRail({ sigs, eid }: { sigs: Signature[]; eid: string }) {
   if (!sigs.length) return <p className="faint">No signatures yet.</p>
   return <>{sigs.map(s => (
-    <div key={s.id} className={`sig ${s.meaning}`}>
-      <div style={{ fontWeight: 600 }}>{SIG_LABEL[s.meaning] || s.meaning}</div>
-      <div className="faint">{s.signer_name || displayName(s.user)} · {when(s.signed_at)}</div>
+    <div key={s.id} className={`sig ${s.meaning}`} aria-label={SIG_LABEL[s.meaning] || s.meaning} role="group">
+      <div className="sig-line">{sigLine(s)}</div>
       {s.signer_name && s.user && s.signer_name !== (s.user.full_name || s.user.username) && <div className="faint">now {displayName(s.user)}</div>}
       {s.comment && <div style={{ fontSize: 13 }}>“{s.comment}”</div>}
-      <div className="hash" title={s.content_hash}>{s.content_hash.slice(0, 24)}…</div>
-      <TimestampLine s={s} eid={eid} />
+      {s.timestamp && s.timestamp.status !== 'ok' && <TimestampLine s={s} eid={eid} />}
+      <details className="sig-details">
+        <summary>Details</summary>
+        <div className="faint" style={{ fontSize: 12.5 }}>Fingerprint of what was signed (SHA-256)</div>
+        <div className="hash sig-hash">{s.content_hash}</div>
+        {s.timestamp?.status === 'ok' && <TimestampLine s={s} eid={eid} />}
+      </details>
     </div>
   ))}</>
 }
@@ -264,6 +270,7 @@ export default function ExperimentPage() {
   const dragDepth = useRef(0)
   const [bench, setBench] = useState<null | 'log' | 'timer'>(null)
   const [phone, setPhone] = useState(false)
+  const [tagging, setTagging] = useState(false)
   const [, redraw] = useState(0)
   useEffect(() => { const on = () => redraw(n => n + 1); window.addEventListener('benchtop:collapse', on); return () => window.removeEventListener('benchtop:collapse', on) }, [])
 
@@ -383,6 +390,13 @@ export default function ExperimentPage() {
 
   const isOwner = exp.owner.id === user.id
   const editable = canWrite && exp.status === 'open' && (exp.can_edit ?? (isOwner || user.role === 'admin' || exp.is_template))
+  // 0.35: publishing a record that's signed but not yet witnessed is under More (same rule as before: the author, once signed)
+  const publishLater = isOwner && canWrite && !exp.is_template && exp.status === 'signed' && !exp.publication
+  // the page's main action, also in a bar at the bottom of a phone's screen (0.35)
+  const mainAction = exp.is_template || !canWrite ? null
+    : exp.status === 'open' && isOwner ? 'sign' as const
+    : exp.status === 'signed' && !isOwner ? 'witness' as const : null
+  const phoneBar = !!mainAction || (editable && !exp.is_template)
 
   const patch = async (body: Partial<Experiment>) => {
     try { const r = await api.patch<ExperimentSummary>(`/api/experiments/${exp.id}`, body); setExp({ ...exp, ...r }) }
@@ -432,7 +446,7 @@ export default function ExperimentPage() {
   }
 
   return (
-    <article className="exp-page"
+    <article className={`exp-page${phoneBar && !bench ? ' has-phone-bar' : ''}`}
       onDragEnter={e => { if (editable && e.dataTransfer.types.includes('Files')) { dragDepth.current++; setDragging(true) } }}
       onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }}
       onDragOver={e => { if (editable && e.dataTransfer.types.includes('Files')) e.preventDefault() }}
@@ -471,17 +485,24 @@ export default function ExperimentPage() {
             {!!exp.follow_ups?.length && <span>Follow-up{exp.follow_ups.length > 1 ? 's' : ''}: {exp.follow_ups.map((f, i) =>
               <Fragment key={f.id}>{i > 0 && ', '}<Link to={`/experiments/${f.id}`} title={f.title}><b>{f.eid}</b></Link></Fragment>)}</span>}
           </div>}
-          {!exp.is_template && (!!exp.samples?.length || editable) && <SampleCodes exp={exp} editable={editable} onChange={load} />}
+          {!exp.is_template && (!!exp.samples?.length || (editable && !!user.sample_prefix)) && <SampleCodes exp={exp} editable={editable} onChange={load} />}
           {exp.audience && !exp.is_template && <div className="exp-access">
             <AudienceBadge audience={exp.audience} />
             {exp.shared_with_me && <span className="tag">Shared with you · {exp.shared_with_me === 'edit' ? 'can edit' : 'can view'}</span>}
             <button className="btn ghost sm" onClick={() => setSharing([])}>Share…</button>
           </div>}
-          <div className="row" style={{ marginTop: 8, gap: 6 }}>
+          {(exp.tags.length > 0 || editable) && <div className="row exp-tags" style={{ marginTop: 8, gap: 6 }}>
             {exp.tags.map(t => <span className="tag" key={t}>{t}{editable && <button className="btn ghost sm" style={{ padding: '0 0 0 4px' }} aria-label={`Remove tag ${t}`} onClick={() => patch({ tags: exp.tags.filter(x => x !== t) })}>×</button>}</span>)}
-            {editable && <input className="input" style={{ width: 110, padding: '1px 8px', fontSize: 13 }} placeholder="Add tag" aria-label="Add tag"
-              onKeyDown={e => { const v = (e.target as HTMLInputElement).value.trim(); if (e.key === 'Enter' && v) { patch({ tags: [...exp.tags, v] }); (e.target as HTMLInputElement).value = '' } }} />}
-          </div>
+            {editable && (tagging
+              ? <input className="input" autoFocus style={{ width: 130, padding: '1px 8px', fontSize: 13 }} placeholder="Tag, then Enter" aria-label="Add tag"
+                onBlur={e => { const v = e.target.value.trim(); if (v) patch({ tags: [...exp.tags, v] }); setTagging(false) }}
+                onKeyDown={e => {
+                  const el = e.target as HTMLInputElement, v = el.value.trim()
+                  if (e.key === 'Enter' && v) { patch({ tags: [...exp.tags, v] }); el.value = '' }
+                  if (e.key === 'Escape') { el.value = ''; setTagging(false) }
+                }} />
+              : <button className="btn ghost sm add-tag" onClick={() => setTagging(true)}>+ Tag</button>)}
+          </div>}
         </div>
         {!exp.is_template && <StatusCard exp={exp} fresh={fresh} />}
       </header>
@@ -509,6 +530,10 @@ export default function ExperimentPage() {
               {importNotes.map(n => <div key={n}>{n}</div>)}
               <button className="btn ghost sm" onClick={() => setImportNotes([])}>Dismiss</button></div>}
             {exp.status === 'signed' && <p className="notice">This record is signed and locked. {isOwner ? 'Withdraw your signature to make changes.' : 'Review it, then witness it or return it to the author.'}</p>}
+            {exp.status === 'signed' && !isOwner && (() => {  // 0.35: the reminder the author saw before signing (display only)
+              const empty = reminderText(exp.entries)
+              return empty ? <p className="sign-reminder" role="note"><b>Still empty when it was signed:</b> {empty}.</p> : null
+            })()}
             {exp.status === 'voided' && <p className="notice">This record has been voided. It is kept for reference.</p>}
             {exp.origin && <OriginBanner exp={exp} canFollowUp={canWrite && exp.status === 'locked'} onFollowUp={() => setFollowUp(true)} />}
             <div style={{ marginTop: exp.status === 'open' ? 0 : 14 }}>
@@ -558,7 +583,7 @@ export default function ExperimentPage() {
                   : verify.intact ? 'Content matches the latest signature.' : 'Content does not match the signature. The record may have been altered outside the app.'}
                 <span className="hash" style={{ display: 'block' }}>{verify.content_hash}</span></p>}
             </div>}
-            {!exp.is_template && <PublishPanel exp={exp} onChange={load} />}
+            {!exp.is_template && !publishLater && <PublishPanel exp={exp} onChange={load} />}
             {!exp.is_template && <div className="stack bench-tools" style={{ gap: 6 }}>
               <h2 className="rail-h">At the bench</h2>
               {editable && <button className="btn sm" onClick={() => setBench('log')} title="Shortcut: L">Log a note <kbd>L</kbd></button>}
@@ -581,14 +606,25 @@ export default function ExperimentPage() {
               {canWrite && !exp.is_template && (exp.status === 'signed' || exp.status === 'witnessed' || exp.status === 'locked') &&
                 <button className="btn sm" onClick={() => setFollowUp(true)} title="A new draft linked to this one, for results that came after signing">Make a follow-up…</button>}
               <button className="btn sm" onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export?format=pdf`, `${exp.eid} ${exp.title.replace(/[\\/:*?"<>|#^[\]]+/g, ' ').slice(0, 80)}.pdf`).catch(e => toast(e.message))}>Download PDF</button>
-              <button className="btn sm" onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export`, `${exp.eid}.html`, true)}>Open printable report</button>
-              <button className="btn sm" onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export?format=md`, `${exp.eid} ${exp.title.replace(/[\\/:*?"<>|#^[\]]+/g, ' ').slice(0, 80)}.md`)}>Download Markdown</button>
-              <button className="btn sm" onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export?format=json`, `${exp.eid}.json`)}>Download JSON</button>
-              {!exp.is_template && <button className="btn sm" title="The shared format of electronic lab notebooks: opens in eLabFTW, RSpace, Kadi4Mat or another Benchtop"
-                onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export.eln`, `${exp.eid}.eln`, false, true).catch(e => toast(e.message))}>Download .eln</button>}
-              {canWrite && !exp.notebook_archived && <button className="btn sm" onClick={() => clone(false)}>Duplicate</button>}
-              {canWrite && !exp.is_template && !exp.notebook_archived && <button className="btn sm" onClick={() => setScaling(true)}>Repeat at another scale…</button>}
-              {canWrite && !exp.is_template && <button className="btn sm" onClick={() => clone(true)}>Save as template</button>}
+              <details className="rail-more downloads">
+                <summary className="btn sm">More downloads…</summary>
+                <div className="stack" style={{ gap: 6 }}>
+                  <button className="btn sm" onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export`, `${exp.eid}.html`, true)}>Open printable report</button>
+                  <button className="btn sm" onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export?format=md`, `${exp.eid} ${exp.title.replace(/[\\/:*?"<>|#^[\]]+/g, ' ').slice(0, 80)}.md`)}>Download Markdown</button>
+                  <button className="btn sm" onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export?format=json`, `${exp.eid}.json`)}>Download JSON</button>
+                  {!exp.is_template && <button className="btn sm" title="The shared format of electronic lab notebooks: opens in eLabFTW, RSpace, Kadi4Mat or another Benchtop"
+                    onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export.eln`, `${exp.eid}.eln`, false, true).catch(e => toast(e.message))}>Download .eln</button>}
+                </div>
+              </details>
+              {canWrite && <details className="rail-more more">
+                <summary className="btn sm">More…</summary>
+                <div className="stack" style={{ gap: 6 }}>
+                  {canWrite && !exp.notebook_archived && <button className="btn sm" onClick={() => clone(false)}>Duplicate</button>}
+                  {canWrite && !exp.is_template && !exp.notebook_archived && <button className="btn sm" onClick={() => setScaling(true)}>Repeat at another scale…</button>}
+                  {canWrite && !exp.is_template && <button className="btn sm" onClick={() => clone(true)}>Save as template</button>}
+                  {publishLater && <PublishPanel exp={exp} onChange={load} />}
+                </div>
+              </details>}
               {canWrite && (isOwner || user.role === 'admin') && exp.status !== 'voided' && !exp.is_template &&
                 <button className="btn ghost sm danger" disabled={!!savingFor} onClick={() => openSaved('void')}>{savingFor === 'void' ? 'Saving…' : 'Void…'}</button>}
             </div>
@@ -596,6 +632,11 @@ export default function ExperimentPage() {
         </div>
       )}
 
+      {phoneBar && !bench && <div className="phone-actions" role="group" aria-label="Main actions">
+        {mainAction === 'sign' && <button className="btn primary" disabled={!!savingFor} onClick={() => openSaved('sign')}>{savingFor === 'sign' ? 'Saving…' : 'Sign as author'}</button>}
+        {mainAction === 'witness' && <button className="btn primary" onClick={() => setDialog('witness')}>Witness</button>}
+        {editable && !exp.is_template && <button className="btn" onClick={() => setBench('log')}>Log a note</button>}
+      </div>}
       {bench && editable && <BenchBar key={bench} experimentId={exp.id} eid={exp.eid} initialTimer={bench === 'timer'} onClose={() => setBench(null)} />}
       {phone && <PhoneDialog experimentId={exp.id} onClose={() => setPhone(false)} />}
       {followUp && <FollowUpDialog eid={exp.eid} title={exp.title} notebookId={exp.notebook_id}

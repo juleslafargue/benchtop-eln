@@ -10,6 +10,7 @@ import type { EntryEditorProps } from './EntryCard'
 import ConditionsBar, { type Conditions } from './ConditionsBar'
 import SimilarReactions from './SimilarReactions'
 import { mergeStoich } from '../stoichMerge'
+import { fullValue as full, sig4 } from '../display'
 
 const ROLE_ORDER: StoichRow['role'][] = ['reactant', 'reagent', 'catalyst', 'solvent', 'product']
 const ROLE_LABEL: Record<StoichRow['role'], string> = {
@@ -223,7 +224,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
   )
   const UNIT_OF: Partial<Record<keyof StoichRow, 'mg' | 'mL' | 'mmol' | 'M'>> = { mass_mg: 'mg', actual_mass_mg: 'mg', volume_ml: 'mL', mmol: 'mmol', conc_m: 'M' }
   const n = (r: StoichRow, i: number, k: keyof StoichRow, basis?: StoichRow['basis'], nd = 4) => (
-    <td><NumInput label={`${COL_LABEL[k] || String(k)}, ${rowLabel(r, rows)}`} nd={nd} sig={5} disabled={readOnly} value={r[k] as number | null} unit={UNIT_OF[k]} fit
+    <td><NumInput label={`${COL_LABEL[k] || String(k)}, ${rowLabel(r, rows)}`} nd={nd} sig={4} disabled={readOnly} value={r[k] as number | null} unit={UNIT_OF[k]} fit
       className={basis && r.basis === basis ? 'basis' : ''} onCommit={v => setField(i, { [k]: v } as Partial<StoichRow>, basis)} onProblem={boxProblem} /></td>
   )
 
@@ -258,7 +259,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
             </tr></thead>
             <tbody>
               {nonProduct.map(g => [
-                <tr className="group" key={g.role}><td colSpan={12}>{ROLE_LABEL[g.role]}</td></tr>,
+                <tr className="group" key={g.role}><td colSpan={12}><span className="group-label">{ROLE_LABEL[g.role]}</span></td></tr>,
                 ...g.items.map(({ r, i }) => (
                   <tr key={i}>
                     {structCell(r, i)}{nameCell(r, i)}
@@ -273,7 +274,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
                         </label></td>
                       : <>{n(r, i, 'equiv', 'equiv', 3)}{n(r, i, 'mmol', 'mmol')}</>}
                     {n(r, i, 'mass_mg', 'mass', 3)}
-                    {r.basis === 'fill' ? <td className="calc"><b>{fmt(r.volume_ml, 3)}</b></td> : n(r, i, 'volume_ml', 'volume')}
+                    {r.basis === 'fill' ? <td className="calc" title={full(r.volume_ml, 'mL')}><b>{sig4(r.volume_ml)}</b></td> : n(r, i, 'volume_ml', 'volume')}
                     {n(r, i, 'density', undefined, 4)}{n(r, i, 'conc_m', undefined, 4)}{n(r, i, 'purity', undefined, 2)}
                     <td>{!readOnly && <button className="btn ghost sm" onClick={() => removeRow(i)} aria-label={`Remove ${rowLabel(r, rows)}`}>×</button>}
                       {(r as any).deducted && <span className="faint used" title="Deducted from inventory">✓ used
@@ -299,8 +300,8 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
                   {structCell(r, i)}{nameCell(r, i)}
                   <td className="calc">{fmt(r.mw, 2)}</td>
                   {n(r, i, 'equiv', undefined, 3)}
-                  <td className="calc">{fmt(r.mmol, 4)}</td>
-                  <td className="calc">{fmt(r.theoretical_mass_mg, 2)}</td>
+                  <td className="calc" title={full(r.mmol, 'mmol')}>{sig4(r.mmol)}</td>
+                  <td className="calc" title={full(r.theoretical_mass_mg, 'mg')}>{sig4(r.theoretical_mass_mg)}</td>
                   {n(r, i, 'actual_mass_mg', undefined, 2)}{n(r, i, 'purity', undefined, 2)}
                   <td className="calc yield">{r.yield_pct !== null ? `${fmt(r.yield_pct, 1)}%` : ''}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
@@ -313,16 +314,20 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
           </table>
         </div>
       )}
+      {(() => {
+        const need = rows.filter(r => r.role !== 'product' && r.role !== 'solvent' && r.volume_ml && !r.density && !r.conc_m && !r.mmol)
+        return need.length > 0 && <p className="hint-line">Add a density to get mmol: {need.map(r => rowLabel(r, rows)).join(', ')}.</p>
+      })()}
       {Object.entries(boxProblems).map(([label, problem]) => <p className="error num-problem-line" role="alert" key={label}>{label}: {problem}</p>)}
 
       {rows.length > 0 && (
         <div className="spread">
           <div className="totals">
-            <span>Limiting: <b>{fmt(totals.limiting_mmol, 4) || '—'}</b> mmol</span>
+            <span title={full(totals.limiting_mmol, 'mmol')}>Limiting: <b>{sig4(totals.limiting_mmol) || '—'}</b> mmol</span>
             <span>Total volume: <b>{fmt(totals.total_volume_ml, 2) || '—'}</b> mL</span>
             {totals.concentration_m && <span>Concentration: <b>{fmt(totals.concentration_m, 3)}</b> M</span>}
           </div>
-          {!readOnly && <button className="btn sm" onClick={deduct}>Deduct amounts from inventory</button>}
+          {!readOnly && rows.some(r => !!r.lot_id && r.role !== 'product') && <button className="btn sm" onClick={deduct}>Deduct amounts from inventory</button>}
         </div>
       )}
       {(() => {
@@ -336,19 +341,25 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
           ['Solvent', g.solvent != null ? `${fmt(g.solvent, 0)} L/kg` : '', 'Reaction solvent volume per kg of product.'],
         ]
         const shown = items.filter(i => i[1])
+        const first = shown.filter(i => i[0] === 'Atom economy'), more = shown.filter(i => i[0] !== 'Atom economy')
+        const scopeNote = <span className="faint" title={m.scope}>reaction only{m.missing_mass?.length ? ` · E-factor/PMI need a mass for ${m.missing_mass.map((x: string) => {
+          const r = rows.find(r => r.smiles && r.smiles === x)  // saved before 0.29, which named unnamed rows by their SMILES
+          return r ? rowLabel(r, rows) : x
+        }).join(', ')}` : ''}</span>
         const impossible = [g.aeImpossible && 'atom economy', g.rmeImpossible && 'RME'].filter(Boolean).join(' and ')
         if (!shown.length && !impossible && !g.pmiImpossible) return null
         return <div className="metrics" aria-label="Green chemistry metrics">
           <span className="fld-cap" style={{ alignSelf: 'center' }}>Green metrics</span>
-          {shown.map(([k, v, t]) => <span key={k} title={t}>{k} <b>{v}</b></span>)}
+          {first.map(([k, v, t]) => <span key={k} title={t}>{k} <b>{v}</b></span>)}
           {impossible && <span className="warn-text metrics-roles">{impossible[0].toUpperCase() + impossible.slice(1)} would be outside 0–100 %.
             Check {g.aeImpossible ? '' : 'the isolated mass and '}the roles: a co-reactant may be marked as Reagent (only Reactants count).</span>}
           {g.pmiImpossible && <span className="warn-text metrics-roles">No E-factor or PMI: the isolated mass is more than everything that
             went in. Check the masses and their units.</span>}
-          <span className="faint" title={m.scope}>reaction only{m.missing_mass?.length ? ` · E-factor/PMI need a mass for ${m.missing_mass.map((x: string) => {
-            const r = rows.find(r => r.smiles && r.smiles === x)  // saved before 0.29, which named unnamed rows by their SMILES
-            return r ? rowLabel(r, rows) : x
-          }).join(', ')}` : ''}</span>
+          {more.length > 0 || m.missing_mass?.length ? <details className="metrics-more">
+            <summary>More metrics</summary>
+            <dl>{more.map(([k, v, t]) => <div key={k}><dt>{k} <b>{v}</b></dt><dd>{t}</dd></div>)}</dl>
+            {scopeNote}
+          </details> : scopeNote}
         </div>
       })()}
       {(content.warnings || []).map((w: string) => <p className="warn" key={w}>{w}</p>)}

@@ -58,7 +58,7 @@ export function Composer({ placeholder, onSend, autoFocus, initial = '', submitL
           <span className="avatar xs" aria-hidden>{initials(u.full_name || u.username)}</span>{u.full_name || u.username} <span className="faint">@{u.username}</span></li>)}
       </ul>}
       <div className="composer-foot">
-        <span className="faint">@ to mention someone · {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+Enter to send</span>
+        <span className="faint">@ to mention someone<span className="key-hint"> · {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+Enter to send</span></span>
         {onCancel && <button className="btn ghost sm" onClick={onCancel}>Cancel</button>}
         <button className="btn primary sm" disabled={!text.trim() || busy} onClick={send}>{busy ? 'Sending…' : submitLabel}</button>
       </div>

@@ -56,16 +56,64 @@ const CATALOG: { type: WType; list?: ListKind; label: string; w: number; h: numb
   { type: 'note', label: 'Note', w: 4, h: 4 },
   { type: 'header', label: 'Section heading', w: 12, h: 2 },
 ]
+// 0.35: your own records stay in view after signing ("waiting" and "recent"); a layout someone saved is kept as it is
 export const DEFAULT_WIDGETS: Widget[] = [
   { i: 'actions', type: 'actions', x: 0, y: 0, w: 4, h: 4 },
   { i: 'awaiting', type: 'list', list: 'awaiting', x: 4, y: 0, w: 4, h: 4 },
   { i: 'returned', type: 'list', list: 'returned', x: 8, y: 0, w: 4, h: 4 },
-  { i: 'yield', type: 'yield', x: 0, y: 4, w: 8, h: 7 },
-  { i: 'month', type: 'month', x: 8, y: 4, w: 4, h: 3 },
-  { i: 'inventory', type: 'inventory', x: 8, y: 7, w: 4, h: 4 },
-  { i: 'open', type: 'list', list: 'open', x: 0, y: 11, w: 6, h: 5 },
-  { i: 'spectra', type: 'spectra', x: 6, y: 11, w: 6, h: 5 },
+  { i: 'open', type: 'list', list: 'open', x: 0, y: 4, w: 4, h: 5 },
+  { i: 'waiting', type: 'list', list: 'waiting', x: 4, y: 4, w: 4, h: 5 },
+  { i: 'recent', type: 'list', list: 'recent', x: 8, y: 4, w: 4, h: 5 },
+  { i: 'yield', type: 'yield', x: 0, y: 9, w: 8, h: 7 },
+  { i: 'month', type: 'month', x: 8, y: 9, w: 4, h: 3 },
+  { i: 'inventory', type: 'inventory', x: 8, y: 12, w: 4, h: 4 },
+  { i: 'spectra', type: 'spectra', x: 0, y: 16, w: 6, h: 5 },
 ]
+
+/** Charts and lab-wide lists with nothing in them yet: on a first day they wait until there's something to show. */
+export function emptyChart(w: Pick<Widget, 'type'>, d: Pick<DashData, 'stats' | 'spectra' | 'inventory'>): boolean {
+  if (w.type === 'yield') return !d.stats.yields.length
+  if (w.type === 'month') return !d.stats.this_month && !d.stats.last_month
+  if (w.type === 'spectra') return !d.spectra.length
+  if (w.type === 'inventory') return !d.inventory.low.length && !d.inventory.expiring.length && !(d.inventory.safety_changes || []).length
+  return false
+}
+
+/** 0.35: someone with no records yet gets the four steps to their first one; an admin who is still alone here, where
+ *  to add their group. Put away with Hide, for good (saved to the account). */
+export function FirstSteps({ firstRecord, alone, canWrite, onNew, onHide }: {
+  firstRecord: boolean; alone: boolean; canWrite: boolean; onNew: () => void; onHide: () => void
+}) {
+  if (!(firstRecord && canWrite) && !alone) return null
+  return (
+    <section className="panel panel-pad first-steps" aria-labelledby="first-steps-h">
+      <div className="spread" style={{ alignItems: 'baseline' }}>
+        <h2 id="first-steps-h">{firstRecord && canWrite ? 'Your first record' : 'Add your group'}</h2>
+        <button className="btn ghost sm" onClick={onHide}>Hide</button>
+      </div>
+      {firstRecord && canWrite && <>
+        <ol className="first-steps-list">
+          <li><b>A notebook to keep it in.</b> If you don't have one yet, New experiment makes one for you, named after you and
+            shared with your group.</li>
+          <li><b>New experiment.</b> Give it a title. It gets a number, such as EXP-00001, that stays with it.</li>
+          <li><b>Write the reaction and the procedure.</b> Draw or paste the reaction and the table works out the amounts.
+            Everything saves as you type.</li>
+          <li><b>Sign it and choose a witness.</b> When it's done, press Sign as author and pick someone in your group to witness it.</li>
+        </ol>
+        <div className="row" style={{ gap: 10 }}>
+          <button className="btn primary" onClick={onNew}>New experiment</button>
+          <Link to="/guide">More in Getting started</Link>
+        </div>
+      </>}
+      {alone && <div className={firstRecord && canWrite ? 'first-steps-admin' : ''}>
+        {firstRecord && canWrite && <h3>Add your group</h3>}
+        <p style={{ margin: '0 0 8px' }}>You're the only person in this Benchtop so far. Add the people in your lab, and put
+          them in a group so they can see and witness each other's records.</p>
+        <Link className="btn" to="/admin/users">Add people in Admin → Users</Link>
+      </div>}
+    </section>
+  )
+}
 
 /** How many there are in all, where the server says (its lists stop at 10). */
 export const totalOf = (d: Pick<DashData, 'lists' | 'totals'>, k: ListKind | 'could_witness') =>
@@ -118,6 +166,18 @@ export default function Dashboard() {
   const [newExp, setNewExp] = useState(false)
   const [newNb, setNewNb] = useState(false)
   const [narrow, setNarrow] = useState(() => window.innerWidth < 760)
+  const [stepsGone, setStepsGone] = useState(false)
+  const [alone, setAlone] = useState(false)
+  const stepsHidden = !!user.preferences?.first_steps_dismissed || stepsGone
+  useEffect(() => {  // an admin with nobody else here yet (the retired built-in admin doesn't count)
+    if (user.role !== 'admin' || stepsHidden) return
+    api.get<{ id: number; username: string; active: boolean }[]>('/api/users')
+      .then(us => setAlone(!us.some(u => u.id !== user.id && u.active && u.username !== 'admin'))).catch(() => {})
+  }, [user.role, user.id, stepsHidden])
+  const hideSteps = async () => {
+    setStepsGone(true)
+    try { setUser(await api.patch<User>('/api/auth/me', { preferences: { first_steps_dismissed: true } })) } catch (e: any) { setStepsGone(false); toast(e.message) }
+  }
 
   useEffect(() => { api.get<DashData>('/api/dashboard').then(setData).catch(e => toast(e.message)) }, [toast])
   useEffect(() => { const f = () => setNarrow(window.innerWidth < 760); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f) }, [])
@@ -207,6 +267,9 @@ export default function Dashboard() {
   const title = (w: Widget) => w.title || (w.type === 'list' ? LIST_TITLES[w.list || 'recent'] : ({ actions: 'Quick actions', note: 'Note', header: '', yield: 'Yield trend', month: 'This month', spectra: 'Recent spectra', inventory: 'Inventory alerts' } as const)[w.type as Exclude<WType, 'list'>])
   const count = (w: Widget) => (w.type === 'list' && data ? totalOf(data, w.list || 'recent') : null)
 
+  // on a first day (no records of your own yet), empty charts wait until there's data; while customising, all show
+  const firstDay = !!data && !data.lists.recent.length
+  const shownWidgets = firstDay && !editing ? widgets.filter(w => !emptyChart(w, data!)) : widgets
   const card = (w: Widget) => (
     <div key={w.i} className={`widget wt-${w.type}${editing ? ' editing' : ''}`}>
       {w.type !== 'header' && <div className="w-head">
@@ -245,19 +308,21 @@ export default function Dashboard() {
         <button className="btn ghost sm" onClick={() => { setQuietDismissed(true); try { sessionStorage.setItem('benchtop.quiet-dismissed', '1') } catch { /* ok */ } }}>Not now</button>
       </div>}
       {showWelcome && <div className="notice welcome-note" role="status">
-        <span><b>New to Benchtop?</b> Read <Link to="/guide">Getting started</Link> (5 minutes). It's always in the menu, above your name.</span>
+        <span><b>New to Benchtop?</b> <Link to="/guide">Getting started</Link> takes you through your first record. It's always in the menu, above your name.</span>
         <button className="btn ghost sm" onClick={dismissWelcome}>Dismiss</button>
       </div>}
       {user.has_password === false && <p className="notice" style={{ margin: 0 }}>
         {!showWelcome && sessionStorage.getItem('benchtop.welcome') ? 'Welcome to Benchtop! ' : ''}You sign in with single sign-on. To sign records you'll also need a signing password: <Link to="/account">set one in Account settings</Link>.</p>}
+      {data && !stepsHidden && !editing && <FirstSteps firstRecord={!data.lists.recent.length} alone={alone} canWrite={canWrite}
+        onNew={() => setNewExp(true)} onHide={hideSteps} />}
       {editing && <p className="notice" style={{ margin: 0 }}>Drag a widget by its title to move it, drag the bottom-right corner to resize it, and use Remove or Add widget to change what's shown. Click Done to save.</p>}
       {narrow ? (
-        <div className="stack dash-stack" style={{ gap: 12 }}>{[...widgets].sort((a, b) => a.y - b.y || a.x - b.x).map(card)}</div>
+        <div className="stack dash-stack" style={{ gap: 12 }}>{[...shownWidgets].sort((a, b) => a.y - b.y || a.x - b.x).map(card)}</div>
       ) : (
-        <Grid className="dash-grid" layout={widgets.map(w => ({ i: w.i, x: w.x, y: w.y, w: w.w, h: w.h, minW: 2, minH: 2 }))}
+        <Grid className="dash-grid" layout={shownWidgets.map(w => ({ i: w.i, x: w.x, y: w.y, w: w.w, h: w.h, minW: 2, minH: 2 }))}
           cols={12} rowHeight={44} margin={[14, 14]} containerPadding={[0, 0]} isDraggable={editing} isResizable={editing}
           draggableHandle=".w-drag, .w-header, .w-remove-float" onLayoutChange={onLayout} compactType="vertical">
-          {widgets.map(card)}
+          {shownWidgets.map(card)}
         </Grid>
       )}
       {adding && (

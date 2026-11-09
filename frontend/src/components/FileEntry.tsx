@@ -95,7 +95,7 @@ export default function FileEntry({ content, onChange, readOnly, experimentId, a
           ))}
         </ul>
       )}
-      <input className="input" placeholder="Caption" disabled={readOnly} value={content.caption || ''}
+      <input className="input" placeholder={readOnly ? undefined : 'Caption'} disabled={readOnly} value={content.caption || ''}
         onChange={e => onChange({ ...content, caption: e.target.value })} />
     </div>
   )

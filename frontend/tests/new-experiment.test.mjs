@@ -40,22 +40,34 @@ function render(notebooks, { prefs = {}, notebookId } = {}) {
   globalThis.__benchtopApp = { user: { ...me, role: 'scientist', preferences: prefs }, notebooks, refreshNotebooks: async () => {}, toast: () => {}, groups: [] }
   return g.renderToStaticMarkup(g.createElement(g.MemoryRouter, null, g.createElement(g.NewExperimentDialog, { notebookId, onClose: () => {} })))
 }
-const picked = html => (/<option value="(\d*)" selected="">/.exec(html) || [])[1]
+const picked = html => (/<option value="(\d*|new)" selected="">/.exec(html) || [])[1]
 const createDisabled = html => /<button class="btn primary" disabled="">Create experiment<\/button>/.test(html)
 
-test('a newcomer with no notebook of their own: nothing is picked, they are offered their own notebook', () => {
+test('a newcomer with no notebook of their own: their own is made with the experiment, never a colleague\'s picked', () => {
+  // 0.35: one step, not a second dialog to make a notebook first
   const html = render([theirs])
   assert.notEqual(picked(html), '1', "picked a colleague's notebook")
-  assert.match(html, /<option value="" selected="">Choose a notebook<\/option>/)
-  assert.ok(createDisabled(html), 'Create could be pressed with no notebook chosen')
-  assert.match(html, /Make your own notebook/)
+  assert.equal(picked(html), 'new')
+  assert.match(html, /<option value="new" selected="">Nadia Newbie(’|'|&#x27;)s notebook \(new\)<\/option>/)
+  assert.match(html, /is made for you with this experiment, open to everyone in this Benchtop/)
+  assert.doesNotMatch(html, /voided/, 'the newcomer is told about voiding before they have a record')
+  assert.ok(createDisabled(html), 'Create could be pressed with no title')
+  assert.match(html, /Give it a title first/, "Create is off and doesn't say why")
   assert.match(html, /Amide couplings \(Sophie Laurent\)/, "someone else's notebook doesn't say whose it is")
+})
+
+test('a newcomer in a group: the notebook made for them is shared with the group, as new notebooks are', () => {
+  globalThis.__benchtopApp = { user: { ...me, role: 'scientist', preferences: {} }, notebooks: [], refreshNotebooks: async () => {}, toast: () => {},
+    groups: [{ id: 3, name: 'Carter group', my_role: 'member' }] }
+  const html = g.renderToStaticMarkup(g.createElement(g.MemoryRouter, null, g.createElement(g.NewExperimentDialog, { onClose: () => {} })))
+  assert.equal(picked(html), 'new')
+  assert.match(html, /shared with Carter group/)
 })
 
 test('without a default notebook, their own most recent notebook is picked, not the first in the list', () => {
   const html = render([theirs, nb(5, 'First year', me, '2026-02-01T09:00:00Z'), nb(6, 'Heterocycles', me, '2026-03-01T09:00:00Z')])
   assert.equal(picked(html), '6')
-  assert.doesNotMatch(html, /Make your own notebook/)
+  assert.doesNotMatch(html, /\(new\)/)
 })
 
 test('their default notebook comes first, and the notebook they are looking at wins over both', () => {

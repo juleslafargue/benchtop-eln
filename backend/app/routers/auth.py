@@ -59,7 +59,8 @@ EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 USERNAME = re.compile(r"^[a-z0-9][a-z0-9._-]{1,31}$")
 NAV_KEYS = ("dashboard", "inbox", "reactions", "compounds", "si", "search", "materials", "inventory", "templates", "groups", "admin")
 PALETTES = ("benchtop", "notebook", "steel", "litmus", "contrast")  # frontend/scripts/themes.py
-PREF_KEYS = {"theme": ("system", "light", "dark"), "palette": PALETTES, "default_notebook_id": None, "spectrum_expanded": (True, False)}
+PREF_KEYS = {"theme": ("system", "light", "dark"), "palette": PALETTES, "default_notebook_id": None, "spectrum_expanded": (True, False),
+             "first_steps_dismissed": (True, False)}  # 0.35: the dashboard's "Your first record" card was put away
 
 
 def _check_email(email: str) -> str:
@@ -445,7 +446,12 @@ def logout(user: CurrentUser, session: DB):
 @router.get("/users")
 def list_users(_: CurrentUser, session: DB):
     from ..instruments import SYSTEM_USERNAME  # the account instrument files arrive under isn't a person
-    return [user_out(u) for u in session.exec(select(User).where(User.username != SYSTEM_USERNAME).order_by(User.username))]
+    from ..models import AuditEvent
+    # 0.35: the built-in login that setup switched off, so Admin → Users can say what it is
+    setup = session.exec(select(AuditEvent).where(AuditEvent.action == "setup").order_by(AuditEvent.id)).first()
+    retired = (setup.details or {}).get("retired_default") if setup else None
+    return [{**user_out(u), **({"retired_builtin": True} if retired and u.username == retired and not u.active else {})}
+            for u in session.exec(select(User).where(User.username != SYSTEM_USERNAME).order_by(User.username))]
 
 
 class UserIn(BaseModel):

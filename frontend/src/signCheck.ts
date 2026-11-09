@@ -8,7 +8,7 @@ const textOf = (html: unknown) => typeof html === 'string'
 const filled = (v: unknown) => v !== null && v !== undefined && String(v).trim() !== ''
 
 /** Is this section as it was when it was added (nothing typed, picked or attached)? */
-function isEmpty(e: EntryLike): boolean {
+export function isEmpty(e: EntryLike): boolean {
   const c = e.content || {}
   switch (e.kind) {
     case 'text': return !textOf(c.html)

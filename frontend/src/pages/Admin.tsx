@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Navigate, useLocation, useParams } from 'react-router-dom'
 import { useApp } from '../App'
 import type { NmrStatus } from '../components/Prediction'
-import { api, displayName, when, type AuditEvent, type Role, type User } from '../api'
+import { api, displayName, suggestUsername, when, type AuditEvent, type Group, type Role, type User } from '../api'
 import Modal from '../components/Modal'
 import { Plugins, Webhooks } from '../components/Integrations'
 import { ZenodoSettingsPanel } from '../components/Publish'
@@ -33,42 +33,59 @@ function EditUser({ u, onClose, onSaved }: { u: User; onClose: () => void; onSav
   )
 }
 
-function UserForm({ onClose, onSaved }: { onClose: () => void; onSaved: (added: Added) => void }) {
+export function UserForm({ onClose, onSaved }: { onClose: () => void; onSaved: (added: Added) => void }) {
   const { groups, refreshGroups } = useApp()
   const [f, setF] = useState({ username: '', full_name: '', email: '', password: '', role: 'scientist' as Role, must_change: true })
-  const [groupId, setGroupId] = useState<number | ''>(groups.length === 1 ? groups[0].id : '')
+  // 0.35: a group can be made here ("New group…"), so adding the first person isn't a dead end
+  const [groupId, setGroupId] = useState<number | '' | 'new'>(groups.length === 1 ? groups[0].id : groups.length ? '' : 'new')
+  const [newGroup, setNewGroup] = useState('')
+  const [iLead, setILead] = useState(true)
   const [err, setErr] = useState('')
   const [valid, setValid] = useState(false)
   const [busy, setBusy] = useState(false)
+  const username = f.username || suggestUsername(f.full_name)
   const save = async () => {
     setBusy(true); setErr('')
     let made: User
-    try { made = await api.post<User>('/api/users', f) } catch (e: any) { setErr(e.message); setBusy(false); return }
-    // the account exists now: a group that couldn't be set is reported, not a reason to lose the account
-    const g = groups.find(x => x.id === groupId)
+    try { made = await api.post<User>('/api/users', { ...f, username }) } catch (e: any) { setErr(e.message); setBusy(false); return }
+    // the account exists now: a group that couldn't be made or set is reported, not a reason to lose the account
+    let g: { id: number; name: string } | undefined = groups.find(x => x.id === groupId)
     let problem = ''
+    if (groupId === 'new' && newGroup.trim()) {
+      try { g = await api.post<Group>('/api/groups', { name: newGroup.trim(), i_lead: iLead }) }
+      catch (e: any) { problem = `Couldn't make the group ${newGroup.trim()} (${e.message}). Make it on the Groups page.` }
+    }
     if (g) {
-      try { await api.put(`/api/groups/${g.id}/members/${made.id}`, { role: 'member' }); refreshGroups() }
+      try { await api.put(`/api/groups/${g.id}/members/${made.id}`, { role: 'member' }) }
       catch (e: any) { problem = `Couldn't add them to ${g.name} (${e.message}). Add them on the Groups page.` }
     }
+    refreshGroups()
     onSaved({ u: made, group: problem ? '' : g?.name || '', mustChange: f.must_change, problem })
   }
+  const why = !f.full_name.trim() ? 'Type their full name first.' : !username ? 'Choose a username.' : !valid ? 'Choose a first password that passes the check.' : ''
   return (
-    <Modal title="Add user" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button>
-      <button className="btn primary" disabled={!f.username || !valid || busy} onClick={save}>{busy ? 'Adding…' : 'Add user'}</button></>}>
+    <Modal title="Add user" onClose={onClose} footer={<>{why && <span className="faint modal-why">{why}</span>}<button className="btn" onClick={onClose}>Cancel</button>
+      <button className="btn primary" disabled={!!why || busy} onClick={save}>{busy ? 'Adding…' : 'Add user'}</button></>}>
       <div className="form-grid">
-        <label className="field">Username<input className="input" autoFocus value={f.username} onChange={e => setF({ ...f, username: e.target.value })} /></label>
-        <label className="field">Full name<input className="input" value={f.full_name} onChange={e => setF({ ...f, full_name: e.target.value })} /></label>
-        <label className="field">Email<input className="input" type="email" value={f.email} onChange={e => setF({ ...f, email: e.target.value })} /></label>
+        <label className="field">Full name, as it appears on signatures<input className="input" autoFocus autoComplete="off" value={f.full_name} onChange={e => setF({ ...f, full_name: e.target.value })} placeholder="e.g. Sam Patel" /></label>
+        <label className="field">Username<input className="input" autoComplete="off" value={f.username} placeholder={suggestUsername(f.full_name) || 'e.g. sam'}
+          onChange={e => setF({ ...f, username: e.target.value.toLowerCase() })} />
+          {!f.username && suggestUsername(f.full_name) && <span className="faint" style={{ fontSize: 12.5 }}>They'll sign in as {suggestUsername(f.full_name)} unless you type another.</span>}</label>
+        <label className="field">Email<input className="input" type="email" autoComplete="off" value={f.email} onChange={e => setF({ ...f, email: e.target.value })} /></label>
         <label className="field">Role<select className="select" value={f.role} onChange={e => setF({ ...f, role: e.target.value as Role })}>
           <option value="scientist">Scientist</option><option value="viewer">Viewer (read-only)</option><option value="admin">Admin</option></select></label>
-        <label className="field">Group<select className="select" value={groupId} onChange={e => setGroupId(e.target.value ? Number(e.target.value) : '')}>
+        <label className="field">Group<select className="select" value={groupId} onChange={e => setGroupId(e.target.value === 'new' ? 'new' : e.target.value ? Number(e.target.value) : '')}>
           <option value="">No group</option>
-          {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>
-          <span className="faint" style={{ fontSize: 12.5 }}>{groups.length ? "They'll see the notebooks kept for this group." : 'No groups yet: make one on the Groups page.'}</span></label>
+          {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+          <option value="new">New group…</option></select>
+          <span className="faint" style={{ fontSize: 12.5 }}>{groupId === 'new' ? 'Made when you add them, with them in it.' : groupId !== '' ? "They'll see the notebooks kept for this group." : 'They can be added to a group later, on the Groups page.'}</span></label>
+        {groupId === 'new' && <div className="field">
+          <label className="field">Name of the new group<input className="input" value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="e.g. Carter group" /></label>
+          <label className="check-row"><input type="checkbox" checked={iLead} onChange={e => setILead(e.target.checked)} /> I lead this group</label>
+        </div>}
       </div>
       <div style={{ marginTop: 12 }}><PasswordField label="First password (give it to them privately)" value={f.password} onChange={v => setF({ ...f, password: v })} onValid={setValid}
-        username={f.username} fullName={f.full_name} email={f.email} /></div>
+        username={username} fullName={f.full_name} email={f.email} /></div>
       <label className="check-row" style={{ marginTop: 8 }}><input type="checkbox" checked={f.must_change} onChange={e => setF({ ...f, must_change: e.target.checked })} />
         Ask them to choose their own password when they first sign in (recommended: you know this one)</label>
       {err && <p className="error">{err}</p>}
@@ -81,7 +98,9 @@ interface Added { u: User; group: string; mustChange: boolean; problem: string }
 /** After adding someone: what to send them. The password isn't shown again: it goes to them privately. */
 function UserAdded({ u, group, mustChange, problem, onClose }: Added & { onClose: () => void }) {
   const { toast } = useApp()
-  const address = window.location.origin
+  const [where, setWhere] = useState<{ address: string | null; reachable: boolean; note: string } | null>(null)
+  useEffect(() => { api.get<typeof where>('/api/admin/address').then(setWhere).catch(() => setWhere(null)) }, [])
+  const address = where?.address || window.location.origin
   const message = `Your Benchtop account is ready.\nAddress: ${address}\nUsername: ${u.username}\n`
     + (mustChange ? "I'll give you the first password separately; you'll choose your own when you first sign in." : "I'll give you the password separately.")
   return (
@@ -90,7 +109,7 @@ function UserAdded({ u, group, mustChange, problem, onClose }: Added & { onClose
       <button className="btn primary" onClick={onClose}>Done</button></>}>
       <p style={{ marginTop: 0 }}>Send them:</p>
       <dl className="kv">
-        <dt>Address</dt><dd className="mono">{address}</dd>
+        <dt>Address</dt><dd><span className="mono">{address}</span>{where?.note && <div className={where.reachable ? 'faint' : 'warn-text'} style={{ fontSize: 13 }}>{where.note}</div>}</dd>
         <dt>Username</dt><dd className="mono">{u.username}</dd>
         <dt>Password</dt><dd>the one you chose: tell them privately, not in the same message</dd>
       </dl>
@@ -382,6 +401,9 @@ function Users() {
   const load = () => { api.get<User[]>('/api/users').then(setUsers) }
   useEffect(load, [])
   const [added, setAdded] = useState<Added | null>(null)
+  const [showDisabled, setShowDisabled] = useState(false)
+  const disabled = users.filter(u => !u.active)
+  const listed = showDisabled ? users : users.filter(u => u.active)
   const toggle = async (u: User) => {
     if (u.active && !confirm(`Disable ${displayName(u)} (${u.username})? They're signed out everywhere now and can't sign in until an admin enables the account again. Requests waiting for them to witness a record are cancelled. Their records stay as they are.`)) return
     try { await api.patch(`/api/users/${u.id}`, { active: !u.active }); toast(u.active ? `${u.username} is disabled and signed out` : `${u.username} can sign in again`) }
@@ -407,8 +429,8 @@ function Users() {
       <div className="spread"><h2 style={{ fontSize: 17 }}>Users</h2><button className="btn sm" onClick={() => setAdding(true)}>Add user</button></div>
       <div className="panel grid-wrap" style={{ border: 0 }}>
         <table className="plain"><thead><tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th><span className="vh">Actions</span></th></tr></thead>
-          <tbody>{users.map(u => (
-            <tr key={u.id}><td>{u.username}</td><td>{u.full_name}</td><td className="faint">{u.email}</td>
+          <tbody>{listed.map(u => (
+            <tr key={u.id} className={u.active ? '' : 'faint'}><td>{u.username}</td><td>{u.retired_builtin ? 'Built-in admin (retired at setup)' : u.full_name}</td><td className="faint">{u.email}</td>
               <td><select className="select" style={{ padding: '2px 6px' }} value={u.role} disabled={u.id === me.id} onChange={e => setRoleChange({ u, r: e.target.value as Role })} aria-label={`Role for ${u.username}`}>
                 <option value="scientist">scientist</option><option value="viewer">viewer</option><option value="admin">admin</option></select></td>
               <td>{u.active ? (u.must_change_password ? 'Active · must set password' : u.has_password === false ? 'Active · single sign-on' : 'Active') : 'Disabled'}</td>
@@ -418,6 +440,8 @@ function Users() {
                 {u.id !== me.id && <button className="btn ghost sm" onClick={() => toggle(u)}>{u.active ? 'Disable' : 'Enable'}</button>}</td></tr>
           ))}</tbody></table>
       </div>
+      {disabled.length > 0 && <div><button className="btn ghost sm" aria-expanded={showDisabled} onClick={() => setShowDisabled(s => !s)}>
+        {showDisabled ? `Hide disabled (${disabled.length})` : `Show disabled (${disabled.length})`}</button></div>}
       {roleChange && <Modal title={`Make ${displayName(roleChange.u)} ${ROLE_NAME[roleChange.r]}?`} onClose={() => setRoleChange(null)} footer={<>
         <button className="btn" onClick={() => setRoleChange(null)}>Cancel</button>
         <button className="btn primary" disabled={changing} onClick={() => role(roleChange.u, roleChange.r)}>{changing ? 'Changing…' : `Make ${ROLE_NAME[roleChange.r]}`}</button></>}>

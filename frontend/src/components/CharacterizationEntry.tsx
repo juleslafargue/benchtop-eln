@@ -59,7 +59,7 @@ export default function CharacterizationEntry({ content, onChange, readOnly, exp
                 <input className="input char-tech" list="char-techniques" disabled={readOnly} value={it.technique}
                   onChange={e => patch(i, { technique: e.target.value })} /></label>
               <label className="fld"><span className="fld-cap">Instrument & solvent</span>
-                <input className="input" placeholder={defaultCond || 'optional'} disabled={readOnly} value={it.conditions}
+                <input className="input" placeholder={readOnly ? undefined : defaultCond || 'optional'} disabled={readOnly} value={it.conditions}
                   onChange={e => patch(i, { conditions: e.target.value })} /></label>
               <div className="fld char-file-wrap"><span className="fld-cap">Data file</span>
                 <div className="char-file">
@@ -84,7 +84,7 @@ export default function CharacterizationEntry({ content, onChange, readOnly, exp
             </div>
             <label className="fld"><span className="fld-cap" title="The line that goes into your write-up. From a spectrum, click 'Use as characterisation data' to fill it.">Reported data</span>
               <textarea className="input char-data" rows={rowsFor(it.data)}
-                placeholder={PLACEHOLDER[it.technique] || 'Result as it should appear in the write-up'} disabled={readOnly} value={it.data}
+                placeholder={readOnly ? undefined : PLACEHOLDER[it.technique] || 'Result as it should appear in the write-up'} disabled={readOnly} value={it.data}
                 onChange={e => patch(i, { data: e.target.value })} /></label>
             {/HRMS|^MS\b|ESI|APCI/i.test(it.technique) && context.productSmiles && !readOnly && (
               <HrmsHelper smiles={context.productSmiles} current={it.data} onUse={d => patch(i, { data: d, conditions: it.conditions || 'ESI' })} />

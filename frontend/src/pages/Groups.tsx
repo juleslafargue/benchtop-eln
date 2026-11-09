@@ -8,11 +8,12 @@ import { initials } from '../components/Layout'
 function GroupForm({ g, onClose, onSaved }: { g?: Group; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(g?.name || '')
   const [description, setDescription] = useState(g?.description || '')
+  const [iLead, setILead] = useState(true)  // 0.35: whoever makes the group usually leads it
   const [err, setErr] = useState('')
   const save = async () => {
     try {
       if (g) await api.patch(`/api/groups/${g.id}`, { name, description })
-      else await api.post('/api/groups', { name, description })
+      else await api.post('/api/groups', { name, description, i_lead: iLead })
       onSaved()
     } catch (e: any) { setErr(e.message) }
   }
@@ -23,7 +24,8 @@ function GroupForm({ g, onClose, onSaved }: { g?: Group; onClose: () => void; on
       <div className="stack">
         <label className="field">Name<input className="input" autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Batey group, Process chemistry" /></label>
         <label className="field">Description<textarea className="input" rows={2} value={description} onChange={e => setDescription(e.target.value)} /></label>
-        {!g && <p className="faint" style={{ margin: 0 }}>After creating it, add people and choose who leads it. Leads (a PI, a manager) can see every notebook in the group, add and remove members, and share the group's experiments.</p>}
+        {!g && <label className="check-row"><input type="checkbox" checked={iLead} onChange={e => setILead(e.target.checked)} /> I lead this group</label>}
+        {!g && <p className="faint" style={{ margin: 0 }}>After creating it, add people{iLead ? '' : ' and choose who leads it'}. Leads (a PI, a manager) can see every notebook in the group, add and remove members, and share the group's experiments.</p>}
         {err && <p className="error">{err}</p>}
       </div>
     </Modal>

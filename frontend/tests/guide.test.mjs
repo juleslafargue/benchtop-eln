@@ -46,7 +46,7 @@ test('every part has a heading, an anchor and a line in the contents', () => {
   for (const s of g.GUIDE_SECTIONS) {
     assert.ok(html.includes(`<section id="${s.id}"`), `${s.id}: no section`)
     assert.ok(html.includes(`<a href="#${s.id}">${s.title}</a>`), `${s.id}: not in the contents`)
-    assert.match(html, new RegExp(`<h2 id="${s.id}-h">${s.title}</h2>`), `${s.id}: no heading`)
+    assert.ok(html.includes(`<h2 id="${s.id}-h">${s.title}</h2>`), `${s.id}: no heading`)
   }
   assert.ok(html.includes('<h1 class="page-title">Getting started</h1>'))
 })
@@ -76,7 +76,21 @@ test('the wording is British and plain', () => {
   assert.match(t, /Characterisation/)
   assert.match(t, /colour themes/)
   assert.match(t, /ask your Benchtop admin/)
-  assert.ok(t.length < 14000, `${t.length} characters: too long to read in five minutes`)
+  // 0.35: it no longer claims to take five minutes; its first part is the short one a newcomer reads
+  assert.ok(t.length < 16500, `${t.length} characters: too long`)
+  const first = text(render().split('<section id="first"')[1].split('</section>')[0])
+  assert.ok(first.length < 1800, `Your first record is ${first.length} characters: keep it short`)
+  assert.doesNotMatch(t, /five minutes/)
+})
+
+test('it starts with your first record, and has a part for admins setting up the lab (0.35)', () => {
+  assert.equal(g.GUIDE_SECTIONS[0].id, 'first')
+  const t = text(render())
+  for (const step of ['New experiment.', 'Draw the reaction.', 'Type one amount in each row', 'Check the safety section.',
+    'Write the procedure and what you saw', 'Sign it and choose a witness.']) assert.ok(t.includes(step), step)
+  for (const step of ['Setup.', 'Add people.', 'Groups.', 'Send the sign-in message.', 'Witnessing.']) assert.ok(t.includes(step), step)
+  assert.match(t, /Save these hazards with the record/)
+  assert.doesNotMatch(t, /Record hazards in notebook/)
 })
 
 test('it covers what a first-time user tripped over (0.29 review)', () => {
@@ -105,7 +119,8 @@ test('a newcomer can find it from the sidebar, the ⌘K box, the shortcuts list 
   assert.match(src('components/CommandPalette.tsx'), /label: 'Getting started guide'.*go\('\/guide'\)/)
   assert.match(src('components/Shortcuts.tsx'), /<Link to="\/guide"/)
   const dash = src('pages/Dashboard.tsx')
-  assert.match(dash, /New to Benchtop\?<\/b> Read <Link to="\/guide">Getting started<\/Link> \(5 minutes\)/)
+  assert.match(dash, /New to Benchtop\?<\/b> <Link to="\/guide">Getting started<\/Link> takes you through your first record/)
+  assert.doesNotMatch(dash, /5 minutes/)
   assert.match(dash, /!user\.preferences\?\.guide_dismissed/, 'the card follows the account preference')
   assert.match(dash, /preferences: \{ guide_dismissed: true \}/, 'Dismiss saves it to the account')
 })

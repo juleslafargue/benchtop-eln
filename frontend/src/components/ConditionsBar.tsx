@@ -27,7 +27,7 @@ export default function ConditionsBar({ value, onChange, readOnly }: {
         <span className="cond-in">
           <NumInput label="Temperature in °C" className="input" disabled={readOnly} value={value.temperature_c ?? null} nd={1} unit="C" onProblem={onProblem}
             onCommit={v => onChange({ temperature_c: v })} /><i>°C</i>
-          <input className="input" list="temp-labels" aria-label="Temperature description" placeholder="or rt, reflux…" disabled={readOnly}
+          <input className="input" list="temp-labels" aria-label="Temperature description" placeholder={readOnly ? undefined : 'or rt, reflux…'} disabled={readOnly}
             value={value.temperature_label ?? ''} onChange={e => onChange({ temperature_label: e.target.value })} />
           <datalist id="temp-labels">{TEMP_LABELS.map(t => <option key={t} value={t} />)}</datalist>
         </span>
@@ -50,7 +50,7 @@ export default function ConditionsBar({ value, onChange, readOnly }: {
       </label>
       <label className="cond grow">
         <span>Notes</span>
-        <input className="input" disabled={readOnly} placeholder="e.g. degassed, slow addition over 30 min" value={value.notes ?? ''}
+        <input className="input" disabled={readOnly} placeholder={readOnly ? undefined : 'e.g. degassed, slow addition over 30 min'} value={value.notes ?? ''}
           onChange={e => onChange({ notes: e.target.value })} />
       </label>
     </div>

@@ -6,6 +6,7 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 
 /** The parts of the guide, in order: the contents list and the page are both made from this. */
 export const GUIDE_SECTIONS = [
+  { id: 'first', title: 'Your first record' },
   { id: 'notebooks', title: 'Notebooks and experiments' },
   { id: 'reactions', title: 'Reactions and amounts' },
   { id: 'writing', title: 'Writing up' },
@@ -16,6 +17,7 @@ export const GUIDE_SECTIONS = [
   { id: 'finding', title: 'Finding things' },
   { id: 'sharing', title: 'Sharing and groups' },
   { id: 'account', title: 'Your account' },
+  { id: 'admins', title: 'Setting up your lab (admins)' },
   { id: 'problems', title: 'If something goes wrong' },
 ] as const
 type Id = typeof GUIDE_SECTIONS[number]['id']
@@ -41,11 +43,29 @@ export default function Guide() {
   }, [])
 
   const body: Record<Id, ReactNode> = {
+    first: <>
+      <ol>
+        <li><b>New experiment.</b> Click <b>New experiment</b> on the <Link to="/">dashboard</Link> and give it a
+          title. If you don't have a notebook yet, one is made for you with it, named after you and shared with your group.</li>
+        <li><b>Draw the reaction.</b> In the Reaction section, click <b>Draw reaction</b> (or paste a reaction SMILES). The
+          table fills in the structures, formulas and molecular weights.</li>
+        <li><b>Type one amount in each row</b> (a mass, a volume, mmol or equivalents) and Benchtop works out the rest.</li>
+        <li><b>Check the safety section.</b> It lists the hazards of what's in the table. Add your controls, waste and
+          emergency notes, then click <b>Save these hazards with the record</b>.</li>
+        <li><b>Write the procedure and what you saw</b>, as you go. Click into a text section and its formatting
+          toolbar appears; everything saves as you type.</li>
+        <li><b>Sign it and choose a witness.</b> Click <b>Sign as author</b> (at the bottom of the screen on a phone),
+          enter your password and pick a colleague to witness it. Until then it's listed on your dashboard
+          under <b>My records waiting for a witness</b>.</li>
+      </ol>
+      <p>That's all a record needs. The rest of this guide is for when you need it.</p>
+    </>,
     notebooks: <>
       <p>A notebook holds experiments, usually one per project. The notebooks you can open are listed in the sidebar (under Menu on a phone)
         {canWrite ? <>; <b>+ New</b> beside the heading makes another</> : null}.{nb && <> <Link to={`/notebooks/${nb.id}`}>Open {nb.name}</Link></>}</p>
-      <p>Start by making a notebook of your own, and choose who can open it: everyone, your group, or only you. Group
-        notebooks stay out of sight until you're in the group, so ask your Benchtop admin to add you to it.</p>
+      <p>You can start by making a notebook of your own, and choose who can open it: everyone, your group, or only you.
+        If you don't, your first new experiment makes one for you. Group notebooks stay out of sight until you're in the
+        group, so ask your Benchtop admin to add you to it.</p>
       <p>A notebook's owner can delete it with <b>Delete notebook</b> on its page while it has no experiments (a test
         notebook, say). One with experiments can't be deleted; <b>Archive notebook</b> takes it out of the sidebar's list
         and stops new experiments going into it, and everything in it stays readable and searchable. Archived notebooks
@@ -61,8 +81,9 @@ export default function Guide() {
           references, a screening grid and more. Remove the sections you don't need; removing one offers <b>Undo</b>.</li>
         <li>Sections save themselves a moment after you stop typing. Each save is a new version (v1, v2…),
           and <b>History</b> on a section shows the earlier ones.</li>
-        <li><b>Duplicate</b>, <b>Repeat at another scale…</b>, <b>Save as template</b> and <b>Download PDF</b> are
-          under <b>Record</b>, beside the experiment (below it on a phone).</li>
+        <li><b>Download PDF</b> is under <b>Record</b>, beside the experiment (below it on a phone). The other
+          formats (a printable report, Markdown, JSON, .eln) are under <b>More downloads…</b>, and <b>Duplicate</b>,
+          <b> Repeat at another scale…</b> and <b>Save as template</b> under <b>More…</b>.</li>
       </ul>
     </>,
     reactions: <>
@@ -151,8 +172,8 @@ export default function Guide() {
         about known dangerous combinations such as NaH in DMF, and suggests controls.</p>
       <ul>
         <li>Fill in controls and PPE, waste disposal, and emergency and spills.</li>
-        <li><b>Record hazards in notebook</b> saves what's known now into the record, so the signed record keeps it.
-          If the reaction or a classification changes afterwards, a banner says so.</li>
+        <li><b>Save these hazards with the record</b> keeps what's known now in the record, so the signed record
+          still shows it if the data changes later. If the reaction or a classification changes afterwards, a banner says so.</li>
         <li>The supplier's safety data sheet (SDS) takes precedence, and your lab's own safety rules still apply.</li>
       </ul>
     </>,
@@ -220,6 +241,23 @@ export default function Guide() {
           its links.</li>
       </ul>
     </>,
+    admins: <>
+      <ol>
+        <li><b>Setup.</b> The first person to open a new Benchtop creates its administrator account, and the built-in
+          admin login is switched off. Leave the box for example records unticked on your lab's real server.</li>
+        <li><b>Add people.</b> In <Link to="/admin/users">Admin → Users</Link>, <b>Add user</b>: their full name (it's
+          what their signatures show), a username (one is suggested) and a first password to give them privately.
+          Benchtop asks them to choose their own when they first sign in.</li>
+        <li><b>Groups.</b> Choose their group as you add them, or <b>New group…</b> to make one there. Whoever makes a
+          group can lead it; leads see all of their group's notebooks. <Link to="/groups">Groups</Link> lists them all.</li>
+        <li><b>Send the sign-in message.</b> After you add someone, Benchtop shows the address and username to send, and
+          copies a message for them. Send the password separately. If it says Benchtop is running just for this
+          computer, start it with <code>./benchtop lab</code> so others can reach it.</li>
+        <li><b>Witnessing.</b> Anyone who can open a record, other than its author, can witness it; authors usually ask
+          a labmate or their PI. <Link to="/admin/signing">Admin → Signing</Link> sets how long a request waits before
+          reminders, and trusted timestamps.</li>
+      </ol>
+    </>,
     problems: <>
       <ul>
         <li>If Benchtop can't save (it was stopped, the Wi-Fi went, your sign-in ran out), the section says <b>Not
@@ -232,8 +270,8 @@ export default function Guide() {
         <li>For anything else (a forgotten password, a notebook you should be able to open, an instrument), ask your
           Benchtop admin.</li>
       </ul>
-      <p className="faint">Admins have their own Admin tab for accounts, backups, instruments and email. Nothing in this
-        guide needs it.</p>
+      <p className="faint">Admins have their own Admin tab for accounts, backups, instruments and email; setting up is
+        described above, under <a href="#admins" onClick={e => jump('admins', e)}>Setting up your lab</a>.</p>
     </>,
   }
 
@@ -241,8 +279,8 @@ export default function Guide() {
     <div className="stack guide" style={{ gap: 22 }}>
       <div>
         <h1 className="page-title">Getting started</h1>
-        <p className="lede">How to use Benchtop day to day. It takes about five minutes to read, and each part links to
-          the page it describes.</p>
+        <p className="lede">How to use Benchtop day to day. Start with <a href="#first" onClick={e => jump('first', e)}>Your
+          first record</a>; the rest is for when you need it. Each part links to the page it describes.</p>
       </div>
       <nav className="panel guide-toc" aria-label="Contents">
         <h2>Contents</h2>

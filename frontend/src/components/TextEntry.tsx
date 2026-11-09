@@ -19,6 +19,7 @@ import TableHeader from '@tiptap/extension-table-header'
 import Placeholder from './placeholder'
 import { AttachmentImage, PastePictures, RecordLinks, RefPreview, uploadPictures } from './editorExtras'
 import { useApp } from '../App'
+import { touchOnly } from '../touch'
 import type { EntryEditorProps } from './EntryCard'
 
 // Colours that stay readable on paper and in dark mode; text keeps the theme's ink by default.
@@ -177,6 +178,22 @@ const ICONS = {
   alignR: 'M2 4h12M6 7h8M2 10h12M6 13h8',
 }
 
+// Is a mouse button or finger down anywhere on the page? (Tracked once for every text section.)
+let pressing = false
+if (typeof window !== 'undefined') {
+  window.addEventListener('pointerdown', () => { pressing = true }, true)
+  const up = () => { pressing = false }
+  window.addEventListener('pointerup', up, true)
+  window.addEventListener('pointercancel', up, true)
+}
+/** Run `fn` now, or, while a press is under way, just after it ends (after its click has landed). */
+function afterPress(fn: () => void) {
+  if (!pressing) { fn(); return }
+  const done = () => { window.removeEventListener('pointerup', done, true); window.removeEventListener('pointercancel', done, true); setTimeout(fn, 0) }
+  window.addEventListener('pointerup', done, true)
+  window.addEventListener('pointercancel', done, true)
+}
+
 // shortcut hints as this computer writes them: ⌘B on a Mac, Ctrl+B elsewhere (the editor takes either)
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 export const keys = (mac: string) => IS_MAC ? mac : mac.replace('⌘⇧', 'Ctrl+Shift+').replace('⌘', 'Ctrl+')
@@ -186,6 +203,12 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
   const wrap = useRef<HTMLDivElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const [lastHl, setLastHl] = useState<string>(() => { try { return localStorage.getItem('benchtop.highlight') || 'yellow' } catch { return 'yellow' } })
+  // 0.35: the formatting toolbar shows only while you're writing in this section (the text or the toolbar has focus).
+  // It appears or goes only once a mouse button or finger is released: the page moving under a click that's under way
+  // would otherwise turn it into a selection, or make it miss the button it was aimed at.
+  const shell = useRef<HTMLDivElement>(null)
+  const [writing, setWriting] = useState(false)
+  const settle = () => afterPress(() => setWriting(!!shell.current?.contains(document.activeElement)))
   const editor = useEditor({
     extensions: [
       StarterKit, Subscript, Superscript, Underline, Highlighter, TextStyle, Color, FontSize,
@@ -194,7 +217,7 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
       TaskList, TaskItem.configure({ nested: true }),
       Table.configure({ resizable: false }), TableRow, TableCell, TableHeader,
       AttachmentImage, RecordLinks, PastePictures(experimentId, () => onAttachmentsChanged(), m => toast(m)),
-      Placeholder(`Write here. ${keys('⌘,')} for subscript, ${keys('⌘.')} for superscript, “[ ] ” for a checklist.`),
+      Placeholder(touchOnly() ? 'Write here.' : `Write here. ${keys('⌘,')} for subscript, ${keys('⌘.')} for superscript, “[ ] ” for a checklist.`),
     ],
     content: content.html || '',
     editable: !readOnly,
@@ -237,8 +260,9 @@ export default function TextEntry({ content, onChange, readOnly, experimentId, o
     : (['center', 'right'] as const).find(a => editor.isActive({ textAlign: a })) || 'left'
 
   return (
-    <div>
-      {!readOnly && (
+    <div ref={shell} className="rt-shell" onFocus={readOnly ? undefined : settle}
+      onBlur={readOnly ? undefined : e => { if (!shell.current?.contains(e.relatedTarget as Node | null)) settle() }}>
+      {!readOnly && writing && (
         <div className="rt-toolbar" role="toolbar" aria-label="Formatting">
           <B label={<Icon d={ICONS.undo} />} title={keys('Undo (⌘Z)')} cmd={() => c().undo().run()} disabled={!editor.can().undo()} />
           <B label={<Icon d={ICONS.redo} />} title={keys('Redo (⌘⇧Z)')} cmd={() => c().redo().run()} disabled={!editor.can().redo()} />

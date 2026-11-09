@@ -5,8 +5,10 @@ export type Role = 'admin' | 'scientist' | 'viewer'
 export type Status = 'open' | 'signed' | 'witnessed' | 'voided' | 'locked'
 export type EntryKind = 'text' | 'reaction' | 'table' | 'file' | 'purification' | 'characterization' | 'safety' | 'screen' | 'references' | 'custom'
 
-export interface Preferences { theme?: 'system' | 'light' | 'dark'; palette?: string; email_notify?: { witness?: boolean; results?: boolean; system?: boolean }; default_notebook_id?: number | null; spectrum_expanded?: boolean; guide_dismissed?: boolean; pinned?: number[]; nav?: string[]; nav_hidden?: string[]; dashboard?: { widgets: unknown[] } }
-export interface User { id: number; username: string; full_name: string; email: string; role: Role; active: boolean; preferences: Preferences; has_password?: boolean; must_change_password?: boolean; sample_prefix?: string | null; orcid?: string | null }
+export interface Preferences { theme?: 'system' | 'light' | 'dark'; palette?: string; email_notify?: { witness?: boolean; results?: boolean; system?: boolean }; default_notebook_id?: number | null; spectrum_expanded?: boolean; guide_dismissed?: boolean; first_steps_dismissed?: boolean; pinned?: number[]; nav?: string[]; nav_hidden?: string[]; dashboard?: { widgets: unknown[] } }
+export interface User { id: number; username: string; full_name: string; email: string; role: Role; active: boolean; preferences: Preferences; has_password?: boolean; must_change_password?: boolean; sample_prefix?: string | null; orcid?: string | null
+  /** Admin → Users only: the built-in login that setup switched off (0.35) */
+  retired_builtin?: boolean }
 export interface UserBrief { id: number; username: string; full_name: string }
 export type Visibility = 'everyone' | 'group' | 'private'
 export interface Notebook {
@@ -286,6 +288,10 @@ export const day = (iso: string | number | Date) => new Date(iso).toLocaleDateSt
 export const unitLabel = (u: string | null | undefined) => (u === 'uL' ? 'µL' : u || '')
 
 export const displayName = (u?: UserBrief | null) => (u ? u.full_name || u.username : '—')
+/** The username suggested from a full name, at setup and in Admin → Add user: the first name in lower case, without accents
+ *  ("Hélène Carter" → helene). Only a suggestion: it's used when the username box is left empty. */
+export const suggestUsername = (fullName: string) =>
+  (fullName.trim().split(/\s+/)[0] || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9._-]/g, '')
 
 /** "just now", "5 min ago", "3 h ago", "yesterday", then a date */
 export const ago = (iso: string) => {
