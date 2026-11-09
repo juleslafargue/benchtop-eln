@@ -298,7 +298,9 @@ DEFAULT_CONTENT: dict[EntryKind, dict] = {
     EntryKind.reaction: {"reaction_smiles": "", "rows": [], "totals": {}, "conditions": {}},
     EntryKind.table: {"columns": [{"name": "Sample"}, {"name": "Value"}], "rows": [["", ""]]},
     EntryKind.file: {"attachment_ids": [], "caption": ""},
-    EntryKind.purification: {"method": "column", "stationary_phase": "", "eluent": "", "rf": "",
+    # 0.35: no method until the chemist picks one; 0.34 and earlier started at "column", so an untouched section was
+    # recorded (and written up) as flash column chromatography. Records made then keep what they have.
+    EntryKind.purification: {"method": "", "stationary_phase": "", "eluent": "", "rf": "",
                              "rf_eluent": "", "isolated_mg": None, "appearance": "", "notes_html": ""},
     EntryKind.characterization: {"items": [{"technique": "1H NMR", "conditions": "", "data": "", "attachment_id": None}]},
     EntryKind.safety: {"controls": "", "waste": "", "emergency": "", "notes_html": "", "snapshot": None},

@@ -3,8 +3,8 @@ import { api, type User } from '../api'
 import PasswordField from '../components/PasswordField'
 import Logo from '../components/Logo'
 
-function Setup({ onLogin }: { onLogin: (token: string, user: User) => void }) {
-  const [f, setF] = useState({ full_name: '', username: '', email: '', password: '', load_demo: true })
+export function Setup({ onLogin }: { onLogin: (token: string, user: User) => void }) {
+  const [f, setF] = useState({ full_name: '', username: '', email: '', password: '', load_demo: false })
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [valid, setValid] = useState(false)
@@ -27,7 +27,7 @@ function Setup({ onLogin }: { onLogin: (token: string, user: User) => void }) {
         <Logo size={40} />
         <div>
           <h1>Welcome to Benchtop</h1>
-          <p className="muted" style={{ margin: 0 }}>Create your account. You'll be the administrator of this notebook.</p>
+          <p className="muted" style={{ margin: 0 }}>Create your account. You'll be the administrator of this Benchtop.</p>
         </div>
         <label className="field">Your name, as it should appear on signatures
           <input className="input" autoFocus autoComplete="name" value={f.full_name} onChange={set('full_name')} placeholder="e.g. Jules Lafargue" /></label>
@@ -39,7 +39,8 @@ function Setup({ onLogin }: { onLogin: (token: string, user: User) => void }) {
           username={f.username || suggested} fullName={f.full_name} email={f.email} repeat />
         <label className="check-row">
           <input type="checkbox" checked={f.load_demo} onChange={set('load_demo')} />
-          Add a demo notebook to explore (two worked Suzuki couplings, sample reagents, an NMR spectrum)
+          <span>Add example records and two example accounts, for trying Benchtop out.{' '}
+            <span className="faint">Don't tick this on your lab's real server: the example accounts have a published password.</span></span>
         </label>
         {err && <p className="error" role="alert" style={{ margin: 0 }}>{err}</p>}
         <button className="btn primary" disabled={busy || !f.full_name.trim() || !valid || !(f.username || suggested)}

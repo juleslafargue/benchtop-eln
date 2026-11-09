@@ -18,7 +18,8 @@ export default function PurificationEntry(props: EntryEditorProps) {
       <div className="conditions">
         <label className="cond">
           <span>Method</span>
-          <select className="select" disabled={readOnly} value={content.method || 'column'} onChange={e => set({ method: e.target.value })}>
+          <select className="select" disabled={readOnly} value={content.method || ''} onChange={e => set({ method: e.target.value })}>
+            {!content.method && <option value="">{readOnly ? 'Not given' : 'Choose…'}</option>}
             {Object.entries(PURIFICATION_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </label>
