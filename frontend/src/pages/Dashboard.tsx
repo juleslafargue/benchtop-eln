@@ -25,6 +25,8 @@ interface DashData {
   stats: { this_month: number; last_month: number; witnessed_this_month: number; yields: YieldPoint[] }
   spectra: { id: number; filename: string; experiment_id: number; eid: string; title: string; created_at: string }[]
   stale_days?: number
+  // 0.35.1: true for someone who leads a group (a PI). Older servers don't send it
+  leads_group?: boolean
   system?: { backup_warnings: string[]; check_warnings?: string[]; disk_warnings?: string[]; update?: UpdateInfo | null }
   inventory: { low: InvRow[]; expiring: (InvRow & { expires_at: string; expired: boolean })[]; safety_changes?: { material_id: number | null; material: string; changed_at: string; change: { added: string[]; removed: string[] } | null }[]; low_fraction: number; expiry_days: number }
 }
@@ -70,6 +72,9 @@ export const DEFAULT_WIDGETS: Widget[] = [
   { i: 'spectra', type: 'spectra', x: 0, y: 16, w: 6, h: 5 },
 ]
 
+/** The lists that hold only your own records: with no records of your own yet, they're necessarily empty. */
+export const OWN_LISTS: readonly ListKind[] = ['open', 'waiting', 'recent', 'returned', 'stale']
+
 /** Charts and lab-wide lists with nothing in them yet: on a first day they wait until there's something to show. */
 export function emptyChart(w: Pick<Widget, 'type'>, d: Pick<DashData, 'stats' | 'spectra' | 'inventory'>): boolean {
   if (w.type === 'yield') return !d.stats.yields.length
@@ -78,6 +83,18 @@ export function emptyChart(w: Pick<Widget, 'type'>, d: Pick<DashData, 'stats' | 
   if (w.type === 'inventory') return !d.inventory.low.length && !d.inventory.expiring.length && !(d.inventory.safety_changes || []).length
   return false
 }
+
+/** On a first day (no records of your own yet), what waits: empty charts, and the lists of your own records (0.35.1:
+ *  a PI who writes none saw three empty lists above the group's yield trend). Lists that can hold other people's
+ *  records (asked to witness, pinned) stay. */
+export function hiddenOnFirstDay(w: Pick<Widget, 'type' | 'list'>, d: Pick<DashData, 'stats' | 'spectra' | 'inventory'>): boolean {
+  if (w.type === 'list') return OWN_LISTS.includes(w.list || 'recent')
+  return emptyChart(w, d)
+}
+
+/** Whether to show "Your first record": no records of your own yet, and not leading a group (0.35.1: a PI reviews and
+ *  witnesses, and may never write one). A new student in an established group still gets it. */
+export const wantsFirstRecord = (d: Pick<DashData, 'lists' | 'leads_group'>) => !d.lists.recent.length && !d.leads_group
 
 /** 0.35: someone with no records yet gets the four steps to their first one; an admin who is still alone here, where
  *  to add their group. Put away with Hide, for good (saved to the account). */
@@ -267,9 +284,9 @@ export default function Dashboard() {
   const title = (w: Widget) => w.title || (w.type === 'list' ? LIST_TITLES[w.list || 'recent'] : ({ actions: 'Quick actions', note: 'Note', header: '', yield: 'Yield trend', month: 'This month', spectra: 'Recent spectra', inventory: 'Inventory alerts' } as const)[w.type as Exclude<WType, 'list'>])
   const count = (w: Widget) => (w.type === 'list' && data ? totalOf(data, w.list || 'recent') : null)
 
-  // on a first day (no records of your own yet), empty charts wait until there's data; while customising, all show
+  // on a first day (no records of your own yet), empty charts and your own (empty) lists wait; while customising, all show
   const firstDay = !!data && !data.lists.recent.length
-  const shownWidgets = firstDay && !editing ? widgets.filter(w => !emptyChart(w, data!)) : widgets
+  const shownWidgets = firstDay && !editing ? widgets.filter(w => !hiddenOnFirstDay(w, data!)) : widgets
   const card = (w: Widget) => (
     <div key={w.i} className={`widget wt-${w.type}${editing ? ' editing' : ''}`}>
       {w.type !== 'header' && <div className="w-head">
@@ -313,7 +330,7 @@ export default function Dashboard() {
       </div>}
       {user.has_password === false && <p className="notice" style={{ margin: 0 }}>
         {!showWelcome && sessionStorage.getItem('benchtop.welcome') ? 'Welcome to Benchtop! ' : ''}You sign in with single sign-on. To sign records you'll also need a signing password: <Link to="/account">set one in Account settings</Link>.</p>}
-      {data && !stepsHidden && !editing && <FirstSteps firstRecord={!data.lists.recent.length} alone={alone} canWrite={canWrite}
+      {data && !stepsHidden && !editing && <FirstSteps firstRecord={wantsFirstRecord(data)} alone={alone} canWrite={canWrite}
         onNew={() => setNewExp(true)} onHide={hideSteps} />}
       {editing && <p className="notice" style={{ margin: 0 }}>Drag a widget by its title to move it, drag the bottom-right corner to resize it, and use Remove or Add widget to change what's shown. Click Done to save.</p>}
       {narrow ? (

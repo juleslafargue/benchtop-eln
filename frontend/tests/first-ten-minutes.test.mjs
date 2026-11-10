@@ -23,7 +23,7 @@ before(async () => {
   } }
   await build({
     stdin: { contents: `export { Setup } from './pages/Login'
-      export { DEFAULT_WIDGETS, emptyChart, FirstSteps } from './pages/Dashboard'
+      export { DEFAULT_WIDGETS, emptyChart, hiddenOnFirstDay, wantsFirstRecord, FirstSteps } from './pages/Dashboard'
       export { default as PurificationEntry } from './components/PurificationEntry'
       export { sigLine, sig4 } from './display'
       export { renderToStaticMarkup } from 'react-dom/server'
@@ -92,6 +92,45 @@ test('dashboard: the first-record card, and "Add your group" for an admin on the
   assert.match(f({ firstRecord: false, alone: true }), /<h2 id="first-steps-h">Add your group<\/h2>/)
   assert.equal(f({ firstRecord: false, alone: false }), '')
   assert.equal(f({ firstRecord: true, alone: false, canWrite: false }), '', 'a read-only account is told to make a record')
+})
+
+// 0.35.1: a PI who writes no records (the demo lab's Ruiz group lead) saw "Your first record" and three empty lists of
+// their own records above the group's yield trend
+test('dashboard: on a first day, the lists of your own records wait too; the ones with other people\'s stay', () => {
+  const none = { stats: { yields: [], this_month: 0, last_month: 0 }, spectra: [], inventory: { low: [], expiring: [], safety_changes: [] } }
+  const some = { stats: { yields: [{ yield_pct: 80 }], this_month: 1, last_month: 0 }, spectra: [{ id: 1 }], inventory: { low: [{ lot_id: 1 }], expiring: [] } }
+  for (const d of [none, some]) {
+    for (const list of ['open', 'waiting', 'recent', 'returned', 'stale']) assert.ok(g.hiddenOnFirstDay({ type: 'list', list }, d), list)
+    for (const list of ['awaiting', 'pinned']) assert.ok(!g.hiddenOnFirstDay({ type: 'list', list }, d), list)
+    assert.ok(!g.hiddenOnFirstDay({ type: 'actions' }, d))
+  }
+  // charts as before: hidden while empty, shown with something in them
+  for (const type of ['yield', 'month', 'spectra', 'inventory']) {
+    assert.ok(g.hiddenOnFirstDay({ type }, none), type)
+    assert.ok(!g.hiddenOnFirstDay({ type }, some), type)
+  }
+  // the default dashboard on a lead's first day with the group's yields: actions, asked to witness, then the charts
+  const shown = g.DEFAULT_WIDGETS.filter(w => !g.hiddenOnFirstDay(w, some)).map(w => w.i)
+  assert.deepEqual(shown, ['actions', 'awaiting', 'yield', 'month', 'inventory', 'spectra'])
+})
+
+test('dashboard: "Your first record" is not shown to someone who leads a group', () => {
+  const f = (d, props = {}) => html(g.FirstSteps, { canWrite: true, onNew: () => {}, onHide: () => {}, alone: false, firstRecord: g.wantsFirstRecord(d), ...props })
+  const empty = { recent: [] }
+  assert.equal(f({ lists: empty, leads_group: true }), '', 'a group lead with no records is told to write a first one')
+  const student = f({ lists: empty, leads_group: false })
+  assert.match(student, /Your first record/, 'a new member with no records no longer gets the card')
+  assert.match(f({ lists: empty }), /Your first record/, 'an older server (no leads_group) loses the card')
+  assert.equal(f({ lists: { recent: [{ id: 1 }] }, leads_group: false }), '')
+  // the admin on their own still gets "Add your group", lead or not, exactly as before
+  const adminLead = f({ lists: empty, leads_group: true }, { alone: true })
+  assert.match(adminLead, /<h2 id="first-steps-h">Add your group<\/h2>/)
+  assert.match(adminLead, /href="\/admin\/users"/)
+  assert.doesNotMatch(adminLead, /Your first record/)
+  assert.equal(adminLead, f({ lists: { recent: [{ id: 1 }] } }, { alone: true }))
+  const adminNew = f({ lists: empty, leads_group: false }, { alone: true })
+  assert.match(adminNew, /Your first record/)
+  assert.match(adminNew, /<h3>Add your group<\/h3>/)
 })
 
 test('a signature in one plain line: "time certified" only when it was', () => {

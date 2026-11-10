@@ -9,7 +9,7 @@ from fastapi import APIRouter
 from sqlmodel import select
 
 from .. import safety
-from ..models import Attachment, ChemSafety, Experiment, ExperimentStatus, Lot, LotTransaction, Material, Role, Signature, utcnow
+from ..models import Attachment, ChemSafety, Experiment, ExperimentStatus, GroupMember, Lot, LotTransaction, Material, Role, Signature, utcnow
 from ..security import DB, CurrentUser
 from ..services import user_brief, experiment_summary
 from .reactions import _collect
@@ -133,6 +133,9 @@ def dashboard(user: CurrentUser, session: DB):
         "totals": {"open": len(open_list), "awaiting": len(asked_me), "could_witness": len(nobody_asked),
                    "waiting": len(waiting_list), "returned": len(returned), "stale": len(stale)},
         "stale_days": STALE_DAYS,
+        # 0.35.1: someone who leads a group (a PI) reviews and witnesses; the "Your first record" card isn't for them
+        "leads_group": session.exec(select(GroupMember.id).where(GroupMember.user_id == user.id,
+                                                                 GroupMember.role == "lead")).first() is not None,
         "stats": {"this_month": this_month, "last_month": last_month, "witnessed_this_month": witnessed_month,
                   "yields": yields[:200]},
         "spectra": spectra,

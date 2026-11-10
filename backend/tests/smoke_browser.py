@@ -897,6 +897,30 @@ def first_ten_minutes(browser, admin_token: str, token: str) -> list[tuple[str, 
         bad("error", str(e).splitlines()[0][:160])
     ctx.close()
 
+    # 0.35.1: a PI who writes no records of their own (Maria Ruiz leads the Ruiz group) starts with the group's work,
+    # not "Your first record" and three empty lists of her own records
+    r = httpx.post(B + "/api/auth/login", json={"username": "mruiz", "password": PW})
+    if r.status_code != 200:
+        bad("PI dashboard", f"couldn't sign in as mruiz: {r.text[:120]}")
+    else:
+        for phone in (False, True):
+            ctx, pg = context(r.json()["token"], phone=phone)
+            try:
+                where["path"] = "/ (mruiz" + (", phone)" if phone else ")")
+                pg.goto(B + "/")
+                pg.wait_for_selector(".widget >> text=Yield trend", timeout=15000)
+                pg.wait_for_timeout(500)
+                if pg.locator(".first-steps >> text=Your first record").count():
+                    bad("PI dashboard", "a group lead with no records is offered Your first record")
+                for own in ("My open experiments", "My records waiting for a witness", "Recently edited"):
+                    if pg.locator(f".widget .w-head >> text={own}").count():
+                        bad("PI dashboard", f"{own} is shown, empty, to someone with no records of their own")
+                if not pg.locator(".widget .w-head >> text=Asked to witness").count():
+                    bad("PI dashboard", "Asked to witness isn't shown to a group lead")
+            except Exception as e:  # noqa: BLE001
+                bad("error", str(e).splitlines()[0][:160])
+            ctx.close()
+
     if exp_id is None:
         return found
     # the phone: Sign as author within reach of a draft's first screen; the page isn't covered by the bar
