@@ -903,6 +903,9 @@ def first_ten_minutes(browser, admin_token: str, token: str) -> list[tuple[str, 
     if r.status_code != 200:
         bad("PI dashboard", f"couldn't sign in as mruiz: {r.text[:120]}")
     else:
+        # in a lab upgraded from an old version Maria wrote a record herself, so her own lists rightly show there
+        dash = httpx.get(B + "/api/dashboard", headers={"Authorization": f"Bearer {r.json()['token']}"}).json()
+        writes_none = not dash["lists"]["recent"]
         for phone in (False, True):
             ctx, pg = context(r.json()["token"], phone=phone)
             try:
@@ -912,7 +915,7 @@ def first_ten_minutes(browser, admin_token: str, token: str) -> list[tuple[str, 
                 pg.wait_for_timeout(500)
                 if pg.locator(".first-steps >> text=Your first record").count():
                     bad("PI dashboard", "a group lead with no records is offered Your first record")
-                for own in ("My open experiments", "My records waiting for a witness", "Recently edited"):
+                for own in ("My open experiments", "My records waiting for a witness", "Recently edited") if writes_none else ():
                     if pg.locator(f".widget .w-head >> text={own}").count():
                         bad("PI dashboard", f"{own} is shown, empty, to someone with no records of their own")
                 if not pg.locator(".widget .w-head >> text=Asked to witness").count():
