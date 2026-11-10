@@ -46,7 +46,7 @@ export default function Guide() {
     first: <>
       <ol>
         <li><b>New experiment.</b> Click <b>New experiment</b> on the <Link to="/">dashboard</Link> and give it a
-          title. If you don't have a notebook yet, one is made for you with it, named after you and shared with your group.</li>
+          title. If you don't have a notebook yet, one is made for you with it, named after you and shared with your group if you're in one.</li>
         <li><b>Draw the reaction.</b> In the Reaction section, click <b>Draw reaction</b> (or paste a reaction SMILES). The
           table fills in the structures, formulas and molecular weights.</li>
         <li><b>Type one amount in each row</b> (a mass, a volume, mmol or equivalents) and Benchtop works out the rest.</li>

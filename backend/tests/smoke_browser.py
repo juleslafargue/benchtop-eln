@@ -214,6 +214,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += demo_never_publishes(browser, tok["slaurent"])
         problems += getting_started(browser, tok["hweiss"])
         problems += first_time_review(browser, tok["slaurent"])
+        problems += first_ten_minutes(browser, tok["hweiss"], tok["slaurent"])
         problems += notebook_delete_archive(browser, tok["slaurent"])
         problems += slow_network(browser, tok["slaurent"])
         problems += numbers_and_network(browser, tok["hweiss"])
@@ -799,6 +800,233 @@ def first_time_review(browser, token: str) -> list[tuple[str, str, str, str]]:
     return found
 
 
+def first_ten_minutes(browser, admin_token: str, token: str) -> list[tuple[str, str, str, str]]:
+    """0.35, "a simpler first ten minutes", from a walk-through on a fresh install: what a newcomer sees first.
+    Each check here failed on 0.34."""
+    print("First ten minutes: the first-day dashboard, toolbars on focus, the phone's Sign bar, read-only records…", flush=True)
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": ""}
+
+    def bad(kind: str, what: str) -> None:
+        if not any(i in what for i in IGNORE):
+            found.append(("first ten minutes", where["path"], kind, what[:200]))
+    A = {"Authorization": "Bearer " + admin_token}
+    password = "quartz-flask-ember-93"
+    r = httpx.post(B + "/api/users", headers=A, json={"username": "ffirst", "password": password, "full_name": "Fran First",
+                                                      "role": "scientist", "must_change": False})
+    if r.status_code != 201:
+        return [("first ten minutes", "", "account", f"couldn't make a new account: {r.text[:120]}")]
+    tok = httpx.post(B + "/api/auth/login", json={"username": "ffirst", "password": password}).json()["token"]
+    H = {"Authorization": "Bearer " + tok}
+
+    def context(t: str, phone: bool = False, scheme: str = "light"):
+        ctx = browser.new_context(viewport={"width": 390, "height": 844} if phone else {"width": 1400, "height": 900},
+                                  is_mobile=phone, has_touch=phone, color_scheme=scheme)
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{t}')")
+        pg = ctx.new_page()
+        pg.on("console", lambda m: m.type == "error" and bad("console error", m.text))
+        pg.on("pageerror", lambda e: bad("page error", str(e)))
+        pg.on("response", lambda r: "/api/" in r.url and (r.status >= 500 or r.status in (401, 403, 404, 422))
+              and bad(f"HTTP {r.status}", r.url.replace(B, "")))
+        return ctx, pg
+
+    # a first day: "Your first record" instead of charts with nothing in them
+    exp_id, exp = None, {}
+    ctx, pg = context(tok)
+    try:
+        where["path"] = "/"
+        pg.goto(B + "/")
+        pg.wait_for_selector(".first-steps >> text=Your first record", timeout=15000)
+        pg.wait_for_timeout(500)
+        # (yields, spectra and inventory are the lab's: in the demo lab they have data, and then they're shown)
+        for empty in ("Yields appear here once", "Drop spectra onto an experiment", "Nothing running low or expiring"):
+            if pg.locator(f".widget >> text={empty}").count():
+                bad("first day", f"an empty chart is shown on a first day ({empty}…)")
+        if "5 minutes" in pg.inner_text("body"):
+            bad("first day", "the welcome note still says Getting started takes 5 minutes")
+        # New experiment with no notebook: one step, the notebook made with it
+        pg.click(".first-steps button:has-text('New experiment')")
+        pg.wait_for_selector("dialog.modal option[value=new]", state="attached", timeout=10000)
+        if pg.inner_text("dialog.modal option[value=new]") != "Fran First’s notebook (new)".replace("’", "'"):
+            bad("new experiment", f"offered {pg.inner_text('dialog.modal option[value=new]')!r} for a newcomer's own notebook")
+        if pg.eval_on_selector("dialog.modal select", "s => s.value") != "new":
+            bad("new experiment", "a newcomer's own new notebook isn't the one picked")
+        if "voided" in pg.inner_text("dialog.modal"):
+            bad("new experiment", "a newcomer is told about voiding before they have a record")
+        pg.fill("dialog.modal input[maxlength='300']", "My first record")
+        pg.click("dialog.modal button:has-text('Create experiment')")
+        pg.wait_for_url("**/experiments/*", timeout=15000)
+        exp_id = int(pg.url.rstrip("/").split("/")[-1])
+        exp = httpx.get(f"{B}/api/experiments/{exp_id}", headers=H).json()
+        if exp["notebook_name"] != "Fran First's notebook":
+            bad("new experiment", f"it went into {exp['notebook_name']!r}, not a notebook of their own")
+        if next(e for e in exp["entries"] if e["kind"] == "purification")["content"]["method"] != "":
+            bad("purification", "a new Work-up & purification section already has a method")
+        # the formatting toolbar: only while writing in a section; a click elsewhere still lands where it was aimed
+        where["path"] = f"/experiments/{exp_id}"
+        pg.wait_for_selector(".ProseMirror")
+        pg.wait_for_timeout(500)
+        if pg.locator(".rt-toolbar").count():
+            bad("toolbar", f"{pg.locator('.rt-toolbar').count()} formatting toolbars before anything was clicked")
+        pg.locator(".ProseMirror").first.click()
+        pg.wait_for_timeout(300)
+        if pg.locator(".rt-toolbar").count() != 1:
+            bad("toolbar", f"clicking into Aim shows {pg.locator('.rt-toolbar').count()} toolbars, not 1")
+        pg.keyboard.type("Make an ester.")
+        pg.click("button:has-text('Paste reaction SMILES')")
+        try:
+            pg.wait_for_selector("dialog.modal textarea", timeout=5000)
+        except Exception:  # noqa: BLE001
+            bad("toolbar", "with the toolbar showing, clicking a button lower down missed it (the page moved under the click)")
+        pg.keyboard.press("Escape")
+        pg.wait_for_timeout(300)
+        if pg.locator(".rt-toolbar").count():
+            bad("toolbar", "the toolbar stayed after leaving the section")
+        if pg.locator("text=Set your initials in Account").count():
+            bad("header", "the sample-code line shows on a record with no samples, for someone with no initials")
+        if pg.locator("input[aria-label='Add tag']").count():
+            bad("header", "the tag box is open before + Tag is clicked")
+        for name in ("Open printable report", "Download Markdown", "Download JSON", "Download .eln"):
+            if pg.locator(f"button:has-text('{name}')").is_visible():
+                bad("downloads", f"{name} is shown without opening More downloads…")
+        pg.click(".rail-more.downloads summary")
+        if not pg.locator(".rail button:has-text('Download Markdown')").is_visible():
+            bad("downloads", "More downloads… doesn't show the other formats")
+        pg.wait_for_selector("section.entry >> nth=0 >> .save-state:text-is('v2')", timeout=10000)  # the Aim is saved
+    except Exception as e:  # noqa: BLE001
+        bad("error", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    if exp_id is None:
+        return found
+    # the phone: Sign as author within reach of a draft's first screen; the page isn't covered by the bar
+    for scheme in ("light", "dark"):
+        ctx, pg = context(tok, phone=True, scheme=scheme)
+        try:
+            where["path"] = f"/experiments/{exp_id} (phone, {scheme})"
+            pg.goto(f"{B}/experiments/{exp_id}")
+            pg.wait_for_selector(".ProseMirror")
+            pg.wait_for_timeout(500)
+            sign = pg.locator(".phone-actions button:has-text('Sign as author')")
+            box = sign.bounding_box() if sign.count() else None
+            if not box or box["y"] + box["height"] > 844 or box["y"] < 0:
+                bad("phone bar", "Sign as author isn't on a draft's first screen on a phone")
+            if not pg.locator(".phone-actions button:has-text('Log a note')").is_visible():
+                bad("phone bar", "no Log a note in the bar")
+            bg = pg.evaluate("getComputedStyle(document.querySelector('.phone-actions')).backgroundColor")
+            if bg in ("rgba(0, 0, 0, 0)", "transparent"):
+                bad("phone bar", "the bar has no background: the page shows through it")
+            if pg.locator("kbd").evaluate_all("ks => ks.filter(k => k.offsetParent).length"):
+                bad("keyboard hints", "keyboard shortcuts (N, L, T, P, ⌘K) are shown on a touch screen")
+            ph = pg.evaluate("document.querySelector('.is-editor-empty')?.dataset.placeholder || ''")
+            if "⌘" in ph or "Ctrl" in ph:
+                bad("keyboard hints", f"a text section's placeholder talks about keys: {ph!r}")
+            pg.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+            pg.wait_for_timeout(300)
+            covered = pg.evaluate("""() => {
+                const bar = document.querySelector('.phone-actions').getBoundingClientRect()
+                const last = [...document.querySelectorAll('.rail .btn')].filter(b => b.offsetParent).pop()
+                return last && last.getBoundingClientRect().bottom > bar.top + 1 ? last.textContent : '' }""")
+            if covered:
+                bad("phone bar", f"at the bottom of the page, the bar covers {covered!r}")
+            over = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+            if over > 2:
+                bad("too wide", f"page is {over}px wider than the screen")
+        except Exception as e:  # noqa: BLE001
+            bad("error", str(e).splitlines()[0][:160])
+        ctx.close()
+
+    # sign it (as the API does: the record is the same) and it stays on the dashboard, waiting for a witness
+    r = httpx.post(f"{B}/api/experiments/{exp_id}/sign", headers=H, json={"password": password, "comment": ""})
+    if r.status_code != 200:
+        bad("sign", f"couldn't sign: {r.text[:120]}")
+    ctx, pg = context(tok)
+    try:
+        where["path"] = "/"
+        pg.goto(B + "/")
+        pg.wait_for_selector(".widget >> text=My records waiting for a witness", timeout=15000)
+        pg.wait_for_timeout(500)
+        box = pg.locator(".widget", has_text="My records waiting for a witness")
+        if exp["eid"] not in box.inner_text():
+            bad("dashboard", "a record just signed isn't under My records waiting for a witness")
+        if not pg.locator(".widget", has_text="Recently edited").count():
+            bad("dashboard", "Recently edited isn't on the default dashboard")
+        if pg.locator(".first-steps >> text=Your first record").count():
+            bad("dashboard", "Your first record is still offered after the first record")
+        # the signature in one plain line; its fingerprint under Details
+        where["path"] = f"/experiments/{exp_id}"
+        pg.goto(f"{B}/experiments/{exp_id}")
+        pg.wait_for_selector(".sig-line")
+        line = pg.inner_text(".sig-line")
+        if not line.startswith("Signed by Fran First, "):
+            bad("signature", f"the signature reads {line!r}")
+        if pg.locator(".sig .hash").first.is_visible():
+            bad("signature", "the fingerprint is shown without opening Details")
+        pg.click(".sig-details summary")
+        if signed_hash := httpx.get(f"{B}/api/experiments/{exp_id}", headers=H).json()["signatures"][-1]["content_hash"]:
+            if signed_hash not in pg.inner_text(".sig-details"):
+                bad("signature", "Details doesn't show the fingerprint that was signed")
+        pg.click("button:has-text('Verify integrity')")
+        pg.wait_for_selector("text=Content matches the latest signature.", timeout=10000)
+    except Exception as e:  # noqa: BLE001
+        bad("error", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # the witness reads it: no example text in read-only boxes, empty sections in one line, and the reminder the author saw
+    ctx, pg = context(admin_token)
+    try:
+        where["path"] = f"/experiments/{exp_id} (witness)"
+        pg.goto(f"{B}/experiments/{exp_id}")
+        pg.wait_for_selector(".entry")
+        pg.wait_for_timeout(800)
+        ph = pg.evaluate("""() => [...document.querySelectorAll('main input[placeholder], main textarea[placeholder]')]
+            .filter(e => e.disabled && !e.closest('.rxn-grid') && e.placeholder).map(e => e.placeholder)""")
+        if ph:
+            bad("read-only", f"a signed record shows example text as if it were data: {ph[:4]}")
+        blank = pg.locator(".entry-blank").all_inner_texts()
+        if not any("Procedure" in b and "nothing written" in b for b in blank):
+            bad("read-only", f"an empty Procedure isn't one line in a signed record ({blank[:3]})")
+        if "Make an ester." not in pg.inner_text("main"):
+            bad("read-only", "the Aim that was written isn't shown")
+        note = pg.inner_text(".sign-reminder") if pg.locator(".sign-reminder").count() else ""
+        if "Still empty when it was signed" not in note or "Procedure" not in note:
+            bad("witness", f"the witness isn't shown what was still empty: {note!r}")
+        pg.click(".rail button:has-text('Witness')")
+        pg.wait_for_selector("dialog.modal .sign-reminder", timeout=10000)
+        pg.keyboard.press("Escape")
+    except Exception as e:  # noqa: BLE001
+        bad("error", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # a phone: the reaction table keeps its names in view when scrolled sideways (a demo record with a full table)
+    exps = {e["eid"]: e for e in httpx.get(B + "/api/experiments?limit=1000", headers={"Authorization": "Bearer " + token}).json()}
+    for scheme in ("light", "dark"):
+        ctx, pg = context(token, phone=True, scheme=scheme)
+        try:
+            e = exps.get("EXP-00033") or next(iter(exps.values()))
+            where["path"] = f"/experiments/{e['id']} (phone, {scheme})"
+            pg.goto(f"{B}/experiments/{e['id']}")
+            pg.wait_for_selector("table.rxn-grid td.name-cell", timeout=15000)
+            wrap = pg.locator(".grid-wrap").first
+            wrap.scroll_into_view_if_needed()
+            wrap.evaluate("w => w.scrollLeft = w.scrollWidth")
+            pg.wait_for_timeout(300)
+            res = wrap.evaluate("""w => {
+                const box = w.getBoundingClientRect(), cell = w.querySelector('td.name-cell')
+                const r = cell.getBoundingClientRect(), bg = getComputedStyle(cell).backgroundColor
+                return { scrolled: w.scrollLeft, left: r.left - box.left, bg } }""")
+            if res["scrolled"] < 20:
+                bad("reaction table", "the table didn't need scrolling sideways on a phone (nothing to check)")
+            elif not -1 <= res["left"] <= 2:
+                bad("reaction table", f"scrolled sideways, the names went out of view ({res['left']:.0f}px)")
+            if res["bg"] in ("rgba(0, 0, 0, 0)", "transparent"):
+                bad("reaction table", "the name column has no background: numbers show through it")
+        except Exception as e:  # noqa: BLE001
+            bad("error", str(e).splitlines()[0][:160])
+        ctx.close()
+    return found
+
+
 def notebook_delete_archive(browser, token: str) -> list[tuple[str, str, str, str]]:
     """0.30: an empty notebook is deleted from its page (after a confirm) and is gone; one with an experiment can't be
     deleted, only archived: it leaves the sidebar's list, is found under Archived, says so on its page, takes no new
@@ -882,10 +1110,11 @@ def demo_never_publishes(browser, token: str) -> list[tuple[str, str, str, str]]
     """0.28: in the demo lab the preview opens (to see what would go), but nothing can be sent to Zenodo."""
     H = {"Authorization": "Bearer " + token}
     me = httpx.get(B + "/api/auth/me", headers=H).json()
+    # a witnessed record: Publish on Zenodo is in the sidebar (0.35: for one only signed, it's under More)
     mine = [e for e in httpx.get(B + "/api/experiments?limit=1000", headers=H).json()
-            if e["owner"]["id"] == me["id"] and e["status"] in ("signed", "witnessed")]
+            if e["owner"]["id"] == me["id"] and e["status"] == "witnessed"]
     if not mine:
-        return [("demo publishing", "", "zenodo", "no signed record to try")]
+        return [("demo publishing", "", "zenodo", "no witnessed record to try")]
     ctx = browser.new_context(viewport={"width": 1300, "height": 900})
     ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
     pg = ctx.new_page()

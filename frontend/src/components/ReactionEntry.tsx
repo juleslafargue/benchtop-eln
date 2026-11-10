@@ -224,7 +224,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
   )
   const UNIT_OF: Partial<Record<keyof StoichRow, 'mg' | 'mL' | 'mmol' | 'M'>> = { mass_mg: 'mg', actual_mass_mg: 'mg', volume_ml: 'mL', mmol: 'mmol', conc_m: 'M' }
   const n = (r: StoichRow, i: number, k: keyof StoichRow, basis?: StoichRow['basis'], nd = 4) => (
-    <td><NumInput label={`${COL_LABEL[k] || String(k)}, ${rowLabel(r, rows)}`} nd={nd} sig={4} disabled={readOnly} value={r[k] as number | null} unit={UNIT_OF[k]} fit
+    <td><NumInput label={`${COL_LABEL[k] || String(k)}, ${rowLabel(r, rows)}`} nd={nd} sig={basis && r.basis === basis ? 5 : 4} disabled={readOnly} value={r[k] as number | null} unit={UNIT_OF[k]} fit
       className={basis && r.basis === basis ? 'basis' : ''} onCommit={v => setField(i, { [k]: v } as Partial<StoichRow>, basis)} onProblem={boxProblem} /></td>
   )
 

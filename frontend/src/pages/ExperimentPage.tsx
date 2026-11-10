@@ -530,7 +530,7 @@ export default function ExperimentPage() {
               {importNotes.map(n => <div key={n}>{n}</div>)}
               <button className="btn ghost sm" onClick={() => setImportNotes([])}>Dismiss</button></div>}
             {exp.status === 'signed' && <p className="notice">This record is signed and locked. {isOwner ? 'Withdraw your signature to make changes.' : 'Review it, then witness it or return it to the author.'}</p>}
-            {exp.status === 'signed' && !isOwner && (() => {  // 0.35: the reminder the author saw before signing (display only)
+            {exp.status === 'signed' && !isOwner && (() => {  // 0.35: what was still empty when it was signed (it's locked since; display only)
               const empty = reminderText(exp.entries)
               return empty ? <p className="sign-reminder" role="note"><b>Still empty when it was signed:</b> {empty}.</p> : null
             })()}

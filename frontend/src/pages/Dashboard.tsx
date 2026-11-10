@@ -94,7 +94,7 @@ export function FirstSteps({ firstRecord, alone, canWrite, onNew, onHide }: {
       {firstRecord && canWrite && <>
         <ol className="first-steps-list">
           <li><b>A notebook to keep it in.</b> If you don't have one yet, New experiment makes one for you, named after you and
-            shared with your group.</li>
+            shared with your group if you're in one.</li>
           <li><b>New experiment.</b> Give it a title. It gets a number, such as EXP-00001, that stays with it.</li>
           <li><b>Write the reaction and the procedure.</b> Draw or paste the reaction and the table works out the amounts.
             Everything saves as you type.</li>
