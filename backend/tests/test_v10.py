@@ -229,7 +229,7 @@ def test_custom_sections_store_their_definition_and_gate_signing(client, admin, 
 def test_bundled_examples_are_valid():
     from app import plugins
     ps = [p for p in plugins.discover() if p.bundled]
-    assert {p.id for p in ps} >= {"glovebox-log", "hydrogenation-checklist", "instrument-readers"}
+    assert {p.id for p in ps} >= {"glovebox-log", "hydrogenation-checklist", "instrument-readers", "cell-biology", "pharmacology"}
     assert all(not p.errors for p in ps), [p.errors for p in ps]
 
 

@@ -35,6 +35,11 @@ with open("run42_HPLC.csv", "rb") as f:
 experiment has `id`, `eid`, `title`, `description`, `status`, `notebook_id`, `notebook_name`, `is_template`,
 `template_id`, `tags`, `owner` (`id`, `username`, `full_name`), `created_at`, `updated_at` and `sample_codes`.
 
+`POST /api/experiments` `{"title": "…", "notebook_id": 3}` makes an experiment with the usual sections (read & write
+token). `"template_id": 12` starts it from a template instead, and `"sections": "no_chemistry"` with only Aim, Procedure
+and Observations & results. `GET /api/experiments/{id}/mentioned-in` lists the records you can open whose text names
+that experiment's number (EXP-00020), newest first: `total`, and `items` (20 unless `limit` says otherwise, at most 100).
+
 Usually you don't need a script for instrument files: an admin can point Benchtop at the instrument's folder
 (**Admin → Instruments**) and files named with an experiment number arrive by themselves. The Inbox has an API
 too, for programs that sort files:

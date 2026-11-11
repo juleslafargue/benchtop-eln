@@ -1,25 +1,30 @@
+import { useApp } from '../App'
 import type { EntryEditorProps } from './EntryCard'
+import { type Col, parseTsv, paste, pasteCells } from '../tablePaste'
 
-interface Col { name: string; unit?: string }
+/** A column is as wide as its name and what's in it, up to a point; the table scrolls sideways when they don't fit
+ *  (0.36: long names pasted from a spreadsheet were cut off). */
+const columnWidth = (name: string, rows: string[][], ci: number) =>
+  `${Math.min(36, Math.max(8, name.length + 2, ...rows.map(r => String(r[ci] ?? '').length + 2)))}ch`
 
 export default function TableEntry({ content, onChange, readOnly }: EntryEditorProps) {
+  const { toast } = useApp()
   const cols: Col[] = content.columns || []
   const rows: string[][] = content.rows || []
   const set = (c: Col[], r: string[][]) => onChange({ ...content, columns: c, rows: r })
 
+  /** Cells copied from a spreadsheet. Into a table that's still blank, a first line of headings names the columns
+   *  (0.36: they went into row 1, under "Sample / Value / Column 3"), with a way to keep it as data instead. */
   const pasteTsv = (e: React.ClipboardEvent, ri: number, ci: number) => {
     const text = e.clipboardData.getData('text')
     if (!text.includes('\t') && !text.includes('\n')) return
     e.preventDefault()
-    const grid = text.replace(/\r/g, '').split('\n').filter(Boolean).map(l => l.split('\t'))
-    const width = Math.max(cols.length, ci + Math.max(...grid.map(g => g.length)))
-    const nc = [...cols]; while (nc.length < width) nc.push({ name: `Column ${nc.length + 1}` })
-    const nr = rows.map(r => [...r, ...Array(width - r.length).fill('')])
-    grid.forEach((g, i) => {
-      while (nr.length <= ri + i) nr.push(Array(width).fill(''))
-      g.forEach((v, j) => { nr[ri + i][ci + j] = v })
-    })
-    set(nc, nr)
+    const r = paste(cols, rows, text, ri, ci)
+    set(r.cols, r.rows)
+    if (r.header) {
+      const asData = pasteCells(cols, rows, parseTsv(text), ri, ci, false)
+      toast('First row used as column names', { label: 'Keep it as data', run: () => set(asData.cols, asData.rows) })
+    }
   }
 
   return (
@@ -28,7 +33,8 @@ export default function TableEntry({ content, onChange, readOnly }: EntryEditorP
         <table className="data">
           <thead><tr>
             {cols.map((c, ci) => (
-              <th key={ci}><input aria-label={`Column ${ci + 1} name`} disabled={readOnly} value={c.name}
+              <th key={ci}><input aria-label={`Column ${ci + 1} name`} disabled={readOnly} value={c.name} title={c.name}
+                style={{ minWidth: columnWidth(c.name, rows, ci) }}
                 onChange={e => set(cols.map((x, j) => (j === ci ? { ...x, name: e.target.value } : x)), rows)} /></th>
             ))}
             {!readOnly && <th style={{ width: 34 }}><button className="btn ghost sm" aria-label="Add column"

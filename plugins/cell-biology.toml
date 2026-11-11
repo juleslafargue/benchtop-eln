@@ -1,0 +1,363 @@
+# Example Benchtop plugin: cell-culture and cell-biology records.
+# Copy this file, change the lists (cell lines, reagents, instruments) to suit your lab, and add it from
+# Admin › Plugins. Required items must be filled in or ticked before the author can sign the record.
+# The full format is described in docs/PLUGINS.md.
+
+[plugin]
+id = "cell-biology"
+name = "Cell biology"
+version = "1.0.0"
+author = "Benchtop examples"
+description = "Cell-culture passages, transfections, western blots and flow cytometry runs."
+api = 1
+
+# ------------------------------------------------------------------ passage
+[[sections]]
+id = "passage"
+name = "Cell-culture passage"
+title = "Cell-culture passage"
+description = "Cell line, passage number, confluence, counts and split"
+
+  [[sections.fields]]
+  id = "cell_line"
+  label = "Cell line"
+  type = "text"
+  placeholder = "e.g. HEK293T (ATCC CRL-3216)"
+  required = true
+  width = "half"
+
+  [[sections.fields]]
+  id = "lot"
+  label = "Vial or cell bank lot"
+  type = "text"
+  width = "half"
+
+  [[sections.fields]]
+  id = "from_p"
+  label = "From passage"
+  type = "number"
+  min = 0
+  decimals = 0
+  required = true
+  width = "third"
+
+  [[sections.fields]]
+  id = "to_p"
+  label = "To passage"
+  type = "number"
+  min = 0
+  decimals = 0
+  required = true
+  warn_above = 30
+  help = "Above P30: check your lab's limit for this line."
+  width = "third"
+
+  [[sections.fields]]
+  id = "confluence"
+  label = "Confluence before splitting"
+  type = "number"
+  unit = "%"
+  min = 0
+  max = 100
+  width = "third"
+
+  [[sections.fields]]
+  id = "medium"
+  label = "Medium"
+  type = "text"
+  placeholder = "e.g. DMEM + 10% FBS + 1% pen/strep"
+  width = "full"
+
+  [[sections.fields]]
+  id = "density"
+  label = "Viable cell density"
+  type = "number"
+  unit = "cells/mL"
+  min = 0
+  width = "third"
+
+  [[sections.fields]]
+  id = "viability"
+  label = "Viability"
+  type = "number"
+  unit = "%"
+  min = 0
+  max = 100
+  warn_below = 85
+  help = "Below 85%: note why before using these cells."
+  width = "third"
+
+  [[sections.fields]]
+  id = "split"
+  label = "Split ratio"
+  type = "text"
+  placeholder = "e.g. 1:8"
+  width = "third"
+
+  [[sections.fields]]
+  id = "myco_date"
+  label = "Last negative mycoplasma test"
+  type = "date"
+  help = "Many labs test every one to three months."
+  width = "half"
+
+  [[sections.fields]]
+  id = "cabinet"
+  label = "Handled in a class II biosafety cabinet"
+  type = "checkbox"
+
+  [[sections.tables]]
+  id = "vessels"
+  label = "Vessels seeded"
+
+    [[sections.tables.columns]]
+    id = "vessel"
+    label = "Vessel"
+    type = "select"
+    options = ["T25", "T75", "T175", "6-well", "12-well", "24-well", "96-well", "10 cm dish", "15 cm dish"]
+
+    [[sections.tables.columns]]
+    id = "cells"
+    label = "Cells per vessel or well"
+    type = "number"
+
+    [[sections.tables.columns]]
+    id = "purpose"
+    label = "Used for"
+    type = "text"
+
+# ------------------------------------------------------------------ transfection
+[[sections]]
+id = "transfection"
+name = "Transfection"
+title = "Transfection"
+description = "Cells, plasmids, reagent and amounts per well"
+
+  [[sections.fields]]
+  id = "cells"
+  label = "Cells"
+  type = "text"
+  placeholder = "e.g. HEK293T, 6-well, 70% confluent"
+  width = "half"
+
+  [[sections.fields]]
+  id = "reagent"
+  label = "Reagent"
+  type = "select"
+  options = ["Lipofectamine 3000", "Lipofectamine 2000", "FuGENE HD", "PEI", "jetPRIME", "Electroporation", "Other"]
+  required = true
+  width = "half"
+
+  [[sections.fields]]
+  id = "hours"
+  label = "Harvested after"
+  type = "number"
+  unit = "h"
+  min = 0
+  width = "third"
+
+  [[sections.tables]]
+  id = "wells"
+  label = "Wells"
+  min_rows = 1
+
+    [[sections.tables.columns]]
+    id = "well"
+    label = "Well(s)"
+    type = "text"
+    required = true
+
+    [[sections.tables.columns]]
+    id = "plasmid"
+    label = "Plasmid"
+    type = "text"
+    required = true
+
+    [[sections.tables.columns]]
+    id = "dna"
+    label = "DNA"
+    type = "number"
+    unit = "µg"
+
+    [[sections.tables.columns]]
+    id = "reagent_ul"
+    label = "Reagent"
+    type = "number"
+    unit = "µL"
+
+# ------------------------------------------------------------------ western blot
+[[sections]]
+id = "western"
+name = "Western blot"
+title = "Western blot"
+description = "Gel, transfer, antibodies, imaging and band intensities"
+
+  [[sections.fields]]
+  id = "gel"
+  label = "Gel and buffer"
+  type = "text"
+  placeholder = "e.g. 4–12% Bis-Tris, MES"
+  width = "half"
+
+  [[sections.fields]]
+  id = "load"
+  label = "Protein per lane"
+  type = "number"
+  unit = "µg"
+  min = 0
+  width = "half"
+
+  [[sections.fields]]
+  id = "transfer"
+  label = "Transfer"
+  type = "select"
+  options = ["Wet, PVDF", "Wet, nitrocellulose", "Semi-dry", "iBlot 2", "Trans-Blot Turbo", "Other"]
+  width = "half"
+
+  [[sections.fields]]
+  id = "imager"
+  label = "Imager and exposure"
+  type = "text"
+  placeholder = "e.g. ChemiDoc MP, ECL, 30 s"
+  width = "half"
+
+  [[sections.tables]]
+  id = "antibodies"
+  label = "Antibodies"
+
+    [[sections.tables.columns]]
+    id = "target"
+    label = "Target"
+    type = "text"
+
+    [[sections.tables.columns]]
+    id = "kind"
+    label = "Primary or secondary"
+    type = "select"
+    options = ["Primary", "Secondary"]
+
+    [[sections.tables.columns]]
+    id = "clone"
+    label = "Supplier, catalogue no. and lot"
+    type = "text"
+
+    [[sections.tables.columns]]
+    id = "dilution"
+    label = "Dilution"
+    type = "text"
+
+  [[sections.tables]]
+  id = "bands"
+  label = "Band intensities"
+  help = "From your image software (e.g. Image Lab, ImageJ); type the numbers in."
+
+    [[sections.tables.columns]]
+    id = "lane"
+    label = "Lane"
+    type = "number"
+
+    [[sections.tables.columns]]
+    id = "sample"
+    label = "Sample"
+    type = "text"
+
+    [[sections.tables.columns]]
+    id = "target"
+    label = "Target"
+    type = "number"
+
+    [[sections.tables.columns]]
+    id = "loading"
+    label = "Loading control"
+    type = "number"
+
+    [[sections.tables.columns]]
+    id = "ratio"
+    label = "Target ÷ loading control"
+    type = "number"
+
+  [[sections.fields]]
+  id = "uncropped"
+  label = "Uncropped original image added to a Files section"
+  type = "checkbox"
+  required = true
+
+# ------------------------------------------------------------------ flow cytometry
+[[sections]]
+id = "flow"
+name = "Flow cytometry run"
+title = "Flow cytometry"
+description = "Cytometer, panel, gating and populations; FCS files go in a Files section"
+
+  [[sections.fields]]
+  id = "instrument"
+  label = "Cytometer"
+  type = "select"
+  options = ["BD LSRFortessa", "BD FACSymphony", "Cytek Aurora", "Attune NxT", "Other"]
+  required = true
+  width = "half"
+
+  [[sections.fields]]
+  id = "events"
+  label = "Events recorded per sample"
+  type = "number"
+  min = 0
+  width = "half"
+
+  [[sections.fields]]
+  id = "gating"
+  label = "Gating strategy"
+  type = "longtext"
+  placeholder = "e.g. FSC-A/SSC-A cells → FSC-H/FSC-A singlets → DAPI− live → …"
+
+  [[sections.tables]]
+  id = "panel"
+  label = "Panel"
+
+    [[sections.tables.columns]]
+    id = "marker"
+    label = "Marker"
+    type = "text"
+
+    [[sections.tables.columns]]
+    id = "fluor"
+    label = "Fluorochrome"
+    type = "text"
+
+    [[sections.tables.columns]]
+    id = "channel"
+    label = "Detector"
+    type = "text"
+
+  [[sections.tables]]
+  id = "populations"
+  label = "Populations"
+  help = "From your analysis software (e.g. FlowJo); type the numbers in."
+
+    [[sections.tables.columns]]
+    id = "sample"
+    label = "Sample or FCS file"
+    type = "text"
+
+    [[sections.tables.columns]]
+    id = "gate"
+    label = "Gate"
+    type = "text"
+
+    [[sections.tables.columns]]
+    id = "pct"
+    label = "% of parent"
+    type = "number"
+    min = 0
+    max = 100
+
+    [[sections.tables.columns]]
+    id = "mfi"
+    label = "MFI"
+    type = "number"
+
+  [[sections.fields]]
+  id = "fcs_attached"
+  label = "FCS files added to a Files section"
+  type = "checkbox"
+  required = true

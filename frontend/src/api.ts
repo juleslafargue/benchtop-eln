@@ -5,7 +5,9 @@ export type Role = 'admin' | 'scientist' | 'viewer'
 export type Status = 'open' | 'signed' | 'witnessed' | 'voided' | 'locked'
 export type EntryKind = 'text' | 'reaction' | 'table' | 'file' | 'purification' | 'characterization' | 'safety' | 'screen' | 'references' | 'custom'
 
-export interface Preferences { theme?: 'system' | 'light' | 'dark'; palette?: string; email_notify?: { witness?: boolean; results?: boolean; system?: boolean }; default_notebook_id?: number | null; spectrum_expanded?: boolean; guide_dismissed?: boolean; first_steps_dismissed?: boolean; pinned?: number[]; nav?: string[]; nav_hidden?: string[]; dashboard?: { widgets: unknown[] } }
+/** What New experiment starts from (0.36): the usual sections, the same without the chemistry ones, or a template's id */
+export type StartFrom = 'standard' | 'no_chemistry' | number
+export interface Preferences { theme?: 'system' | 'light' | 'dark'; palette?: string; email_notify?: { witness?: boolean; results?: boolean; system?: boolean }; default_notebook_id?: number | null; spectrum_expanded?: boolean; guide_dismissed?: boolean; first_steps_dismissed?: boolean; start_from?: StartFrom; pinned?: number[]; nav?: string[]; nav_hidden?: string[]; dashboard?: { widgets: unknown[] } }
 export interface User { id: number; username: string; full_name: string; email: string; role: Role; active: boolean; preferences: Preferences; has_password?: boolean; must_change_password?: boolean; sample_prefix?: string | null; orcid?: string | null
   /** Admin → Users only: the built-in login that setup switched off (0.35) */
   retired_builtin?: boolean }
@@ -305,12 +307,15 @@ export const ago = (iso: string) => {
 
 // ---------------------------------------------------------------- pictures inside text
 // Pasted pictures are stored as <img data-attachment-id="12">: the file needs the sign-in token, so it is
-// fetched here and shown from a blob URL (cached for the page's lifetime).
+// fetched here and shown from a blob URL (cached for the page's lifetime). A TIFF, which browsers can't show, is shown
+// from the PNG the server makes of it for viewing (0.36).
 const blobUrls = new Map<number, Promise<string>>()
 export function attachmentUrl(id: number): Promise<string> {
   let p = blobUrls.get(id)
   if (!p) {
-    p = api.raw(`/api/attachments/${id}?inline=true`).then(r => r.blob()).then(b => URL.createObjectURL(b))
+    p = api.raw(`/api/attachments/${id}?inline=true`).then(r => r.blob())
+      .then(b => /^image\/(x-)?tiff?$/i.test(b.type) ? api.raw(`/api/attachments/${id}/preview`).then(r => r.blob()) : b)
+      .then(b => URL.createObjectURL(b))
     p.catch(() => blobUrls.delete(id))
     blobUrls.set(id, p)
   }

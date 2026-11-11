@@ -46,7 +46,8 @@ export default function Guide() {
     first: <>
       <ol>
         <li><b>New experiment.</b> Click <b>New experiment</b> on the <Link to="/">dashboard</Link> and give it a
-          title. If you don't have a notebook yet, one is made for you with it, named after you and shared with your group if you're in one.</li>
+          title. If you don't have a notebook yet, one is made for you with it, named after you and shared with your group if you're in one.
+          No reaction? Choose <b>Without chemistry</b> under Start from, and go straight to writing the procedure.</li>
         <li><b>Draw the reaction.</b> In the Reaction section, click <b>Draw reaction</b> (or paste a reaction SMILES). The
           table fills in the structures, formulas and molecular weights.</li>
         <li><b>Type one amount in each row</b> (a mass, a volume, mmol or equivalents) and Benchtop works out the rest.</li>
@@ -76,7 +77,8 @@ export default function Guide() {
         which notebook it's going into before you click Create.</p>
       <ul>
         <li>A new experiment has the usual sections ready: Aim, Reaction, Safety &amp; risk assessment, Procedure,
-          Work-up &amp; purification, Characterisation, and Observations &amp; results.</li>
+          Work-up &amp; purification, Characterisation, and Observations &amp; results. <b>Without chemistry</b> (under
+          Start from) gives just Aim, Procedure and Observations &amp; results; Benchtop remembers which you chose.</li>
         <li><b>Add section</b> (at the top, between two sections, or at the end) adds text, a data table, files,
           references, a screening grid and more. Remove the sections you don't need; removing one offers <b>Undo</b>.</li>
         <li>Sections save themselves a moment after you stop typing. Each save is a new version (v1, v2…),
@@ -109,7 +111,8 @@ export default function Guide() {
     writing: <>
       <p>Text sections work like a word processor: bold, sub- and superscript, tables and checklists. Paste or drop a
         picture (a screenshot, a photo of a TLC plate) straight into the text; it's saved with the record. Typing an
-        experiment number such as EXP-00025 makes a link to it.</p>
+        experiment number such as EXP-00025 makes a link to it, and EXP-00025 then lists yours
+        under <b>Mentioned in</b> (for people who can open yours).</p>
       <p>At the bench, on an experiment's page:</p>
       <ul>
         <li><kbd>L</kbd> logs a line with the time (“14:32 added NaH portionwise”) to the experiment's Bench log

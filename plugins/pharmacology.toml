@@ -1,0 +1,241 @@
+# Example Benchtop plugin: pharmacology records.
+# Copy this file, change it to suit your lab, and add it from Admin › Plugins. Required items must be filled in
+# before the author can sign the record. Benchtop doesn't fit curves or work out PK parameters: type in the values
+# from your analysis software (GraphPad Prism, Phoenix WinNonlin and so on), and add its file in a Files section.
+# The full format is described in docs/PLUGINS.md.
+
+[plugin]
+id = "pharmacology"
+name = "Pharmacology"
+version = "1.0.0"
+author = "Benchtop examples"
+description = "Dose–response assays (with the IC50 or EC50 from your fitting software) and PK sampling."
+api = 1
+
+# ------------------------------------------------------------------ dose–response
+[[sections]]
+id = "dose-response"
+name = "Dose–response assay"
+title = "Dose–response"
+description = "Compound and batch, assay, concentrations and responses, and the fitted IC50 or EC50"
+
+  [[sections.fields]]
+  id = "compound"
+  label = "Compound"
+  type = "text"
+  placeholder = "e.g. KX-104"
+  required = true
+  width = "third"
+
+  [[sections.fields]]
+  id = "batch"
+  label = "Batch"
+  type = "text"
+  placeholder = "The chemist's record number, or a lot barcode"
+  required = true
+  help = "So the batch can be traced: a record number typed here lists this assay under “Mentioned in” on that record."
+  width = "third"
+
+  [[sections.fields]]
+  id = "purity"
+  label = "Batch purity"
+  type = "number"
+  unit = "%"
+  min = 0
+  max = 100
+  warn_below = 95
+  help = "Below 95%: say so when you report the result."
+  width = "third"
+
+  [[sections.fields]]
+  id = "assay"
+  label = "Assay"
+  type = "text"
+  placeholder = "e.g. CellTiter-Glo 2.0, HEK293T, 72 h"
+  required = true
+  width = "half"
+
+  [[sections.fields]]
+  id = "readout"
+  label = "Readout"
+  type = "select"
+  options = ["Luminescence", "Fluorescence", "Absorbance", "TR-FRET", "AlphaLISA", "Imaging", "Other"]
+  width = "half"
+
+  [[sections.tables]]
+  id = "points"
+  label = "Concentrations and responses"
+  min_rows = 3
+  help = "One row per concentration; a vehicle control is a concentration of 0."
+
+    [[sections.tables.columns]]
+    id = "conc"
+    label = "Concentration"
+    type = "number"
+    unit = "µM"
+    min = 0
+    required = true
+
+    [[sections.tables.columns]]
+    id = "r1"
+    label = "Replicate 1"
+    type = "number"
+
+    [[sections.tables.columns]]
+    id = "r2"
+    label = "Replicate 2"
+    type = "number"
+
+    [[sections.tables.columns]]
+    id = "r3"
+    label = "Replicate 3"
+    type = "number"
+
+    [[sections.tables.columns]]
+    id = "norm"
+    label = "Mean, % of vehicle"
+    type = "number"
+
+  [[sections.fields]]
+  id = "outcome"
+  label = "Result"
+  type = "select"
+  options = ["IC50 fitted", "EC50 fitted", "Inactive at the highest concentration", "Did not fit"]
+  required = true
+  width = "half"
+
+  [[sections.fields]]
+  id = "ic50"
+  label = "IC50 or EC50"
+  type = "number"
+  unit = "µM"
+  min = 0
+  help = "As your fitting software gives it; leave it empty if inactive or not fitted."
+  width = "half"
+
+  [[sections.fields]]
+  id = "ci"
+  label = "95% confidence interval"
+  type = "text"
+  placeholder = "e.g. 0.33–0.49 µM"
+  width = "third"
+
+  [[sections.fields]]
+  id = "hill"
+  label = "Hill slope"
+  type = "number"
+  width = "third"
+
+  [[sections.fields]]
+  id = "fit"
+  label = "Fit and software"
+  type = "text"
+  placeholder = "e.g. 4-parameter logistic, variable slope, GraphPad Prism 10"
+  width = "third"
+
+# ------------------------------------------------------------------ PK sampling
+[[sections]]
+id = "pk"
+name = "PK sampling"
+title = "PK sampling"
+description = "Dose, route, species and plasma concentrations by time point and animal"
+
+  [[sections.fields]]
+  id = "compound"
+  label = "Compound and batch"
+  type = "text"
+  required = true
+  width = "half"
+
+  [[sections.fields]]
+  id = "protocol"
+  label = "Animal licence or protocol"
+  type = "text"
+  placeholder = "e.g. project licence or animal use protocol number"
+  required = true
+  width = "half"
+
+  [[sections.fields]]
+  id = "species"
+  label = "Species and strain"
+  type = "text"
+  placeholder = "e.g. mouse, CD-1, male"
+  width = "third"
+
+  [[sections.fields]]
+  id = "route"
+  label = "Route"
+  type = "select"
+  options = ["Oral (PO)", "Intravenous (IV)", "Intraperitoneal (IP)", "Subcutaneous (SC)", "Intramuscular (IM)", "Other"]
+  required = true
+  width = "third"
+
+  [[sections.fields]]
+  id = "dose"
+  label = "Dose"
+  type = "number"
+  unit = "mg/kg"
+  min = 0
+  width = "third"
+
+  [[sections.fields]]
+  id = "vehicle"
+  label = "Formulation"
+  type = "text"
+  placeholder = "e.g. 0.5% methylcellulose in water"
+  width = "full"
+
+  [[sections.tables]]
+  id = "conc"
+  label = "Plasma concentration"
+  help = "One row per time point, in ng/mL. Below the limit of quantification: leave the cell empty and say so in the notes."
+
+    [[sections.tables.columns]]
+    id = "t"
+    label = "Time"
+    type = "number"
+    unit = "h"
+    min = 0
+    required = true
+
+    [[sections.tables.columns]]
+    id = "a1"
+    label = "Animal 1"
+    type = "number"
+
+    [[sections.tables.columns]]
+    id = "a2"
+    label = "Animal 2"
+    type = "number"
+
+    [[sections.tables.columns]]
+    id = "a3"
+    label = "Animal 3"
+    type = "number"
+
+  [[sections.fields]]
+  id = "cmax"
+  label = "Cmax"
+  type = "number"
+  unit = "ng/mL"
+  help = "From your PK software."
+  width = "third"
+
+  [[sections.fields]]
+  id = "tmax"
+  label = "Tmax"
+  type = "number"
+  unit = "h"
+  width = "third"
+
+  [[sections.fields]]
+  id = "auc"
+  label = "AUC (0 to last)"
+  type = "number"
+  unit = "h·ng/mL"
+  width = "third"
+
+  [[sections.fields]]
+  id = "notes"
+  label = "Notes"
+  type = "longtext"

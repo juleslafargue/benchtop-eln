@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, ApiError, displayName, type ExperimentSummary, type Notebook } from '../api'
+import { api, ApiError, displayName, type ExperimentSummary, type Notebook, type StartFrom, type User } from '../api'
 import Modal from './Modal'
 import { defaultAudience } from './Audience'
 
@@ -15,11 +15,20 @@ export function startingNotebook(notebooks: Notebook[], userId: number, defaultI
   return mine[0]?.id ?? ''
 }
 
+/** What a new experiment starts from (0.36), from the person's last choice: a template they used last time, while it's
+ *  still there (templates: null while the list is loading); else "Without chemistry" if that's what they chose; else the
+ *  standard sections. */
+export function startingChoice(remembered: unknown, templates: { id: number }[] | null): StartFrom {
+  if (remembered === 'no_chemistry') return 'no_chemistry'
+  if (typeof remembered === 'number' && (templates === null || templates.some(t => t.id === remembered))) return remembered
+  return 'standard'
+}
+
 /** The notebook made for someone who has none yet (0.35): "Sam Patel's notebook". */
 export const ownNotebookName = (fullName: string, username: string) => `${(fullName || username).trim()}'s notebook`
 
 export default function NewExperimentDialog({ notebookId, onClose }: { notebookId?: number; onClose: () => void }) {
-  const { notebooks, refreshNotebooks, user } = useApp()
+  const { notebooks, refreshNotebooks, user, setUser } = useApp()
   const nav = useNavigate()
   const [title, setTitle] = useState('')
   // 0.35: someone with no notebook of their own gets one made with their first experiment ('new'), in one step
@@ -31,8 +40,10 @@ export default function NewExperimentDialog({ notebookId, onClose }: { notebookI
   useEffect(() => {
     if (!chosen.current && (nb === '' || nb === 'new') && notebooks.length) setNb(startingNotebook(notebooks, user.id, user.preferences?.default_notebook_id, notebookId) || (hasOwn ? '' : 'new'))
   }, [notebooks]) // eslint-disable-line react-hooks/exhaustive-deps
-  const [tpl, setTpl] = useState<number | ''>('')
-  const [templates, setTemplates] = useState<ExperimentSummary[]>([])
+  // what it starts from: the person's last choice (0.36), checked against the templates once they've loaded
+  const remembered = user.preferences?.start_from
+  const [start, setStart] = useState<StartFrom>(() => startingChoice(remembered, null))
+  const [templates, setTemplates] = useState<ExperimentSummary[] | null>(null)
   const [err, setErr] = useState('')
   const { groups } = useApp()
   const audience = defaultAudience(groups)
@@ -43,13 +54,19 @@ export default function NewExperimentDialog({ notebookId, onClose }: { notebookI
   const [creating, setCreating] = useState(false)
   const busy = useRef(false)
 
-  useEffect(() => { api.get<ExperimentSummary[]>('/api/experiments?templates=true').then(setTemplates) }, [])
+  useEffect(() => {
+    api.get<ExperimentSummary[]>('/api/experiments?templates=true').then(t => {
+      setTemplates(t)
+      setStart(s => startingChoice(s, t))  // a remembered template that has gone since: the standard sections
+    }).catch(() => { setTemplates([]); setStart(s => startingChoice(s, [])) })
+  }, [])
 
   const mine = notebooks.filter(n => n.owner?.id === user.id)
   const others = notebooks.filter(n => n.owner?.id !== user.id)
 
-  const ready = !!title.trim() && !!nb
-  const why = !title.trim() ? 'Give it a title first.' : !nb ? 'Choose a notebook first.' : ''
+  const waiting = typeof start === 'number' && templates === null  // a remembered template, not yet checked
+  const ready = !!title.trim() && !!nb && !waiting
+  const why = !title.trim() ? 'Give it a title first.' : !nb ? 'Choose a notebook first.' : waiting ? 'Loading templates…' : ''
   const create = async () => {
     if (busy.current || !ready) return
     busy.current = true; setCreating(true); setErr('')
@@ -64,7 +81,8 @@ export default function NewExperimentDialog({ notebookId, onClose }: { notebookI
     }
     try {
       e = await api.post<ExperimentSummary>('/api/experiments', {
-        title, notebook_id: into || null, template_id: tpl || null,
+        title, notebook_id: into || null, template_id: typeof start === 'number' ? start : null,
+        ...(start === 'no_chemistry' ? { sections: 'no_chemistry' } : {}),
       })
     } catch (x: any) {
       busy.current = false; setCreating(false)
@@ -75,6 +93,9 @@ export default function NewExperimentDialog({ notebookId, onClose }: { notebookI
       return
     }
     await refreshNotebooks().catch(() => {})  // the counts beside the notebooks: the experiment is made either way
+    if (start !== (remembered ?? 'standard')) {  // remembered for next time, on every computer (0.36)
+      api.patch<User>('/api/auth/me', { preferences: { start_from: start } }).then(setUser).catch(() => {})
+    }
     onClose()
     nav(`/experiments/${e.id}`)
   }
@@ -105,9 +126,12 @@ export default function NewExperimentDialog({ notebookId, onClose }: { notebookI
           Records are kept for good, so yours go in a notebook of your own.
         </p>}
         <label className="field">Start from
-          <select className="select" value={tpl} onChange={e => setTpl(e.target.value ? Number(e.target.value) : '')}>
-            <option value="">Standard sections (aim, reaction, procedure, results)</option>
-            {templates.map(t => <option key={t.id} value={t.id}>Template: {t.title}</option>)}
+          <select className="select" value={typeof start === 'number' ? `template-${start}` : start}
+            onChange={e => { const v = e.target.value; setStart(v.startsWith('template-') ? Number(v.slice(9)) : v === 'no_chemistry' ? 'no_chemistry' : 'standard') }}>
+            <option value="standard">Standard sections (aim, reaction, procedure, results)</option>
+            <option value="no_chemistry">Without chemistry (aim, procedure, results)</option>
+            {typeof start === 'number' && templates === null && <option value={`template-${start}`}>Template (loading…)</option>}
+            {(templates || []).map(t => <option key={t.id} value={`template-${t.id}`}>Template: {t.title}</option>)}
           </select>
         </label>
         {err && <p className="error">{err}</p>}

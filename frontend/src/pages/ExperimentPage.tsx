@@ -214,6 +214,33 @@ function WitnessPanel({ exp, canManage, onChange }: { exp: Experiment; canManage
   )
 }
 
+interface Mention { id: number; eid: string; title: string; status: Experiment['status']; is_template: boolean; owner: UserBrief | null }
+
+/** The records that name this one's number (0.36): the other end of the link typing EXP-00020 makes. The server lists
+ *  only what this person may open, and leaves out the record's follow-ups (shown under its title already). Hidden
+ *  when there are none. */
+function MentionedIn({ expId }: { expId: number }) {
+  const [m, setM] = useState<{ total: number; items: Mention[] } | null>(null)
+  useEffect(() => {
+    let live = true
+    api.get<{ total: number; items: Mention[] }>(`/api/experiments/${expId}/mentioned-in`).then(r => { if (live) setM(r) }).catch(() => {})
+    return () => { live = false }
+  }, [expId])
+  if (!m?.items.length) return null
+  return (
+    <div className="mentioned-in">
+      <h2 className="rail-h">Mentioned in</h2>
+      <ul>
+        {m.items.map(x => <li key={x.id}>
+          <Link to={`/experiments/${x.id}`}><b>{x.eid}</b> {x.title}</Link>
+          <span className="faint">{x.owner ? ` · ${displayName(x.owner)}` : ''}{x.status === 'voided' ? ' · voided' : ''}</span>
+        </li>)}
+      </ul>
+      {m.total > m.items.length && <p className="faint" style={{ margin: '4px 0 0', fontSize: 12.5 }}>and {m.total - m.items.length} more</p>}
+    </div>
+  )
+}
+
 function AuditTab({ expId }: { expId: number }) {
   const [events, setEvents] = useState<AuditEvent[]>([])
   useEffect(() => { api.get<AuditEvent[]>(`/api/experiments/${expId}/audit`).then(setEvents) }, [expId])
@@ -242,7 +269,15 @@ function AuditTab({ expId }: { expId: number }) {
   )
 }
 
+/** One page per record: going from one record to another (a link, a follow-up just made, Back) starts the page afresh,
+ *  so nothing opened on the last record (the follow-up dialog, sharing, signing, the bench bar) stays open over the next
+ *  one (0.35.1: the follow-up dialog reopened about the new draft and said it was signed). */
 export default function ExperimentPage() {
+  const { id } = useParams()
+  return <ExperimentRecord key={id} />
+}
+
+function ExperimentRecord() {
   const { id } = useParams()
   const nav = useNavigate()
   const { user, canWrite, toast, refreshNotebooks, setUser } = useApp()
@@ -584,6 +619,7 @@ export default function ExperimentPage() {
                 <span className="hash" style={{ display: 'block' }}>{verify.content_hash}</span></p>}
             </div>}
             {!exp.is_template && !publishLater && <PublishPanel exp={exp} onChange={load} />}
+            <MentionedIn expId={exp.id} />
             {!exp.is_template && <div className="stack bench-tools" style={{ gap: 6 }}>
               <h2 className="rail-h">At the bench</h2>
               {editable && <button className="btn sm" onClick={() => setBench('log')} title="Shortcut: L">Log a note <kbd>L</kbd></button>}
@@ -604,7 +640,7 @@ export default function ExperimentPage() {
               })()}
               {!exp.is_template && <button className="btn sm" onClick={() => setWriteup(true)}>Draft write-up</button>}
               {canWrite && !exp.is_template && (exp.status === 'signed' || exp.status === 'witnessed' || exp.status === 'locked') &&
-                <button className="btn sm" onClick={() => setFollowUp(true)} title="A new draft linked to this one, for results that came after signing">Make a follow-up…</button>}
+                <button className="btn sm" onClick={() => setFollowUp(true)} title="A new draft linked to this one, for what came after it was signed">Make a follow-up…</button>}
               <button className="btn sm" onClick={() => downloadAuthed(`/api/experiments/${exp.id}/export?format=pdf`, `${exp.eid} ${exp.title.replace(/[\\/:*?"<>|#^[\]]+/g, ' ').slice(0, 80)}.pdf`).catch(e => toast(e.message))}>Download PDF</button>
               <details className="rail-more downloads">
                 <summary className="btn sm">More downloads…</summary>
@@ -640,7 +676,7 @@ export default function ExperimentPage() {
       {bench && editable && <BenchBar key={bench} experimentId={exp.id} eid={exp.eid} initialTimer={bench === 'timer'} onClose={() => setBench(null)} />}
       {phone && <PhoneDialog experimentId={exp.id} onClose={() => setPhone(false)} />}
       {followUp && <FollowUpDialog eid={exp.eid} title={exp.title} notebookId={exp.notebook_id}
-        url={`/api/experiments/${exp.id}/follow-up`} onClose={() => setFollowUp(false)} />}
+        url={`/api/experiments/${exp.id}/follow-up`} onClose={() => setFollowUp(false)} onDone={() => setFollowUp(false)} />}
       {sharing && <ShareDialog experimentId={exp.id} eid={exp.eid} preselect={sharing} onClose={() => { setSharing(null); load() }} />}
       {scaling && (() => {
         const rx = exp.entries.find(e => e.kind === 'reaction')?.content

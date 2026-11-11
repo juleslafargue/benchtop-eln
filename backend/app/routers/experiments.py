@@ -7,7 +7,7 @@ import re
 import threading
 import hashlib
 import html
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import nh3
 
@@ -98,7 +98,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
-from .. import audit, chem, doi, mailer, nmrpredict, paging, plugins, publishing, storage, timestamps, witness
+from .. import audit, chem, doi, mailer, nmrpredict, paging, plugins, previews, publishing, storage, timestamps, witness
 from ..config import settings
 from ..models import (
     Attachment, Entry, EntryKind, EntryVersion, Experiment, ExperimentStatus, Notebook, Role,
@@ -291,6 +291,8 @@ class ExperimentIn(BaseModel):
     template_id: int | None = None
     is_template: bool = False
     tags: Tags = []
+    # 0.36: without a template, which sections to start with: the usual ones, or the same without the chemistry ones
+    sections: Literal["standard", "no_chemistry"] = "standard"
 
 
 DEFAULT_CONTENT: dict[EntryKind, dict] = {
@@ -318,6 +320,9 @@ DEFAULT_SECTIONS = [
     (EntryKind.characterization, "Characterisation", DEFAULT_CONTENT[EntryKind.characterization]),
     (EntryKind.text, "Observations & results", DEFAULT_CONTENT[EntryKind.text]),
 ]
+# 0.36, "Without chemistry": for work with no reaction (cell biology, pharmacology), the text sections only. Tables,
+# files and a lab's plugin sections are added with Add section; files dropped on the page make a Files section.
+NO_CHEMISTRY_SECTIONS = [s for s in DEFAULT_SECTIONS if s[0] == EntryKind.text]
 
 METRIC_LABELS = (("atom_economy_pct", "atom economy", "%"), ("rme_pct", "RME", "%"), ("e_factor", "E-factor", ""),
                  ("pmi", "PMI", ""), ("solvent_l_per_kg", "solvent", " L/kg"))
@@ -457,11 +462,11 @@ def create_experiment(body: ExperimentIn, user: Writer, session: DB):
     if tpl is not None:
         sections = [(e.kind, e.title, copy.deepcopy(e.content)) for e in live_entries(session, tpl.id)]
     else:
-        sections = DEFAULT_SECTIONS
+        sections = NO_CHEMISTRY_SECTIONS if body.sections == "no_chemistry" else DEFAULT_SECTIONS
     for i, (kind, title, content) in enumerate(sections):
         _new_entry(session, exp.id, kind, title, copy.deepcopy(content), i, user)
     audit.record(session, user, "create", "experiment", exp.id, eid=exp.eid, title=exp.title,
-                 template_id=body.template_id)
+                 template_id=body.template_id, **({"sections": body.sections} if tpl is None and body.sections != "standard" else {}))
     session.commit()
     return experiment_summary(session, exp)
 
@@ -481,6 +486,52 @@ def get_experiment(exp_id: int, user: CurrentUser, session: DB):
         **_access_info(session, user, exp),
         **_links_and_samples(session, user, exp),
     }
+
+
+MENTIONS_SHOWN = 20
+
+
+def _mention_text(e: Entry) -> str:
+    """The words in a section that a person typed or chose (a plugin section's labels and examples aren't counted)."""
+    from .search import _strings
+    c = e.content or {}
+    if e.kind == EntryKind.custom:
+        try:
+            return plugins.text_of(c)
+        except Exception:  # noqa: BLE001 - an odd section mustn't break the page
+            return ""
+    return " ".join(_strings(c))
+
+
+@router.get("/experiments/{exp_id}/mentioned-in")
+def mentioned_in(exp_id: int, user: CurrentUser, session: DB, limit: int = Query(MENTIONS_SHOWN, ge=1, le=100)):
+    """Records whose title, description or sections name this record's number (EXP-00020, as a whole word: not
+    EXP-000201): the other end of the link that typing a number makes (0.36). Only records this person may open are
+    listed or counted, so a private record never shows its title here. The record itself and its follow-ups (the page
+    shows those already) are left out; voided records are listed after the rest, saying so. Newest first."""
+    from sqlalchemy import String, cast, or_
+
+    from ..access import visible_experiment_filter
+    exp = read_experiment(session, user, exp_id)
+    like = f"%{exp.eid}%"
+    # a quick first pass in the database (the number written anywhere), then each candidate is read properly
+    ids = set(session.exec(select(Entry.experiment_id).where(Entry.deleted == False, cast(Entry.content, String).ilike(like))))  # noqa: E712
+    ids |= set(session.exec(select(Experiment.id).where(or_(Experiment.title.ilike(like), Experiment.description.ilike(like)))))
+    ids.discard(exp.id)
+    word = re.compile(rf"(?<![A-Za-z0-9]){re.escape(exp.eid)}(?![A-Za-z0-9])", re.I)
+    found = []
+    if ids:
+        for other in session.exec(visible_experiment_filter(select(Experiment).where(Experiment.id.in_(ids)), session, user)):
+            if other.follows_id == exp.id:
+                continue
+            texts = [other.title, other.description or ""] + [_mention_text(e) for e in live_entries(session, other.id)]
+            if any(word.search(t) for t in texts if t):
+                found.append(other)
+    found.sort(key=lambda e: e.updated_at, reverse=True)
+    found.sort(key=lambda e: e.status == ExperimentStatus.voided)
+    return {"total": len(found), "items": [
+        {"id": e.id, "eid": e.eid, "title": e.title, "status": e.status.value, "is_template": e.is_template,
+         "owner": user_brief(session, e.owner_id), "updated_at": e.updated_at.isoformat() + "Z"} for e in found[:limit]]}
 
 
 def _links_and_samples(session, user: User, exp: Experiment) -> dict[str, Any]:
@@ -947,6 +998,31 @@ def download_attachment(att_id: int, user: CurrentUser, session: DB, inline: boo
     return resp
 
 
+@router.get("/attachments/{att_id}/preview")
+def attachment_preview(att_id: int, user: CurrentUser, session: DB):
+    """A PNG to look at, for a picture browsers can't show: a TIFF (0.36: it was a broken image). Display only: it is
+    made from the stored file, after checking the file's SHA-256, and is never stored with the record or signed.
+    X-Pages: how many pages the file has (the first is shown); X-Scaled: 1 when a 16-bit picture's brightness was
+    scaled for the screen."""
+    a = get_or_404(session, Attachment, att_id)
+    read_experiment(session, user, a.experiment_id)
+    if a.withdrawn_at is not None:
+        raise HTTPException(404, f"Attachment {att_id} not found")
+    if not previews.is_tiff(a.content_type, a.filename):
+        raise HTTPException(415, "Only TIFF pictures get a preview; other pictures are shown as they are")
+    path = _blob_path(a.sha256)
+    if not path.exists():
+        raise HTTPException(410, "Attachment blob missing from storage")
+    try:
+        png, pages, scaled = previews.for_file(path, a.sha256, a.size)
+    except previews.Mismatch:
+        raise HTTPException(500, "Attachment failed integrity check") from None
+    except previews.PreviewError as e:
+        raise HTTPException(422, f"No preview for this TIFF: {e}. Download it to view.") from None
+    return Response(png, media_type="image/png", headers={"X-Pages": str(pages), "X-Scaled": "1" if scaled else "0",
+                                                          "Cache-Control": "private, max-age=3600"})
+
+
 # ====================================================================== signing workflow
 
 
@@ -1239,12 +1315,19 @@ def _inline_images(h: str, atts: dict[int, Attachment], pdf: bool = False) -> st
     def sub(m):
         tag = m.group(0)
         a = atts.get(int(m.group(1)))
-        if not a or not a.content_type.startswith("image/") or a.size > 8_000_000:
+        # 0.36: browsers can't show TIFF, so the HTML report carries a PNG made from it, for viewing (the PDF's renderer
+        # draws TIFF itself); the file in the record is unchanged
+        tiff = bool(a) and not pdf and previews.is_tiff(a.content_type, a.filename)
+        if not a or not a.content_type.startswith("image/") or (a.size > 8_000_000 and not tiff):
             return f"<em>[image: {html.escape(a.filename) if a else 'missing'}]</em>"
+        media = a.content_type
         try:
-            raw = _blob_path(a.sha256).read_bytes()
-        except OSError:
-            return f"<em>[image: {html.escape(a.filename)}]</em>"
+            if tiff:
+                raw, media = previews.for_file(_blob_path(a.sha256), a.sha256, a.size)[0], "image/png"
+            else:
+                raw = _blob_path(a.sha256).read_bytes()
+        except (OSError, previews.PreviewError, previews.Mismatch):
+            return f"<em>[image: {html.escape(a.filename)}{': no preview for TIFF' if tiff else ''}]</em>"
         data = base64.b64encode(raw).decode()
         am = re.search(r'data-align="(center|right|wrap-left|wrap-right)"', tag)
         align = am.group(1) if am else None
@@ -1253,7 +1336,7 @@ def _inline_images(h: str, atts: dict[int, Attachment], pdf: bool = False) -> st
         wrap = align in ("wrap-left", "wrap-right")
         if wrap and width is None:
             width = 40
-        src = f"data:{a.content_type};base64,{data}"
+        src = f"data:{media};base64,{data}"
         if pdf:  # the PDF renderer needs real sizes, and has no text wrapping: wrapped pictures sit left/right
             try:
                 import io
@@ -1358,15 +1441,16 @@ def _render_entry(e: Entry, atts: dict[int, Attachment], pdf: bool = False, figu
     elif e.kind == EntryKind.custom:
         sch, vals = c.get("schema") or {}, c.get("values") or {}
         shown = [(f["label"], vals.get(f["id"]), f) for f in sch.get("fields", [])]
+        blank = plugins.is_blank  # 0.36: a value of 0 is printed (it showed as "—", or as an empty cell)
         h += "<table>" + "".join(
-            f"<tr><th>{html.escape(lab)}</th><td>{'✓' if v is True else '—' if v in (None, '', False) else html.escape(str(v)).replace(chr(10), '<br>')}"
-            f"{(' ' + html.escape(f['unit'])) if f.get('unit') and v not in (None, '', False) else ''}</td></tr>" for lab, v, f in shown) + "</table>"
+            f"<tr><th>{html.escape(lab)}</th><td>{'✓' if v is True else '—' if blank(v) else html.escape(str(v)).replace(chr(10), '<br>')}"
+            f"{(' ' + html.escape(f['unit'])) if f.get('unit') and not blank(v) else ''}</td></tr>" for lab, v, f in shown) + "</table>"
         for t in sch.get("tables", []):
             rows = (c.get("rows") or {}).get(t["id"], [])
             h += f"<p><b>{html.escape(t['label'])}</b></p><table><tr>" + "".join(
                 f"<th>{html.escape(col['label'])}{(' (' + html.escape(col['unit']) + ')') if col.get('unit') else ''}</th>" for col in t["columns"]) + "</tr>"
             for r in rows:
-                h += "<tr>" + "".join(f"<td>{'✓' if r.get(col['id']) is True else html.escape(str(r.get(col['id']) if r.get(col['id']) not in (None, False) else ''))}</td>" for col in t["columns"]) + "</tr>"
+                h += "<tr>" + "".join(f"<td>{'✓' if r.get(col['id']) is True else html.escape(str(r.get(col['id']) if not blank(r.get(col['id'])) else ''))}</td>" for col in t["columns"]) + "</tr>"
             h += "</table>"
         if sch.get("plugin"):
             h += f"<p class='meta' style='font-size:11px'>Section type: {html.escape(sch.get('name', ''))} (plugin {html.escape(sch['plugin'])})</p>"

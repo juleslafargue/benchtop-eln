@@ -417,7 +417,8 @@ def create_follow_up(session: Session, user: User, original: Experiment, body: F
             raise HTTPException(409, archived_message(nb))
     title = (body.title or "").strip()[:300] or f"Follow-up to {original.eid}: {original.title}"[:300]
     exp = Experiment(title=title, notebook_id=nb_id, owner_id=user.id, follows_id=original.id,
-                     description=f"Results for {original.eid} that came after it was signed.")
+                     # 0.36: said neutrally; it may be the author's late results or a colleague's assay of the same batch
+                     description=f"Follow-up to {original.eid}: {original.title}")
     session.add(exp)
     session.flush()
     e = Entry(experiment_id=exp.id, kind=EntryKind.text, title="Notes", content={"html": ""}, position=0, updated_by=user.id)

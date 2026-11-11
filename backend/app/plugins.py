@@ -285,33 +285,40 @@ def clean_content(content: dict) -> dict:
     return {"schema": schema, "values": out_vals, "rows": out_rows}
 
 
+def is_blank(v: Any) -> bool:
+    """Nothing typed or ticked. Not 0: a passage number or a vehicle's concentration of 0 is a value (before 0.36,
+    `v in (None, "", False)` counted 0 as empty, since 0 == False in Python, and such a record couldn't be signed)."""
+    return v is None or v is False or (isinstance(v, str) and v == "")
+
+
 def missing_required(content: dict) -> list[str]:
-    """Labels of required fields still empty (an unticked required checkbox counts as empty)."""
+    """Labels of required fields still empty (an unticked required checkbox counts as empty). The sign dialog shows the
+    same list before the password is asked for: src/signCheck.ts mirrors this, rule for rule."""
     schema = content.get("schema") or {}
     vals = content.get("values") or {}
-    miss = [f["label"] for f in schema.get("fields", []) if f.get("required") and vals.get(f["id"]) in (None, "", False)]
+    miss = [f["label"] for f in schema.get("fields", []) if f.get("required") and is_blank(vals.get(f["id"]))]
     for t in schema.get("tables", []):
-        rows = [r for r in (content.get("rows") or {}).get(t["id"], []) if any(v not in (None, "", False) for v in r.values())]
+        rows = [r for r in (content.get("rows") or {}).get(t["id"], []) if any(not is_blank(v) for v in r.values())]
         if t.get("min_rows") and len(rows) < t["min_rows"]:
             miss.append(f"{t['label']} (at least {t['min_rows']} row{'s' if t['min_rows'] > 1 else ''})")
         for c in t["columns"]:
-            if c.get("required") and any(r.get(c["id"]) in (None, "", False) for r in rows):
+            if c.get("required") and any(is_blank(r.get(c["id"])) for r in rows):
                 miss.append(f"{t['label']}: {c['label']}")
     return miss
 
 
 def text_of(content: dict) -> str:
-    """Plain text for search and Markdown export."""
+    """Plain text for search and Markdown export (0.36: a value of 0 is written, not left out)."""
     schema = content.get("schema") or {}
     vals = content.get("values") or {}
     parts = []
     for f in schema.get("fields", []):
         v = vals.get(f["id"])
-        if v not in (None, "", False):
+        if not is_blank(v):
             parts.append(f"{f['label']}: {'yes' if v is True else v}{(' ' + f['unit']) if f.get('unit') and f['type'] == 'number' else ''}")
     for t in schema.get("tables", []):
         for r in (content.get("rows") or {}).get(t["id"], []):
-            cells = [f"{c['label']} {r.get(c['id'])}" for c in t["columns"] if r.get(c["id"]) not in (None, "", False)]
+            cells = [f"{c['label']} {r.get(c['id'])}" for c in t["columns"] if not is_blank(r.get(c["id"]))]
             if cells:
                 parts.append(f"{t['label']}: " + ", ".join(cells))
     return "\n".join(parts)

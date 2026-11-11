@@ -29,6 +29,20 @@ export const SECTION_KINDS: { kind: EntryKind; label: string; hint: string; grou
   { kind: 'file', label: 'Files', hint: 'Attach any file to the record', group: 'Record',
     icon: <path d="M10.5 5.5 6 10a1.4 1.4 0 0 0 2 2l5-5a2.8 2.8 0 0 0-4-4L4 8a4.2 4.2 0 0 0 6 6l3.5-3.5" /> },
 ]
+/** The section types that match what was typed in the menu's box, best first: those whose name matches (starting with
+ *  it before containing it) come before those that only match by their description, each in the menu's order.
+ *  (0.36: "table" and Enter added a Reaction, whose description says "stoichiometry table", not a Data table.) */
+export function matchSections<T extends { label: string; hint: string }>(all: T[], q: string): T[] {
+  const t = q.trim().toLowerCase()
+  if (!t) return all
+  const rank = (k: T) => {
+    const label = k.label.toLowerCase()
+    const hint = k.hint.toLowerCase()
+    return label.startsWith(t) ? 0 : label.includes(t) ? 1 : hint.includes(t) ? 2 : `${label} ${hint}`.includes(t) ? 3 : -1
+  }
+  return all.map((k, i) => ({ k, i, r: rank(k) })).filter(x => x.r >= 0).sort((a, b) => a.r - b.r || a.i - b.i).map(x => x.k)
+}
+
 const PUZZLE = <path d="M6 2.5h2.5a1.25 1.25 0 1 1 2.5 0H13.5V5a1.25 1.25 0 1 1 0 2.5v6H10a1.25 1.25 0 1 0-2.5 0H2.5V10a1.25 1.25 0 1 0 0-2.5V2.5z" />
 
 export function KindIcon({ kind }: { kind: EntryKind }) {
@@ -49,7 +63,7 @@ function Menu({ anchor, existing, onPick, onClose, align }: {
   const [q, setQ] = useState('')
   const [active, setActive] = useState(0)
   const [pos, setPos] = useState<{ top: number; left: number; up: boolean } | null>(null)
-  const items = all.filter(k => !q || `${k.label} ${k.hint}`.toLowerCase().includes(q.toLowerCase()))
+  const items = matchSections(all, q)
 
   const place = () => {
     const r = anchor.getBoundingClientRect(), m = ref.current

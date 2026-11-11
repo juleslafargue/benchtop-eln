@@ -16,7 +16,7 @@ An admin opens **Admin → Integrations** (Plugins) and clicks **Add plugin file
 
 To update a plugin, add the new version of the file the same way. You can also copy `.toml` files straight into that folder.
 
-Benchtop ships three examples in `plugins/` (a glovebox log, a hydrogenation checklist and chromatogram/UV-vis readers). They're **off** until an admin switches them on, and they're a good starting point to copy.
+Benchtop ships five examples in `plugins/`: a glovebox log, a hydrogenation checklist, chromatogram and UV-vis readers, cell biology (cell-culture passage, transfection, western blot, flow cytometry) and pharmacology (dose–response assay, PK sampling). They're **off** until an admin switches them on, and they're a good starting point to copy. The pharmacology sections don't fit curves or work out PK parameters: you type in the values from your analysis software.
 
 **Removing a plugin is safe.** Each section made from a plugin keeps a copy of the definition it was made with. Existing records stay readable, verifiable and printable; only new sections of that type can no longer be added. Changing a plugin later doesn't alter sections already made with the old version.
 

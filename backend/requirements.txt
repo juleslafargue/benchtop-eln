@@ -10,3 +10,4 @@ xhtml2pdf>=0.2.16
 cryptography>=42
 asn1crypto>=1.5
 certifi>=2024.2
+Pillow>=9.0  # TIFF previews (0.36). Already installed with RDKit and xhtml2pdf, which need 9.0 or newer; tested with 13.0

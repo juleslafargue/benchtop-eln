@@ -40,3 +40,30 @@ export function reminderText(entries: EntryLike[]): string {
   const { sections, notes } = stillEmpty(entries)
   return [sections.join(', '), ...notes].filter(Boolean).join(' · ')
 }
+
+// ---------------------------------------------------------------- required items (0.36)
+// Unlike the reminder above, these do stop signing: the server refuses until a plugin section's required items are
+// filled in. The dialog shows them before the password is typed (0.35 only said so after). This mirrors
+// backend/app/plugins.py missing_required() rule for rule, so the dialog lists exactly what the server would refuse.
+
+/** Nothing typed or ticked (plugins.is_blank). 0 is a value. */
+const blank = (v: unknown) => v === null || v === undefined || v === false || v === ''
+
+/** The labels of a plugin section's required items still empty, as the server words them. */
+export function missingRequired(content: any): string[] {
+  const schema = content?.schema || {}
+  const vals = content?.values || {}
+  const miss: string[] = (schema.fields || []).filter((f: any) => f.required && blank(vals[f.id])).map((f: any) => f.label)
+  for (const t of schema.tables || []) {
+    const rows = ((content?.rows || {})[t.id] || []).filter((r: any) => Object.values(r).some(v => !blank(v)))
+    if (t.min_rows && rows.length < t.min_rows) miss.push(`${t.label} (at least ${t.min_rows} row${t.min_rows > 1 ? 's' : ''})`)
+    for (const c of t.columns) if (c.required && rows.some((r: any) => blank(r[c.id]))) miss.push(`${t.label}: ${c.label}`)
+  }
+  return miss
+}
+
+/** "Western blot: Uncropped original image attached; Passage: Cell line", or '' when signing isn't held back. */
+export function requiredText(entries: EntryLike[]): string {
+  return entries.filter(e => e.kind === 'custom').map(e => [e.title, missingRequired(e.content || {})] as const)
+    .filter(([, m]) => m.length).map(([title, m]) => `${title}: ${m.join(', ')}`).join('; ')
+}

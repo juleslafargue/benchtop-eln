@@ -1,0 +1,936 @@
+{
+ "_about": "Plugin sections and the required items the server says are missing (backend/app/plugins.py missing_required). Read by backend/tests/test_v36_beyond_chemistry.py and frontend/tests/beyond-chemistry.test.mjs: the sign dialog must list exactly these.",
+ "cases": [
+  {
+   "name": "new",
+   "content": {
+    "schema": {
+     "plugin": "test",
+     "id": "assay",
+     "name": "Assay",
+     "title": "Assay",
+     "description": "",
+     "fields": [
+      {
+       "id": "compound",
+       "label": "Compound",
+       "type": "text",
+       "required": true
+      },
+      {
+       "id": "passage",
+       "label": "Passage",
+       "type": "number",
+       "required": true
+      },
+      {
+       "id": "outcome",
+       "label": "Result",
+       "type": "select",
+       "options": [
+        "Fitted",
+        "Inactive"
+       ],
+       "required": true
+      },
+      {
+       "id": "image",
+       "label": "Uncropped image added",
+       "type": "checkbox",
+       "required": true
+      },
+      {
+       "id": "notes",
+       "label": "Notes",
+       "type": "longtext"
+      }
+     ],
+     "tables": [
+      {
+       "id": "points",
+       "label": "Concentrations",
+       "min_rows": 3,
+       "help": "",
+       "columns": [
+        {
+         "id": "conc",
+         "label": "Concentration",
+         "type": "number",
+         "required": true
+        },
+        {
+         "id": "r1",
+         "label": "Replicate 1",
+         "type": "number"
+        },
+        {
+         "id": "ok",
+         "label": "Included",
+         "type": "checkbox"
+        }
+       ]
+      },
+      {
+       "id": "wells",
+       "label": "Wells",
+       "min_rows": 1,
+       "help": "",
+       "columns": [
+        {
+         "id": "well",
+         "label": "Well",
+         "type": "text",
+         "required": true
+        }
+       ]
+      }
+     ]
+    },
+    "values": {
+     "compound": null,
+     "passage": null,
+     "outcome": null,
+     "image": false,
+     "notes": null
+    },
+    "rows": {
+     "points": [
+      {
+       "conc": null,
+       "r1": null,
+       "ok": false
+      }
+     ],
+     "wells": [
+      {
+       "well": null
+      }
+     ]
+    }
+   },
+   "missing": [
+    "Compound",
+    "Passage",
+    "Result",
+    "Uncropped image added",
+    "Concentrations (at least 3 rows)",
+    "Wells (at least 1 row)"
+   ]
+  },
+  {
+   "name": "complete",
+   "content": {
+    "schema": {
+     "plugin": "test",
+     "id": "assay",
+     "name": "Assay",
+     "title": "Assay",
+     "description": "",
+     "fields": [
+      {
+       "id": "compound",
+       "label": "Compound",
+       "type": "text",
+       "required": true
+      },
+      {
+       "id": "passage",
+       "label": "Passage",
+       "type": "number",
+       "required": true
+      },
+      {
+       "id": "outcome",
+       "label": "Result",
+       "type": "select",
+       "options": [
+        "Fitted",
+        "Inactive"
+       ],
+       "required": true
+      },
+      {
+       "id": "image",
+       "label": "Uncropped image added",
+       "type": "checkbox",
+       "required": true
+      },
+      {
+       "id": "notes",
+       "label": "Notes",
+       "type": "longtext"
+      }
+     ],
+     "tables": [
+      {
+       "id": "points",
+       "label": "Concentrations",
+       "min_rows": 3,
+       "help": "",
+       "columns": [
+        {
+         "id": "conc",
+         "label": "Concentration",
+         "type": "number",
+         "required": true
+        },
+        {
+         "id": "r1",
+         "label": "Replicate 1",
+         "type": "number"
+        },
+        {
+         "id": "ok",
+         "label": "Included",
+         "type": "checkbox"
+        }
+       ]
+      },
+      {
+       "id": "wells",
+       "label": "Wells",
+       "min_rows": 1,
+       "help": "",
+       "columns": [
+        {
+         "id": "well",
+         "label": "Well",
+         "type": "text",
+         "required": true
+        }
+       ]
+      }
+     ]
+    },
+    "values": {
+     "compound": "KX-104",
+     "passage": 12,
+     "outcome": "Fitted",
+     "image": true,
+     "notes": ""
+    },
+    "rows": {
+     "points": [
+      {
+       "conc": 0.1,
+       "r1": 96.2,
+       "ok": false
+      },
+      {
+       "conc": 1,
+       "r1": 71.5,
+       "ok": false
+      },
+      {
+       "conc": 10,
+       "r1": 18.9,
+       "ok": false
+      }
+     ],
+     "wells": [
+      {
+       "well": "A1"
+      }
+     ]
+    }
+   },
+   "missing": []
+  },
+  {
+   "name": "zeros are values",
+   "content": {
+    "schema": {
+     "plugin": "test",
+     "id": "assay",
+     "name": "Assay",
+     "title": "Assay",
+     "description": "",
+     "fields": [
+      {
+       "id": "compound",
+       "label": "Compound",
+       "type": "text",
+       "required": true
+      },
+      {
+       "id": "passage",
+       "label": "Passage",
+       "type": "number",
+       "required": true
+      },
+      {
+       "id": "outcome",
+       "label": "Result",
+       "type": "select",
+       "options": [
+        "Fitted",
+        "Inactive"
+       ],
+       "required": true
+      },
+      {
+       "id": "image",
+       "label": "Uncropped image added",
+       "type": "checkbox",
+       "required": true
+      },
+      {
+       "id": "notes",
+       "label": "Notes",
+       "type": "longtext"
+      }
+     ],
+     "tables": [
+      {
+       "id": "points",
+       "label": "Concentrations",
+       "min_rows": 3,
+       "help": "",
+       "columns": [
+        {
+         "id": "conc",
+         "label": "Concentration",
+         "type": "number",
+         "required": true
+        },
+        {
+         "id": "r1",
+         "label": "Replicate 1",
+         "type": "number"
+        },
+        {
+         "id": "ok",
+         "label": "Included",
+         "type": "checkbox"
+        }
+       ]
+      },
+      {
+       "id": "wells",
+       "label": "Wells",
+       "min_rows": 1,
+       "help": "",
+       "columns": [
+        {
+         "id": "well",
+         "label": "Well",
+         "type": "text",
+         "required": true
+        }
+       ]
+      }
+     ]
+    },
+    "values": {
+     "compound": "KX-104",
+     "passage": 0,
+     "outcome": "Inactive",
+     "image": true
+    },
+    "rows": {
+     "points": [
+      {
+       "conc": 0,
+       "r1": 100,
+       "ok": false
+      },
+      {
+       "conc": 1,
+       "r1": 0,
+       "ok": false
+      },
+      {
+       "conc": 10,
+       "r1": 0.0,
+       "ok": false
+      }
+     ],
+     "wells": [
+      {
+       "well": "A1"
+      }
+     ]
+    }
+   },
+   "missing": []
+  },
+  {
+   "name": "a row with only a zero counts",
+   "content": {
+    "schema": {
+     "plugin": "test",
+     "id": "assay",
+     "name": "Assay",
+     "title": "Assay",
+     "description": "",
+     "fields": [
+      {
+       "id": "compound",
+       "label": "Compound",
+       "type": "text",
+       "required": true
+      },
+      {
+       "id": "passage",
+       "label": "Passage",
+       "type": "number",
+       "required": true
+      },
+      {
+       "id": "outcome",
+       "label": "Result",
+       "type": "select",
+       "options": [
+        "Fitted",
+        "Inactive"
+       ],
+       "required": true
+      },
+      {
+       "id": "image",
+       "label": "Uncropped image added",
+       "type": "checkbox",
+       "required": true
+      },
+      {
+       "id": "notes",
+       "label": "Notes",
+       "type": "longtext"
+      }
+     ],
+     "tables": [
+      {
+       "id": "points",
+       "label": "Concentrations",
+       "min_rows": 3,
+       "help": "",
+       "columns": [
+        {
+         "id": "conc",
+         "label": "Concentration",
+         "type": "number",
+         "required": true
+        },
+        {
+         "id": "r1",
+         "label": "Replicate 1",
+         "type": "number"
+        },
+        {
+         "id": "ok",
+         "label": "Included",
+         "type": "checkbox"
+        }
+       ]
+      },
+      {
+       "id": "wells",
+       "label": "Wells",
+       "min_rows": 1,
+       "help": "",
+       "columns": [
+        {
+         "id": "well",
+         "label": "Well",
+         "type": "text",
+         "required": true
+        }
+       ]
+      }
+     ]
+    },
+    "values": {
+     "compound": "KX-104",
+     "passage": 3,
+     "outcome": "Fitted",
+     "image": true
+    },
+    "rows": {
+     "points": [
+      {
+       "conc": 0,
+       "r1": null,
+       "ok": false
+      },
+      {
+       "conc": 1,
+       "r1": 5,
+       "ok": false
+      },
+      {
+       "conc": 2,
+       "r1": 7,
+       "ok": false
+      }
+     ],
+     "wells": [
+      {
+       "well": "B2"
+      }
+     ]
+    }
+   },
+   "missing": []
+  },
+  {
+   "name": "a filled row without its required cell",
+   "content": {
+    "schema": {
+     "plugin": "test",
+     "id": "assay",
+     "name": "Assay",
+     "title": "Assay",
+     "description": "",
+     "fields": [
+      {
+       "id": "compound",
+       "label": "Compound",
+       "type": "text",
+       "required": true
+      },
+      {
+       "id": "passage",
+       "label": "Passage",
+       "type": "number",
+       "required": true
+      },
+      {
+       "id": "outcome",
+       "label": "Result",
+       "type": "select",
+       "options": [
+        "Fitted",
+        "Inactive"
+       ],
+       "required": true
+      },
+      {
+       "id": "image",
+       "label": "Uncropped image added",
+       "type": "checkbox",
+       "required": true
+      },
+      {
+       "id": "notes",
+       "label": "Notes",
+       "type": "longtext"
+      }
+     ],
+     "tables": [
+      {
+       "id": "points",
+       "label": "Concentrations",
+       "min_rows": 3,
+       "help": "",
+       "columns": [
+        {
+         "id": "conc",
+         "label": "Concentration",
+         "type": "number",
+         "required": true
+        },
+        {
+         "id": "r1",
+         "label": "Replicate 1",
+         "type": "number"
+        },
+        {
+         "id": "ok",
+         "label": "Included",
+         "type": "checkbox"
+        }
+       ]
+      },
+      {
+       "id": "wells",
+       "label": "Wells",
+       "min_rows": 1,
+       "help": "",
+       "columns": [
+        {
+         "id": "well",
+         "label": "Well",
+         "type": "text",
+         "required": true
+        }
+       ]
+      }
+     ]
+    },
+    "values": {
+     "compound": "KX-104",
+     "passage": 3,
+     "outcome": "Fitted",
+     "image": true
+    },
+    "rows": {
+     "points": [
+      {
+       "conc": null,
+       "r1": 50,
+       "ok": false
+      },
+      {
+       "conc": 1,
+       "r1": 5,
+       "ok": false
+      },
+      {
+       "conc": 2,
+       "r1": 7,
+       "ok": false
+      }
+     ],
+     "wells": [
+      {
+       "well": "B2"
+      }
+     ]
+    }
+   },
+   "missing": [
+    "Concentrations: Concentration"
+   ]
+  },
+  {
+   "name": "a ticked box alone fills a row",
+   "content": {
+    "schema": {
+     "plugin": "test",
+     "id": "assay",
+     "name": "Assay",
+     "title": "Assay",
+     "description": "",
+     "fields": [
+      {
+       "id": "compound",
+       "label": "Compound",
+       "type": "text",
+       "required": true
+      },
+      {
+       "id": "passage",
+       "label": "Passage",
+       "type": "number",
+       "required": true
+      },
+      {
+       "id": "outcome",
+       "label": "Result",
+       "type": "select",
+       "options": [
+        "Fitted",
+        "Inactive"
+       ],
+       "required": true
+      },
+      {
+       "id": "image",
+       "label": "Uncropped image added",
+       "type": "checkbox",
+       "required": true
+      },
+      {
+       "id": "notes",
+       "label": "Notes",
+       "type": "longtext"
+      }
+     ],
+     "tables": [
+      {
+       "id": "points",
+       "label": "Concentrations",
+       "min_rows": 3,
+       "help": "",
+       "columns": [
+        {
+         "id": "conc",
+         "label": "Concentration",
+         "type": "number",
+         "required": true
+        },
+        {
+         "id": "r1",
+         "label": "Replicate 1",
+         "type": "number"
+        },
+        {
+         "id": "ok",
+         "label": "Included",
+         "type": "checkbox"
+        }
+       ]
+      },
+      {
+       "id": "wells",
+       "label": "Wells",
+       "min_rows": 1,
+       "help": "",
+       "columns": [
+        {
+         "id": "well",
+         "label": "Well",
+         "type": "text",
+         "required": true
+        }
+       ]
+      }
+     ]
+    },
+    "values": {
+     "compound": "x",
+     "passage": 1,
+     "outcome": "Fitted",
+     "image": true
+    },
+    "rows": {
+     "points": [
+      {
+       "conc": null,
+       "r1": null,
+       "ok": true
+      },
+      {
+       "conc": 1,
+       "r1": 5,
+       "ok": false
+      },
+      {
+       "conc": 2,
+       "r1": 7,
+       "ok": false
+      },
+      {
+       "conc": null,
+       "r1": null,
+       "ok": false
+      }
+     ],
+     "wells": [
+      {
+       "well": "B2"
+      }
+     ]
+    }
+   },
+   "missing": [
+    "Concentrations: Concentration"
+   ]
+  },
+  {
+   "name": "unticked box and empty text",
+   "content": {
+    "schema": {
+     "plugin": "test",
+     "id": "assay",
+     "name": "Assay",
+     "title": "Assay",
+     "description": "",
+     "fields": [
+      {
+       "id": "compound",
+       "label": "Compound",
+       "type": "text",
+       "required": true
+      },
+      {
+       "id": "passage",
+       "label": "Passage",
+       "type": "number",
+       "required": true
+      },
+      {
+       "id": "outcome",
+       "label": "Result",
+       "type": "select",
+       "options": [
+        "Fitted",
+        "Inactive"
+       ],
+       "required": true
+      },
+      {
+       "id": "image",
+       "label": "Uncropped image added",
+       "type": "checkbox",
+       "required": true
+      },
+      {
+       "id": "notes",
+       "label": "Notes",
+       "type": "longtext"
+      }
+     ],
+     "tables": [
+      {
+       "id": "points",
+       "label": "Concentrations",
+       "min_rows": 3,
+       "help": "",
+       "columns": [
+        {
+         "id": "conc",
+         "label": "Concentration",
+         "type": "number",
+         "required": true
+        },
+        {
+         "id": "r1",
+         "label": "Replicate 1",
+         "type": "number"
+        },
+        {
+         "id": "ok",
+         "label": "Included",
+         "type": "checkbox"
+        }
+       ]
+      },
+      {
+       "id": "wells",
+       "label": "Wells",
+       "min_rows": 1,
+       "help": "",
+       "columns": [
+        {
+         "id": "well",
+         "label": "Well",
+         "type": "text",
+         "required": true
+        }
+       ]
+      }
+     ]
+    },
+    "values": {
+     "compound": "",
+     "passage": 2.5,
+     "outcome": "Fitted",
+     "image": false
+    },
+    "rows": {
+     "points": [
+      {
+       "conc": 1,
+       "r1": 1,
+       "ok": false
+      },
+      {
+       "conc": 2,
+       "r1": 2,
+       "ok": false
+      },
+      {
+       "conc": 3,
+       "r1": 3,
+       "ok": false
+      }
+     ],
+     "wells": []
+    }
+   },
+   "missing": [
+    "Compound",
+    "Uncropped image added",
+    "Wells (at least 1 row)"
+   ]
+  },
+  {
+   "name": "missing keys",
+   "content": {
+    "schema": {
+     "plugin": "test",
+     "id": "assay",
+     "name": "Assay",
+     "title": "Assay",
+     "description": "",
+     "fields": [
+      {
+       "id": "compound",
+       "label": "Compound",
+       "type": "text",
+       "required": true
+      },
+      {
+       "id": "passage",
+       "label": "Passage",
+       "type": "number",
+       "required": true
+      },
+      {
+       "id": "outcome",
+       "label": "Result",
+       "type": "select",
+       "options": [
+        "Fitted",
+        "Inactive"
+       ],
+       "required": true
+      },
+      {
+       "id": "image",
+       "label": "Uncropped image added",
+       "type": "checkbox",
+       "required": true
+      },
+      {
+       "id": "notes",
+       "label": "Notes",
+       "type": "longtext"
+      }
+     ],
+     "tables": [
+      {
+       "id": "points",
+       "label": "Concentrations",
+       "min_rows": 3,
+       "help": "",
+       "columns": [
+        {
+         "id": "conc",
+         "label": "Concentration",
+         "type": "number",
+         "required": true
+        },
+        {
+         "id": "r1",
+         "label": "Replicate 1",
+         "type": "number"
+        },
+        {
+         "id": "ok",
+         "label": "Included",
+         "type": "checkbox"
+        }
+       ]
+      },
+      {
+       "id": "wells",
+       "label": "Wells",
+       "min_rows": 1,
+       "help": "",
+       "columns": [
+        {
+         "id": "well",
+         "label": "Well",
+         "type": "text",
+         "required": true
+        }
+       ]
+      }
+     ]
+    },
+    "values": {},
+    "rows": {}
+   },
+   "missing": [
+    "Compound",
+    "Passage",
+    "Result",
+    "Uncropped image added",
+    "Concentrations (at least 3 rows)",
+    "Wells (at least 1 row)"
+   ]
+  }
+ ]
+}

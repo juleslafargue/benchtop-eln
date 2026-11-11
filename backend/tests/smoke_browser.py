@@ -223,6 +223,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += scanning(browser, tok["slaurent"])
         problems += supporting_info(browser, tok["slaurent"])
         problems += yearly_archive(browser, tok["hweiss"], tok["slaurent"])
+        problems += beyond_chemistry(browser, tok["hweiss"])
         browser.close()
     return problems
 
@@ -2364,6 +2365,161 @@ def yearly_archive(browser, token: str, record_token: str) -> list[tuple[str, st
                 (samples / "record.pdf").write_bytes(r.content)
     except Exception as e:  # noqa: BLE001
         bad("error", str(e).splitlines()[0][:160])
+    return found
+
+
+def _tiff_bytes() -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (480, 240), (60, 90, 140)).save(buf, format="TIFF", compression="tiff_lzw")
+    return buf.getvalue()
+
+
+def beyond_chemistry(browser, admin_token: str) -> list[tuple[str, str, str, str]]:
+    """0.36, easier for biologists and pharmacologists, as a new account sees it (so it doesn't depend on whose records
+    the demo lab has): New experiment's "Without chemistry", remembered next time; a header row pasted into a blank
+    table becomes the column names, with "Keep it as data"; a TIFF in a Files section is a picture, not a broken image;
+    the sign dialog says which required plugin items are empty before the password, and Sign stays off; a record lists
+    the records that mention it ("Mentioned in"), and one nobody mentions has no box; the follow-up dialog closes once
+    the follow-up is made; the new record fits a phone."""
+    print("Beyond chemistry: start without chemistry, pasted headers, TIFF, required items, Mentioned in, follow-ups…", flush=True)
+    A = {"Authorization": "Bearer " + admin_token}
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": "/"}
+
+    def bad(kind: str, what: str) -> None:
+        found.append(("beyond chemistry", where["path"], kind, what[:220]))
+    pw = "a-long-smoke-password"
+    httpx.post(B + "/api/users", headers=A, json={"username": "bbiologist", "password": pw, "must_change": False,
+                                                 "full_name": "Bea Biologist", "role": "scientist"})
+    token = httpx.post(B + "/api/auth/login", json={"username": "bbiologist", "password": pw}).json()["token"]
+    H = {"Authorization": "Bearer " + token}
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Bea's assays"}).json()
+    httpx.patch(B + "/api/auth/me", headers=H, json={"preferences": {"guide_dismissed": True, "default_notebook_id": nb["id"],
+                                                                     "first_steps_dismissed": True}})
+    target = httpx.post(B + "/api/experiments", headers=H, json={"title": "Batch to be assayed", "notebook_id": nb["id"]}).json()
+    if httpx.post(f"{B}/api/experiments/{target['id']}/sign", headers=H, json={"password": pw}).status_code != 200:
+        bad("setup", "couldn't sign the record to follow up")
+    if "pharmacology/dose-response" not in [s["key"] for s in httpx.get(B + "/api/plugins/sections", headers=H).json()]:
+        httpx.post(B + "/api/plugins/pharmacology/enabled", headers=A, json={"enabled": True})
+
+    ctx = browser.new_context(viewport={"width": 1300, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+    pg = ctx.new_page()
+    pg.on("pageerror", lambda e: bad("page error", str(e)[:200]))
+    pg.on("console", lambda m: m.type == "error" and not any(i in m.text for i in IGNORE) and bad("console error", m.text[:200]))
+    new = None
+    try:
+        # New experiment: Without chemistry, then remembered
+        pg.goto(B + "/")
+        pg.wait_for_load_state("networkidle")
+        pg.keyboard.press("n")
+        start = pg.locator("dialog[open] select").last
+        start.wait_for(timeout=10000)
+        if "Without chemistry (aim, procedure, results)" not in start.inner_text():
+            bad("start from", f"no Without chemistry choice: {start.inner_text()[:150]!r}")
+        start.select_option("no_chemistry")
+        pg.locator("dialog[open] input.input").first.fill("Cell viability of the batch, 72 h")
+        pg.click("dialog[open] button:has-text('Create experiment')")
+        pg.wait_for_url(re.compile(r"/experiments/\d+$"), timeout=15000)
+        new = httpx.get(B + "/api/experiments/" + pg.url.rsplit("/", 1)[1], headers=H).json()
+        titles = [e["title"] for e in new["entries"]]
+        if titles != ["Aim", "Procedure", "Observations & results"]:
+            bad("start from", f"Without chemistry made {titles}")
+        pg.wait_for_timeout(500)
+        if httpx.get(B + "/api/auth/me", headers=H).json()["preferences"].get("start_from") != "no_chemistry":
+            bad("start from", "the choice wasn't remembered in the account")
+        pg.goto(B + "/")
+        pg.wait_for_load_state("networkidle")
+        pg.keyboard.press("n")
+        pg.locator("dialog[open] select").last.wait_for(timeout=10000)
+        if pg.locator("dialog[open] select").last.input_value() != "no_chemistry":
+            bad("start from", "New experiment didn't start from the last choice")
+        pg.keyboard.press("Escape")
+
+        # the new record: a blank table, a TIFF, a dose–response with its required items empty, and a mention
+        where["path"] = f"/experiments/{new['id']}"
+        table = httpx.post(f"{B}/api/experiments/{new['id']}/entries", headers=H, json={"kind": "table", "title": "Data"}).json()
+        att = httpx.post(f"{B}/api/experiments/{new['id']}/attachments", headers=H, files={"file": ("blot.tif", _tiff_bytes(), "image/tiff")}).json()
+        httpx.post(f"{B}/api/experiments/{new['id']}/entries", headers=H, json={"kind": "file", "title": "Blot", "content": {"attachment_ids": [att["id"]]}})
+        httpx.post(f"{B}/api/experiments/{new['id']}/entries", headers=H, json={"kind": "custom", "title": "Dose–response",
+                                                                                "plugin_section": "pharmacology/dose-response"})
+        aim = next(e for e in new["entries"] if e["title"] == "Aim")
+        httpx.put(f"{B}/api/entries/{aim['id']}", headers=H, json={"content": {"html": f"<p>The batch from {target['eid']}.</p>"}})
+        pg.goto(B + where["path"])
+        cell = pg.locator(f"#entry-{table['id']} tbody input").first
+        cell.wait_for(timeout=15000)
+        cell.click()
+        cell.evaluate("(el, t) => { const dt = new DataTransfer(); dt.setData('text/plain', t); "
+                      "el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })) }",
+                      "Sample\tConcentration (µM)\tViability, 72 h (% of vehicle)\nVehicle\t0\t100\nKX-104\t1\t71.5")
+        pg.wait_for_timeout(400)
+        heads = [pg.locator(f"#entry-{table['id']} thead input").nth(i).input_value() for i in range(3)]
+        if heads != ["Sample", "Concentration (µM)", "Viability, 72 h (% of vehicle)"]:
+            bad("pasted table", f"the columns are {heads}")
+        if pg.locator(".toast:has-text('First row used as column names')").count() != 1:
+            bad("pasted table", "no “First row used as column names” message")
+        else:
+            pg.click(".toast button:has-text('Keep it as data')")
+            pg.wait_for_timeout(300)
+            first = pg.locator(f"#entry-{table['id']} tbody input").first.input_value()
+            if pg.locator(f"#entry-{table['id']} thead input").nth(1).input_value() != "Value" or first != "Sample":
+                bad("pasted table", "Keep it as data didn't put the first row back as data")
+        img = pg.locator(".files img.preview")
+        img.first.wait_for(timeout=15000)
+        if not img.first.evaluate("i => i.complete && i.naturalWidth > 0"):
+            bad("TIFF", "the TIFF's preview is a broken image")
+        if pg.locator(".files .no-preview:has-text('Preview of the TIFF')").count() != 1:
+            bad("TIFF", "the preview isn't said to be one")
+        if pg.locator(".mentioned-in").count():
+            bad("mentioned in", "a box on a record nobody mentions")
+        pg.click(".rail button:has-text('Sign as author')")
+        pg.wait_for_selector("dialog[open] .sign-required", timeout=15000)
+        said = pg.inner_text("dialog[open] .sign-required")
+        if "Dose–response: Compound, Batch, Assay, Result" not in said:
+            bad("required items", f"the sign dialog says {said[:160]!r}")
+        pg.fill("dialog[open] input[type=password]", pw)
+        if pg.is_enabled("dialog[open] button:has-text('Sign and lock')"):
+            bad("required items", "Sign is on with required items empty")
+        pg.keyboard.press("Escape")
+
+        # Mentioned in, on the record it names; then a follow-up of it, and the dialog goes
+        where["path"] = f"/experiments/{target['id']}"
+        pg.goto(B + where["path"])
+        pg.wait_for_selector(".rail button:has-text('Make a follow-up…')", timeout=15000)
+        pg.wait_for_load_state("networkidle")
+        box = pg.locator(".mentioned-in")
+        if not box.count() or new["eid"] not in box.inner_text():
+            bad("mentioned in", f"{new['eid']} isn't listed under Mentioned in: {box.inner_text()[:120] if box.count() else 'no box'!r}")
+        pg.click(".rail button:has-text('Make a follow-up…')")
+        pg.click("dialog[open] button:has-text('Create follow-up')")
+        pg.wait_for_url(lambda u: re.search(r"/experiments/(\d+)$", u) and not u.endswith(f"/experiments/{target['id']}"), timeout=15000)
+        pg.wait_for_load_state("networkidle")
+        pg.wait_for_timeout(800)
+        if pg.locator("dialog[open]").count():
+            bad("follow-up", f"a dialog is still open on the new record: {pg.inner_text('dialog[open]')[:100]!r}")
+        if not pg.input_value("textarea.exp-title-input").startswith(f"Follow-up to {target['eid']}"):
+            bad("follow-up", f"the new record is {pg.input_value('textarea.exp-title-input')[:80]!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("error", str(e).splitlines()[0][:160])
+    ctx.close()
+    # the new record on a phone
+    if new:
+        where["path"] = f"/experiments/{new['id']} (phone)"
+        ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{token}')")
+        pg = ctx.new_page()
+        try:
+            pg.goto(f"{B}/experiments/{new['id']}")
+            pg.wait_for_selector(".files img.preview", timeout=15000)
+            over = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+            if over > 2:
+                bad("too wide", f"page is {over}px wider than the screen")
+        except Exception as e:  # noqa: BLE001
+            bad("error", str(e).splitlines()[0][:160])
+        ctx.close()
     return found
 
 

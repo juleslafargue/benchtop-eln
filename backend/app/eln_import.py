@@ -41,7 +41,7 @@ from sqlmodel import Session, select
 
 from . import audit, diskspace
 from .config import settings
-from .eln import RECORD_FILE, RECORD_FORMAT, scratch_dir
+from .eln import HOW_TO_CHECK, PUBLISHER, RECORD_FILE, RECORD_FORMAT, scratch_dir
 from .models import (Attachment, Entry, EntryKind, EntryVersion, Experiment, ExperimentStatus, Notebook, User, utcnow)
 
 log = logging.getLogger("benchtop.eln_import")
@@ -233,6 +233,7 @@ class Crate:
         pub = self.by_id.get((_refs(desc.get("sdPublisher")) or [""])[0]) or {}
         software = next((n for n in self.by_id.values() if "SoftwareApplication" in _types(n)), {})
         self.source = _str(pub.get("name") or software.get("name") or "", 120) or "another ELN"
+        self.from_benchtop = pub.get("@id") == PUBLISHER
         self.source_url = _str(pub.get("url") or software.get("url"), 300)
         self.exported = _date(desc.get("dateCreated") or self.root_node.get("datePublished"))
 
@@ -314,6 +315,8 @@ class Crate:
         loose = []
         for f in [i for i in top if i not in importable]:
             info = self.member(f)
+            if info is not None and self.from_benchtop and self.rel(info) == HOW_TO_CHECK:
+                continue  # Benchtop's own guide to checking the file (0.36), not data
             if info is not None and info.filename not in claimed and "File" in _types(self.by_id.get(f, {})):
                 loose.append(self._file(f, ""))
         if loose:

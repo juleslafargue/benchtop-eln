@@ -84,6 +84,9 @@ test('dashboard: the first-record card, and "Add your group" for an admin on the
   const first = f({ firstRecord: true, alone: false })
   assert.match(first, /Your first record/)
   assert.match(first, /Sign it and choose a witness/)
+  // 0.36: written for any lab, not only chemists
+  assert.match(first, /<b>Write what you did\.<\/b> For a reaction, draw or paste it and the table works out the amounts; for anything\s+else, add text, tables and files\./)
+  assert.doesNotMatch(first, /Write the reaction and the procedure/)
   assert.match(first, />Hide</)
   assert.doesNotMatch(first, /Add your group/)
   const admin = f({ firstRecord: true, alone: true })

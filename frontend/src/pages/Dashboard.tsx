@@ -113,8 +113,8 @@ export function FirstSteps({ firstRecord, alone, canWrite, onNew, onHide }: {
           <li><b>A notebook to keep it in.</b> If you don't have one yet, New experiment makes one for you, named after you and
             shared with your group if you're in one.</li>
           <li><b>New experiment.</b> Give it a title. It gets a number, such as EXP-00001, that stays with it.</li>
-          <li><b>Write the reaction and the procedure.</b> Draw or paste the reaction and the table works out the amounts.
-            Everything saves as you type.</li>
+          <li><b>Write what you did.</b> For a reaction, draw or paste it and the table works out the amounts; for anything
+            else, add text, tables and files. Everything saves as you type.</li>
           <li><b>Sign it and choose a witness.</b> When it's done, press Sign as author and pick someone in your group to witness it.</li>
         </ol>
         <div className="row" style={{ gap: 10 }}>

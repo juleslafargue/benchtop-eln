@@ -597,6 +597,30 @@ def test_the_documented_examples_run(client, me, tmp_path, monkeypatch):
         assert len(bt.get("/api/lots", params={"q": "SA-004"}).json()) == len(lots)  # a second run adds nothing
 
 
+# ------------------------------------------------------------------ making an experiment, and what mentions it (0.36)
+
+MENTION = {"id": int, "eid": str, "title": str, "status": str, "is_template": bool, "owner": (dict, NONE), "updated_at": "time"}
+
+
+def test_making_experiments_and_finding_what_mentions_them(client, me, nb, other):
+    standard = shaped(new_exp(client, me, nb, "Contract standard start"), EXPERIMENT, "POST /api/experiments")
+    titles = lambda e: [x["title"] for x in client.get(f"/api/experiments/{e['id']}", headers=me["read"]).json()["entries"]]  # noqa: E731
+    assert titles(standard)[:2] == ["Aim", "Reaction"]
+    r = client.post("/api/experiments", headers=me["write"], json={"title": "Contract plain start", "notebook_id": nb["id"],
+                                                                   "sections": "no_chemistry"})
+    assert r.status_code == 201, r.text
+    plain = shaped(r.json(), EXPERIMENT, "POST /api/experiments (no_chemistry)")
+    assert titles(plain) == ["Aim", "Procedure", "Observations & results"]
+    assert client.post("/api/experiments", headers=me["read"], json={"title": "x", "notebook_id": nb["id"]}).status_code == 403
+    aim = next(e for e in client.get(f"/api/experiments/{plain['id']}", headers=me["read"]).json()["entries"] if e["title"] == "Aim")
+    client.put(f"/api/entries/{aim['id']}", headers=me["write"], json={"content": {"html": f"<p>Uses {standard['eid']}.</p>"}})
+    m = client.get(f"/api/experiments/{standard['id']}/mentioned-in", headers=me["read"]).json()
+    assert m["total"] == 1
+    assert [x["eid"] for x in all_shaped(m["items"], MENTION, "GET /api/experiments/{id}/mentioned-in")] == [plain["eid"]]
+    assert client.get(f"/api/experiments/{standard['id']}/mentioned-in", headers=me["read"], params={"limit": 101}).status_code == 422
+    assert client.get(f"/api/experiments/{other['experiment']['id']}/mentioned-in", headers=me["read"]).status_code == 404
+
+
 # ------------------------------------------------------------------ every documented endpoint is checked here
 
 COVERED = {
@@ -608,6 +632,7 @@ COVERED = {
     "POST /api/materials/{id}/lots", "GET /api/lots", "GET /api/scan", "PATCH /api/lots/{id}", "POST /api/lots/{id}/transactions",
     "GET /api/lots/{id}/transactions", "POST /api/lots/transactions/{id}/reverse", "POST /api/materials/register-product",
     "GET /api/compounds", "GET /api/samples/lookup", "GET /api/search",
+    "POST /api/experiments", "GET /api/experiments/{id}/mentioned-in",
 }
 
 

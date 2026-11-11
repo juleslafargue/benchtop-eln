@@ -3,17 +3,35 @@ import { api, downloadAuthed, type Attachment } from '../api'
 import { useApp } from '../App'
 import type { EntryEditorProps } from './EntryCard'
 import { hydrogensInFormula, parseSpectrumBuffer } from '../spectra'
-import { canViewSpectrum, needsReadCheck } from '../viewable'
+import { canViewSpectrum, formatName, needsReadCheck, pictureKind } from '../viewable'
 import SpectrumViewer, { type SavedAnalysis } from './SpectrumViewer'
 
+/** An attached picture. A TIFF is shown from a PNG the server makes for viewing (0.36: browsers can't show TIFF, so it
+ *  was a broken image); the file itself is unchanged, and Download gives it as it is. A format no browser shows gets a
+ *  line saying so instead of a broken image. */
 function ImagePreview({ att }: { att: Attachment }) {
-  const [url, setUrl] = useState<string | null>(null)
+  const kind = pictureKind(att)
+  const [pic, setPic] = useState<{ url: string; pages: number; scaled: boolean } | null>(null)
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
-    let u: string | null = null
-    api.raw(`/api/attachments/${att.id}?inline=true`).then(r => r.blob()).then(b => { u = URL.createObjectURL(b); setUrl(u) }).catch(() => {})
-    return () => { if (u) URL.revokeObjectURL(u) }
-  }, [att.id])
-  return url ? <img className="preview" src={url} alt={att.filename} /> : null
+    if (kind !== 'img' && kind !== 'preview') return
+    let u: string | null = null, live = true
+    api.raw(kind === 'preview' ? `/api/attachments/${att.id}/preview` : `/api/attachments/${att.id}?inline=true`).then(async r => {
+      const b = await r.blob()
+      if (!live) return
+      u = URL.createObjectURL(b)
+      setPic({ url: u, pages: Number(r.headers.get('X-Pages')) || 1, scaled: r.headers.get('X-Scaled') === '1' })
+    }).catch(() => { if (live) setFailed(true) })
+    return () => { live = false; if (u) URL.revokeObjectURL(u) }
+  }, [att.id, kind])
+  if (kind === 'none' || (kind === 'preview' && failed))
+    return <p className="faint no-preview">No preview for {formatName(att)}. Download it to view.</p>
+  if (!pic) return null
+  const notes = kind === 'preview' ? [pic.pages > 1 ? `page 1 of ${pic.pages}` : '', pic.scaled ? 'brightness scaled for the screen' : ''].filter(Boolean) : []
+  return <>
+    <img className="preview" src={pic.url} alt={att.filename} />
+    {kind === 'preview' && <p className="faint no-preview">Preview of the TIFF{notes.length ? ` (${notes.join(', ')})` : ''}; Download gives the file itself.</p>}
+  </>
 }
 
 const size = (n: number) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n > 1e3 ? `${(n / 1e3).toFixed(0)} kB` : `${n} B`)
@@ -87,7 +105,7 @@ export default function FileEntry({ content, onChange, readOnly, experimentId, a
               <button className="btn sm" onClick={() => downloadAuthed(`/api/attachments/${a.id}`, a.filename)}>Download</button>
               {!readOnly && a.from_instrument && <button className="btn ghost sm" onClick={() => notMine(a)} title="It isn't this experiment's: send it back to the Inbox">Not mine</button>}
               {!readOnly && !a.from_instrument && <button className="btn ghost sm" onClick={() => onChange({ ...content, attachment_ids: ids.filter(i => i !== a.id) })}>Unlink</button>}
-              {a.content_type.startsWith('image/') && <div style={{ flexBasis: '100%' }}><ImagePreview att={a} /></div>}
+              {pictureKind(a) && <div style={{ flexBasis: '100%' }}><ImagePreview att={a} /></div>}
               {viewing === a.id && <div style={{ flexBasis: '100%' }}><SpectrumViewer attachmentId={a.id} filename={a.filename} expectedH={hydrogensInFormula(context.productFormula)} productSmiles={context.productSmiles} productMW={context.productMW}
                 saved={(content.analyses || {})[a.id] as SavedAnalysis | undefined}
                 onSave={readOnly ? undefined : an => onChange({ ...content, analyses: { ...(content.analyses || {}), [a.id]: an } })} /></div>}

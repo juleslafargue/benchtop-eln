@@ -93,6 +93,14 @@ test('it starts with your first record, and has a part for admins setting up the
   assert.doesNotMatch(t, /Record hazards in notebook/)
 })
 
+test('it tells someone without a reaction where to start, and where mentions show (0.36)', () => {
+  const t = text(render())
+  const first = text(render().split('<section id="first"')[1].split('</section>')[0])
+  assert.match(first, /No reaction\? Choose Without chemistry under Start from, and go straight to writing the procedure\./)
+  assert.match(t, /Without chemistry \(under Start from\) gives just Aim, Procedure and Observations & results; Benchtop remembers which you chose\./)
+  assert.match(t, /EXP-00025 then lists yours under Mentioned in/)
+})
+
 test('it covers what a first-time user tripped over (0.29 review)', () => {
   const t = text(render())
   assert.match(t, /making a notebook of your own, and choose who can open it/, 'make your own notebook first')

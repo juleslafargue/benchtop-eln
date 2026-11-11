@@ -4,7 +4,7 @@ import { useApp } from '../App'
 import { api } from '../api'
 import Modal from './Modal'
 
-/** Make a follow-up of a signed record: a new draft, linked to it, for results that came back after signing.
+/** Make a follow-up of a signed record: a new draft, linked to it, for results or work that came after signing.
  *  From the Inbox it also takes the waiting file; from a record's page it starts empty. */
 export default function FollowUpDialog({ eid, title, notebookId, url, onClose, onDone }: {
   eid: string; title: string; notebookId: number | null
@@ -36,7 +36,8 @@ export default function FollowUpDialog({ eid, title, notebookId, url, onClose, o
     </>}>
       <div className="stack" style={{ gap: 12 }}>
         <p className="faint" style={{ margin: 0 }}>{eid} is signed, so nothing more can be added to it. A follow-up is a new draft, linked
-          to {eid} both ways, for results that came back afterwards (HRMS, elemental analysis, a late spectrum). {eid} itself doesn't change.</p>
+          to {eid} both ways, for what came afterwards: late results (HRMS, a spectrum) or more work with the same material, such as an
+          assay. {eid} itself doesn't change.</p>
         <label className="field">Title<input className="input" value={name} maxLength={300} onChange={e => setName(e.target.value)} /></label>
         <label className="field">Notebook
           <select className="select" value={nb} onChange={e => setNb(e.target.value === '' ? '' : Number(e.target.value))}>

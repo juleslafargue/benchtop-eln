@@ -478,6 +478,90 @@ def _preview(title: str, exps: list[Experiment], folder_of: dict[int, str]) -> b
             f"<ul>{rows}</ul>").encode()
 
 
+HOW_TO_CHECK = "HOW-TO-CHECK.txt"
+# printed in HOW-TO-CHECK.txt, and run exactly as printed by the tests (tests/test_v36_beyond_chemistry.py)
+HOW_TO_RECOMPUTE = """python3 -c "import json, hashlib, sys
+d = json.load(open(sys.argv[1], encoding='utf-8'))
+s = json.dumps(d['snapshot'], sort_keys=True, separators=(',', ':'))
+print(hashlib.sha256(s.encode()).hexdigest())" record.benchtop.json"""
+
+
+def _how_to_check() -> bytes:
+    """A plain-text guide at the top of the file (0.36): what each file is, and how to check a record and its trusted
+    timestamps with ordinary tools, without Benchtop."""
+    rule = "-" * 72
+    return f"""How to check these records without Benchtop
+{rule}
+Exported from Benchtop ELN {__version__} on {datetime.now(timezone.utc):%d %B %Y}.
+
+A .eln file is a zip in the ELN Consortium's shared format (RO-Crate 1.2). Other lab notebooks
+(eLabFTW, RSpace, Kadi4Mat, another Benchtop) can import it, and everything in it can be read
+and checked with ordinary tools.
+
+WHAT EACH FILE IS
+
+ro-crate-metadata.json  The list of everything here: each record's title, people and dates, and
+                        each file's size and SHA-256.
+ro-crate-preview.html   A page listing the records. Open it in a browser.
+HOW-TO-CHECK.txt        This file.
+
+Each record has a folder, such as "EXP-00042 - Title", holding:
+
+report.html             The record as printed, readable in any browser. Its pictures are for
+                        reading: a TIFF is shown from a PNG made for viewing. The files
+                        themselves are in files/.
+record.benchtop.json    Everything Benchtop knows about the record. "snapshot" is exactly what a
+                        signature covers; "content_hash" is its fingerprint (SHA-256).
+files/                  Every attached file, unchanged.
+chemistry/              The reaction (.rxn) and each compound (.mol), when there is a reaction.
+signatures/             A trusted-timestamp proof (.zip) for each signature, when the lab uses
+                        trusted timestamps.
+
+HOW TO RECOMPUTE A RECORD'S FINGERPRINT
+
+The fingerprint is the SHA-256 of the record's snapshot written as compact JSON, with keys in
+sorted order, the way Python's json module writes it (sort_keys=True, separators=(',', ':'),
+non-ASCII characters escaped). With Python 3, in the record's folder:
+
+{HOW_TO_RECOMPUTE}
+
+The result should equal "content_hash" in the same file. For a signed record it should also
+equal the "content_hash" of its latest signature (under "signatures"), the fingerprint printed
+in report.html, and "content_sha256" in that signature's timestamp proof. (An earlier signature,
+withdrawn before the record was changed, has the fingerprint of what it signed then.) Other JSON
+tools may write numbers or characters differently and give another SHA-256.
+
+Each attached file's SHA-256 is listed under "snapshot", "attachments" (and in
+ro-crate-metadata.json). To check a file against it:
+    macOS, Linux:  shasum -a 256 "files/blot.tif"
+    Windows:       certutil -hashfile "files\\blot.tif" SHA256
+
+HOW TO CHECK A TRUSTED TIMESTAMP
+
+When a record has signatures/, each .zip in it holds a signature's proof from an independent
+timestamp service (RFC 3161):
+    signature.json   the exact text that was timestamped (the record, the signer, the time and
+                     the record's content_sha256)
+    token.tst        the timestamp token from the service
+    tsa-certs.pem    the service's certificates, as included in the token
+    README.txt       the same steps, for that signature
+
+Unzip it, then, with OpenSSL (macOS, Linux):
+    openssl ts -verify -data signature.json -in token.tst -token_in \\
+        -CAfile /etc/ssl/cert.pem -untrusted tsa-certs.pem
+
+On Debian and Ubuntu the -CAfile is /etc/ssl/certs/ca-certificates.crt. "Verification: OK"
+means the service certifies that signature.json, and so the content_sha256 in it, existed at the
+time in the token (openssl ts -reply -token_in -in token.tst -text shows that time).
+
+A timestamp service's certificates expire, and in a few years its root certificate may no longer
+be on your computer. Keep a copy of the service's root certificate with these files: you may
+need to give it to openssl as -CAfile. If openssl says a certificate has expired, check the
+token as of its own time by adding -attime followed by that time in seconds since 1970 (as
+OpenSSL 3 allows).
+""".encode()
+
+
 def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, name: str,
            description: str = "", with_comments: bool = True, licence: Optional[str] = None) -> dict[str, Any]:
     """Write a .eln file with these experiments to `out`. The caller has checked the user may read each of them.
@@ -506,6 +590,12 @@ def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, 
                    "result": _ref("./")})
         preview = _preview(root, exps, folder_of)
         crate.write_bytes("ro-crate-preview.html", preview)
+        how = _how_to_check()  # 0.36: last in the root's hasPart, after the records (importers take the Datasets only)
+        crate.write_bytes(HOW_TO_CHECK, how)
+        parts.append(_ref(crate.add({"@id": _id(HOW_TO_CHECK), "@type": "File", "name": HOW_TO_CHECK, "encodingFormat": "text/plain",
+                                      "contentSize": str(len(how)), "sha256": _sha(how),
+                                      "description": "How to check these records without Benchtop: what each file is, how to "
+                                                     "recompute a record's fingerprint, and how to check a trusted timestamp"})))
         root_node = {"@id": "./", "@type": "Dataset", "conformsTo": [_ref(CRATE), _ref(ELN_SPEC)], "name": f"{root}.eln",
                      "description": description or f"{len(exps)} experiment{'s' if len(exps) != 1 else ''} exported from Benchtop ELN",
                      "datePublished": now, "license": _ref(lic), "hasPart": parts,

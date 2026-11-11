@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, displayName, type Experiment, type WitnessCandidate } from '../api'
 import Modal from './Modal'
-import { reminderText } from '../signCheck'
+import { reminderText, requiredText } from '../signCheck'
 
 export type SignAction = 'sign' | 'witness' | 'reject' | 'withdraw' | 'void'
 
@@ -39,11 +39,14 @@ export default function SignDialog({ exp, action, onDone, onClose }: {
   // Read afresh, from what's saved (every section was saved before this opened): the page's copy doesn't follow what was
   // typed into the sections since it opened, so it isn't shown even for a moment (0.30.1)
   const [empty, setEmpty] = useState('')
+  // 0.36: a plugin section's required items still empty. Unlike the reminder, these do stop signing (the server refuses,
+  // by the same rule): said before the password is typed, and Sign stays off until they're filled in
+  const [required, setRequired] = useState('')
   useEffect(() => {
     if (action === 'witness' || action === 'reject') { setEmpty(reminderText(exp.entries)); return }  // 0.35: a signed record is locked, so what's empty now was empty when it was signed
     if (action !== 'sign') return
     let live = true
-    api.get<Experiment>(`/api/experiments/${exp.id}`).then(x => { if (live) setEmpty(reminderText(x.entries)) }).catch(() => {})
+    api.get<Experiment>(`/api/experiments/${exp.id}`).then(x => { if (live) { setEmpty(reminderText(x.entries)); setRequired(requiredText(x.entries)) } }).catch(() => {})
     return () => { live = false }
   }, [action, exp.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -60,13 +63,15 @@ export default function SignDialog({ exp, action, onDone, onClose }: {
   return (
     <Modal title={c.title} onClose={onClose} footer={<>
       <button className="btn" onClick={onClose}>Cancel</button>
-      <button className={`btn ${c.danger ? 'danger' : 'primary'}`} disabled={busy || !password || (c.needsReason && !comment.trim())} onClick={go}>{c.button}</button>
+      <button className={`btn ${c.danger ? 'danger' : 'primary'}`} disabled={busy || !password || (c.needsReason && !comment.trim()) || (action === 'sign' && !!required)} onClick={go}>{c.button}</button>
     </>}>
       <form className="stack" onSubmit={e => { e.preventDefault(); go() }}>
         <p style={{ margin: 0 }}><b>{exp.eid}</b> {exp.title}</p>
         <p className="notice" style={{ margin: 0 }}>{c.meaning}</p>
-        {action === 'sign' && empty && <p className="sign-reminder" role="note"><b>Still empty:</b> {empty}. <span className="faint">You can sign anyway; once signed,
-          later results go in a follow-up.</span></p>}
+        {action === 'sign' && required && <p className="sign-required" role="alert"><b>Fill in the required items before signing:</b> {required}.
+          <span className="faint"> Close this, fill them in, then sign.</span></p>}
+        {action === 'sign' && empty && <p className="sign-reminder" role="note"><b>Still empty:</b> {empty}.{!required && <span className="faint"> You can sign anyway; once signed,
+          later results go in a follow-up.</span>}</p>}
         {(action === 'witness' || action === 'reject') && empty && <p className="sign-reminder" role="note"><b>Still empty when it was signed:</b> {empty}.</p>}
         {action === 'sign' && people && <label className="field">Ask someone to witness it
           <select className="select" value={witnessId} onChange={e => setWitnessId(e.target.value ? Number(e.target.value) : '')}>

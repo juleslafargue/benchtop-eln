@@ -137,6 +137,12 @@ def _clean_prefs(p: dict[str, Any]) -> dict[str, Any]:
             if isinstance(v, bool):
                 out[k] = v
             continue
+        if k == "start_from":  # 0.36: what New experiment starts from: "standard", "no_chemistry" or a template's id
+            if v in ("standard", "no_chemistry"):
+                out[k] = v
+            elif isinstance(v, int) and not isinstance(v, bool) and _whole(v) is not None:
+                out[k] = v
+            continue
         if k in ("nav", "nav_hidden"):  # sidebar order and hidden items, as known keys
             out[k] = list(dict.fromkeys(i for i in v if i in NAV_KEYS)) if isinstance(v, list) else []
             continue
