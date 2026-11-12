@@ -16,7 +16,8 @@ Only the person who started a job can see, feed or download it. If Benchtop stop
 it stopped and can be started again.
 
 Every record is only read. The PDF carries, inside it, each record's data (its snapshot, fingerprint and signatures)
-and its timestamp proofs, as PDF/A-3 associated files.
+and its timestamp proofs, as PDF/A-3 associated files. Where the lab doesn't use trusted timestamps there are none,
+and the PDF says so rather than describing proofs that aren't there (0.36.1).
 """
 from __future__ import annotations
 
@@ -656,7 +657,9 @@ def _page(body: str, size: str, title: str) -> str:
 
 
 def _cover(title: str, scope: str, span: Span, c: dict[str, int], user: User, made: datetime, size: str,
-           archival: bool = True) -> str:
+           archival: bool = True, stamps: tuple[int, int] = (0, 0)) -> str:
+    """`stamps`: (signatures in the archive, how many have a trusted timestamp). The cover says what is attached as it
+    is (0.36.1: it spoke of timestamp proofs in a lab that doesn't timestamp)."""
     witnessed, awaiting, voided = c["witnessed"], c["awaiting_witness"], c["voided"]
     parts = [f"{witnessed} witnessed", f"{awaiting} awaiting witness"] + ([f"{voided} voided"] if voided else [])
     return _page(f"""<div class='cover'><h1>{_esc(title)}</h1><div class='rule'></div>
@@ -671,17 +674,62 @@ a witness are both included, and each says which. Voided records are included an
 and date; a record voided before it was ever signed is placed by the date it was voided.</p>
 <p><b>What is left out.</b> Drafts (records not signed), templates, records imported read-only from other notebooks, and
 records you can't open.</p>
-{INSIDE if archival else NOT_INSIDE}</div></div>""", size, title)
+{_inside(*stamps) if archival else _not_inside(*stamps)}</div></div>""", size, title)
 
 
-INSIDE = """<p><b>Inside this PDF.</b> Each record's own data (what its signatures cover, its fingerprint and its signatures) and the
-proofs of its trusted timestamps are attached to this file; the last page says how to open and check them. The
-instrument files themselves are not attached: they are in Benchtop, and in the record's .eln export, each with the
-SHA-256 fingerprint printed under its spectrum here.</p>
+def stamped(session: Session, exp: Experiment) -> tuple[int, int]:
+    """A record's signatures, and how many of them have a trusted timestamp (a token from the service)."""
+    ids = [s.id for s in session.exec(select(Signature).where(Signature.experiment_id == exp.id))]
+    if not ids:
+        return 0, 0
+    rows = session.exec(select(SignatureTimestamp).where(SignatureTimestamp.signature_id.in_(ids),
+                                                         SignatureTimestamp.status == "ok")).all()
+    return len(ids), len({t.signature_id for t in rows if t.token})
+
+
+def stamp_claim(n_sigs: int, n_stamped: int, where: str = "in this archive") -> str:
+    """What can truly be said about the trusted timestamps of `n_sigs` signatures, `n_stamped` of them timestamped
+    (0.36.1: every archive said each signature had been certified, in labs that don't timestamp too). Plain text."""
+    if n_stamped <= 0:
+        return (f"The records {where} weren't timestamped: none of their signatures was certified by an independent "
+                "timestamp service, so there is no timestamp proof to check.")
+    if n_stamped < n_sigs:
+        return (f"{n_stamped} of the {n_sigs} signatures {where} {'was' if n_stamped == 1 else 'were'} also certified by an "
+                "independent RFC 3161 timestamp service; the others weren't timestamped. Only a fingerprint of a "
+                "signature was sent to it, never the record.")
+    return ("Each signature was also certified by an independent RFC 3161 timestamp service; only a fingerprint of the "
+            "signature was sent to it, never the record.")
+
+
+def _inside(n_sigs: int = 0, n_stamped: int = 0) -> str:
+    """The cover's "Inside this PDF": timestamp proofs are mentioned only when there are some."""
+    if n_stamped <= 0:
+        what = ("Each record's own data (what its signatures cover, its fingerprint and its signatures) is attached to "
+                "this file; the last page says how to open and check it. The records weren't timestamped, so there are no "
+                "timestamp proofs.")
+    elif n_stamped < n_sigs:
+        what = ("Each record's own data (what its signatures cover, its fingerprint and its signatures) and, for each "
+                "signature that has one, the proof of its trusted timestamp are attached to this file; the last page says "
+                "how to open and check them.")
+    else:
+        what = ("Each record's own data (what its signatures cover, its fingerprint and its signatures) and the proofs "
+                "of its trusted timestamps are attached to this file; the last page says how to open and check them.")
+    return f"""<p><b>Inside this PDF.</b> {what} The instrument files themselves are not attached: they are in Benchtop,
+and in the record's .eln export, each with the SHA-256 fingerprint printed under its spectrum here.</p>
 <p>This file is a PDF/A-3 document, the archival form of PDF: its fonts and colour profile are inside it.</p>"""
-# where the PDF/A package isn't installed (0.34): an ordinary PDF, with its fonts inside it but nothing attached
-NOT_INSIDE = """<p><b>The proofs.</b> On the computer that made it, Benchtop couldn't attach each record's data and the
-proofs of its trusted timestamps to this file (the PDF/A package isn't installed there). They are in Benchtop: each
+
+
+def _not_inside(n_sigs: int = 0, n_stamped: int = 0) -> str:
+    """Where the PDF/A package isn't installed (0.34): an ordinary PDF, with its fonts inside it but nothing attached."""
+    if n_stamped <= 0:
+        return """<p><b>The records' data.</b> On the computer that made it, Benchtop couldn't attach each record's data to
+this file (the PDF/A package isn't installed there). It is in Benchtop, in the record's .eln export, which also holds
+the instrument files, each with the SHA-256 fingerprint printed under its spectrum here. The records weren't
+timestamped, so there are no timestamp proofs. The last page says how to check them.</p>"""
+    every = n_stamped >= n_sigs
+    which = "the proofs of its trusted timestamps" if every else "the proofs of the trusted timestamps its signatures have"
+    return f"""<p><b>The proofs.</b> On the computer that made it, Benchtop couldn't attach each record's data and
+{which} to this file (the PDF/A package isn't installed there). They are in Benchtop: each {'' if every else 'timestamped '}
 signature's <i>Proof</i> download on the record's page, and the record's .eln export, which also holds the instrument
 files, each with the SHA-256 fingerprint printed under its spectrum here. The last page says how to check them.</p>"""
 
@@ -708,19 +756,24 @@ s = json.dumps(d['snapshot'], sort_keys=True, separators=(',', ':'))
 print(hashlib.sha256(s.encode()).hexdigest())" EXP-00012.json"""
 
 
-def _how_to(n_records: int, n_proofs: int, size: str, title: str, pdf_name: str = "archive.pdf", archival: bool = True) -> str:
+def _how_to(n_records: int, n_proofs: int, size: str, title: str, pdf_name: str = "archive.pdf", archival: bool = True,
+            n_sigs: int | None = None) -> str:
+    """The last page. `n_proofs`: the timestamp proofs attached (or, without the PDF/A package, the signatures with a
+    trusted timestamp), of `n_sigs` signatures. It says how to check a timestamp only where there is one (0.36.1)."""
+    n_sigs = n_proofs if n_sigs is None else n_sigs
     f = _esc(f'"{pdf_name}"' if " " in pdf_name else pdf_name)
     if not archival:
-        return _how_to_plain(size, title)
+        return _how_to_plain(size, title, n_sigs, n_proofs)
+    zips = ("" if n_proofs <= 0 else """<br>
+• <b>EXP-00012-signature-34-timestamp.zip</b>, one for each signature with a trusted timestamp: the same <i>Proof</i> file
+the record's page in Benchtop offers (the timestamp token, the exact text that was timestamped, the service's
+certificates and a README).""")
     return _page(f"""<div style='font-size:8.8pt'><h2>How to check this archive</h2>
 <h3>What is attached inside this PDF</h3>
 <p>{n_records + n_proofs} files are attached to this PDF (PDF/A-3 associated files). For each record:</p>
 <p>• <b>EXP-00012.json</b> (with the record's own number): the record's data as Benchtop holds it. <i>snapshot</i> is everything
 its signatures cover (title, description, author, every section with its content, and each attached file's name and
-SHA-256); <i>content_hash</i> is its fingerprint; <i>signatures</i> lists who signed, witnessed or voided it, and when.<br>
-• <b>EXP-00012-signature-34-timestamp.zip</b>, one for each signature with a trusted timestamp: the same <i>Proof</i> file
-the record's page in Benchtop offers (the timestamp token, the exact text that was timestamped, the service's
-certificates and a README).</p>
+SHA-256); <i>content_hash</i> is its fingerprint; <i>signatures</i> lists who signed, witnessed or voided it, and when.{zips}</p>
 <p>The instrument files (spectra and other data) are not attached; they are in Benchtop and in each record's .eln export
 (<i>Export (.eln)</i> on a notebook's page). Each characterisation file's SHA-256 is printed under its spectrum (or in its place)
 here, and every attached file's is in the record's <i>snapshot</i>; check a file against it with <span class='mono'>shasum -a 256 &lt;file&gt;</span> (macOS) or
@@ -733,62 +786,67 @@ qpdf --show-attachment=EXP-00012.json {f} &gt; EXP-00012.json
 pdfdetach -list {f}
 pdfdetach -saveall {f}</pre>
 <p class='small'>(qpdf and pdfdetach, from poppler-utils, are free command-line tools; on a Mac, install them with Homebrew.)</p>
-<h3>Checking a signature's trusted timestamp, without Benchtop</h3>
-<p>Each signature was also certified by an independent RFC 3161 timestamp service; only a fingerprint of the signature
-was sent to it, never the record. Unzip the signature's timestamp file, then (macOS / Linux):</p>
-<pre class='mono'>openssl ts -verify -data signature.json -in token.tst -token_in \\
-    -CAfile /etc/ssl/cert.pem -untrusted tsa-certs.pem</pre>
-<p>(On Debian and Ubuntu the trusted certificates are in <span class='mono'>/etc/ssl/certs/ca-certificates.crt</span>.)
-"Verification: OK" means the service certifies that this signature (record, meaning, signer, time and the SHA-256 of
-the record's content, <i>content_sha256</i>) existed at the time shown. To link it to the record itself, compare
-<i>content_sha256</i> with the record's fingerprint: printed in the contents and at the foot of the record here, and
-<i>content_hash</i> in its .json file. To read the token: <span class='mono'>openssl ts -reply -token_in -in token.tst -text</span>.
-Years from now the service's certificate may have expired or no longer be on your computer's trusted list; openssl then
-can't verify the token until you give it the service's root certificate (from the service's own website).</p>
+{_timestamp_section(n_sigs, n_proofs, "Unzip the signature's timestamp file", ", and <i>content_hash</i> in its .json file")}
 <h3>Checking a record's fingerprint</h3>
 <p>The fingerprint is the SHA-256 of the record's <i>snapshot</i> written as compact JSON, with keys in sorted order, the
 way Python's json module writes it (sort_keys=True, separators=(',', ':'), non-ASCII characters escaped). With Python 3,
 from the record's .json file:</p>
 <pre class='mono'>{_esc(HOW_TO_RECOMPUTE)}</pre>
-<p>The result should equal <i>content_hash</i> in the same file, the fingerprint printed here, and <i>content_sha256</i>
-in each of its timestamps. Other JSON tools may write numbers or characters differently and give another SHA-256;
+<p>The result should equal <i>content_hash</i> in the same file{_and_timestamps(n_proofs)}. Other JSON tools may write
+numbers or characters differently and give another SHA-256;
 Benchtop's <i>Verify integrity</i> recomputes it this way. A match shows the attached data is the data that was signed;
 the printed pages are a rendering of it, for reading.</p></div>""", size, title)
 
 
-def _how_to_plain(size: str, title: str) -> str:
-    """The last page of an archive made where the PDF/A package isn't installed: nothing is attached, so it points to
-    where the same files are."""
-    return _page(f"""<div style='font-size:8.8pt'><h2>How to check this archive</h2>
-<h3>Where each record's data and proofs are</h3>
-<p>This PDF was made on a computer where Benchtop couldn't attach files to it (the PDF/A package isn't installed there),
-so each record's data and its timestamp proofs are not inside it. They are in Benchtop:</p>
-<p>• the record's <b>.eln export</b> (<i>Export (.eln)</i> on a notebook's page, or the record's own export): its
-<span class='mono'>record.benchtop.json</span> holds the record's data (<i>snapshot</i>, everything its signatures cover,
-and <i>content_hash</i>, its fingerprint), with every attached file and, in its signatures folder, each timestamp proof;<br>
-• each signature's <b>Proof</b> download on the record's page (the timestamp token, the exact text that was timestamped,
-the service's certificates and a README).</p>
-<p>Each characterisation file's SHA-256 is printed under its spectrum (or in its place) here; check a file from the .eln
-export against it with <span class='mono'>shasum -a 256 &lt;file&gt;</span> (macOS) or
-<span class='mono'>sha256sum &lt;file&gt;</span> (Linux).</p>
-<h3>Checking a signature's trusted timestamp, without Benchtop</h3>
-<p>Each signature was also certified by an independent RFC 3161 timestamp service; only a fingerprint of the signature
-was sent to it, never the record. Unzip the signature's Proof, then (macOS / Linux):</p>
+def _and_timestamps(n_stamped: int) -> str:
+    return (", the fingerprint printed here, and <i>content_sha256</i> in each of its timestamps" if n_stamped > 0
+            else " and the fingerprint printed here")
+
+
+def _timestamp_section(n_sigs: int, n_stamped: int, unzip: str, also: str = "") -> str:
+    """How to check a trusted timestamp with openssl, said only when a signature has one (0.36.1)."""
+    if n_stamped <= 0:
+        return f"<h3>Trusted timestamps</h3>\n<p>{_esc(stamp_claim(n_sigs, 0))} Each record's fingerprint can still be checked, as below.</p>"
+    each = "the signature's" if n_stamped >= n_sigs else "a timestamped signature's"
+    return f"""<h3>Checking a signature's trusted timestamp, without Benchtop</h3>
+<p>{_esc(stamp_claim(n_sigs, n_stamped))} {unzip.replace("the signature's", each)}, then (macOS / Linux):</p>
 <pre class='mono'>openssl ts -verify -data signature.json -in token.tst -token_in \\
     -CAfile /etc/ssl/cert.pem -untrusted tsa-certs.pem</pre>
 <p>(On Debian and Ubuntu the trusted certificates are in <span class='mono'>/etc/ssl/certs/ca-certificates.crt</span>.)
 "Verification: OK" means the service certifies that this signature (record, meaning, signer, time and the SHA-256 of
 the record's content, <i>content_sha256</i>) existed at the time shown. To link it to the record itself, compare
-<i>content_sha256</i> with the record's fingerprint, printed in the contents and at the foot of the record here.
+<i>content_sha256</i> with the record's fingerprint: printed in the contents and at the foot of the record here{also}.
+To read the token: <span class='mono'>openssl ts -reply -token_in -in token.tst -text</span>.
 Years from now the service's certificate may have expired or no longer be on your computer's trusted list; openssl then
-can't verify the token until you give it the service's root certificate (from the service's own website).</p>
+can't verify the token until you give it the service's root certificate (from the service's own website).</p>"""
+
+
+def _how_to_plain(size: str, title: str, n_sigs: int = 0, n_stamped: int = 0) -> str:
+    """The last page of an archive made where the PDF/A package isn't installed: nothing is attached, so it points to
+    where the same files are. Timestamp proofs are mentioned only when a signature has one (0.36.1)."""
+    proofs = n_stamped > 0
+    whose = "each signature's" if n_stamped >= n_sigs else "each timestamped signature's"
+    proof_line = (f""";<br>
+• {whose} <b>Proof</b> download on the record's page (the timestamp token, the exact text that was timestamped,
+the service's certificates and a README).""" if proofs else ".")
+    return _page(f"""<div style='font-size:8.8pt'><h2>How to check this archive</h2>
+<h3>Where each record's data{' and proofs are' if proofs else ' is'}</h3>
+<p>This PDF was made on a computer where Benchtop couldn't attach files to it (the PDF/A package isn't installed there),
+so each record's data{' and its timestamp proofs are' if proofs else ' is'} not inside it. {'They are' if proofs else 'It is'} in Benchtop:</p>
+<p>• the record's <b>.eln export</b> (<i>Export (.eln)</i> on a notebook's page, or the record's own export): its
+<span class='mono'>record.benchtop.json</span> holds the record's data (<i>snapshot</i>, everything its signatures cover,
+and <i>content_hash</i>, its fingerprint), with every attached file{' and, in its signatures folder, each timestamp proof' if proofs else ''}{proof_line}</p>
+<p>Each characterisation file's SHA-256 is printed under its spectrum (or in its place) here; check a file from the .eln
+export against it with <span class='mono'>shasum -a 256 &lt;file&gt;</span> (macOS) or
+<span class='mono'>sha256sum &lt;file&gt;</span> (Linux).</p>
+{_timestamp_section(n_sigs, n_stamped, "Unzip the signature's Proof")}
 <h3>Checking a record's fingerprint</h3>
 <p>The fingerprint is the SHA-256 of the record's <i>snapshot</i> written as compact JSON, with keys in sorted order, the
 way Python's json module writes it (sort_keys=True, separators=(',', ':'), non-ASCII characters escaped). With Python 3,
 from the record's <span class='mono'>record.benchtop.json</span>:</p>
 <pre class='mono'>{_esc(HOW_TO_RECOMPUTE.replace("EXP-00012.json", "record.benchtop.json"))}</pre>
-<p>The result should equal <i>content_hash</i> in the same file, the fingerprint printed here, and <i>content_sha256</i>
-in each of its timestamps. Other JSON tools may write numbers or characters differently and give another SHA-256;
+<p>The result should equal <i>content_hash</i> in the same file{_and_timestamps(n_stamped)}. Other JSON tools may write
+numbers or characters differently and give another SHA-256;
 Benchtop's <i>Verify integrity</i> recomputes it this way.</p></div>""", size, title)
 
 
@@ -925,7 +983,7 @@ def build_pdf(session: Session, user: User, span: Span, notebook_id: int | None 
     parts: list[bytes] = []
     listed: list[dict[str, Any]] = []
     files: list[pdfa.Attachment] = []
-    proofs = 0
+    proofs = sigs = 0  # timestamp proofs (attached, or held in Benchtop) of all the records' signatures
     for i, (exp, d) in enumerate(rows, 1):
         progress(i - 1, n, f"Adding record {i} of {n}")
         figs = {s["attachment_id"]: pictures.get(s["attachment_id"]) or {"error": "not drawn"} for s in spectra_of(session, exp)}
@@ -944,15 +1002,19 @@ def build_pdf(session: Session, user: User, span: Span, notebook_id: int | None 
                        else ("awaiting witness" if exp.status == ExperimentStatus.signed else "—"),
                        "voided": f"{v.signed_at:%Y-%m-%d}" if v else "", "hash": content_hash(session, exp),
                        "pages": _page_count(raw), "status": exp.status.value})
+        n_sigs, n_stamped = stamped(session, exp)
+        sigs += n_sigs
         if archival:
             att = proof_attachments(session, exp)
             proofs += len(att) - 1
             files.extend(att)
+        else:  # nothing is attached: what the last page can say is what Benchtop holds
+            proofs += n_stamped
     progress(n, n, "Putting the archive together")
     c = counts(rows)
     scope = scope_text(session, notebook_id, author_id)
-    cover = pdfa.html_to_pdf(_cover(title, scope, span, c, user, made, size, archival))
-    how = pdfa.html_to_pdf(_how_to(n, proofs, size, title, pdf_file_name(span, scope), archival))
+    cover = pdfa.html_to_pdf(_cover(title, scope, span, c, user, made, size, archival, (sigs, proofs)))
+    how = pdfa.html_to_pdf(_how_to(n, proofs, size, title, pdf_file_name(span, scope), archival, sigs))
     # the contents give each record's first page, which depends on how long the contents are: lay them out with
     # placeholders first (the same width), then with the numbers
     for r in listed:

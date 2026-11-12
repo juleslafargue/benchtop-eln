@@ -43,7 +43,7 @@ function drift(s: Snapshot | null, a: Assessment | null): string | null {
   return null
 }
 
-export default function SafetyEntry({ content, onChange, readOnly, experimentId }: EntryEditorProps) {
+export default function SafetyEntry({ content, onChange, readOnly, experimentId, context }: EntryEditorProps) {
   const [a, setA] = useState<Assessment | null>(null)
   const admin = useApp().user.role === 'admin'  // the note that PubChem is switched off is for whoever can switch it on
   const [busy, setBusy] = useState(false)
@@ -79,7 +79,7 @@ export default function SafetyEntry({ content, onChange, readOnly, experimentId 
       {!readOnly && admin && a && !a.pubchem_enabled && <p className="notice" style={{ margin: 0 }}>PubChem lookups are switched off on this server, so only hazard data
         fetched earlier is shown. For a chemical without it, check the supplier's SDS and note what matters under Controls and PPE.</p>}
       {err && <p className="error">{err}</p>}
-      {changed && <div className="sp-note warn" role="status"><span><b>{changed}</b> {readOnly ? 'This signed record keeps what was known when it was signed.' : 'Review the warnings and record them again.'}</span>
+      {changed && <div className="sp-note warn" role="status"><span><b>{changed}</b> {readOnly ? (context?.signed ? 'This signed record keeps what was known when it was signed.' : 'This record keeps what was known when they were saved.') : 'Review the warnings and record them again.'}</span>
         {!readOnly && a && <button className="btn sm primary" onClick={() => set('snapshot', snapOf(a))}>Save the current hazards with the record</button>}</div>}
 
       {shown.length === 0 ? <p className="faint">{busy ? 'Checking the reaction…' : 'Add reagents to the reaction table and their hazards will appear here.'}</p> : <>
@@ -117,7 +117,11 @@ export default function SafetyEntry({ content, onChange, readOnly, experimentId 
 
       <div className="spread" style={{ gap: 8 }}>
         <span className="faint" style={{ fontSize: 12.5 }}>
-          {snap ? `Hazards saved with the record ${when(snap.taken_at)}.` : <>Hazards not saved with the record yet. <b>Save these hazards with the record</b> keeps
+          {snap ? `Hazards saved with the record ${when(snap.taken_at)}.`
+            // a record that can't be changed says what is so, never what to press (0.36.1: it pointed to a hidden button)
+            : readOnly ? (context?.signed ? 'Hazards weren\'t saved with this record when it was signed; those shown are today\'s.'
+              : 'Hazards haven\'t been saved with this record; those shown are today\'s.')
+            : <>Hazards not saved with the record yet. <b>Save these hazards with the record</b> keeps
             what's known today in it, so the signed record still shows it if the data changes later.</>} Data from PubChem (EU CLP, ECHA and other public sources), refreshed every {a?.refresh_days ?? 30} days.
           The supplier's SDS takes precedence.</span>
         {!readOnly && <span className="row" style={{ gap: 6 }}>

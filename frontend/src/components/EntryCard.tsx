@@ -55,7 +55,11 @@ export interface EntryEditorProps {
 }
 
 /** Experiment-level facts an editor may need, e.g. the product formula for scaling NMR integrals. */
-export interface EntryContext { productFormula: string | null; productSmiles: string | null; productMW: number | null; openAttachmentId: number | null }
+export interface EntryContext {
+  productFormula: string | null; productSmiles: string | null; productMW: number | null; openAttachmentId: number | null
+  /** the record has been signed (signed, witnessed or voided): what a section says can't suggest editing it (0.36.1) */
+  signed?: boolean
+}
 
 export default function EntryCard({ entry, readOnly, experimentId, attachments, onAttachmentsChanged, onDeleted, onMove, isFirst, isLast, context, comments, onComment }: {
   entry: Entry; readOnly: boolean; experimentId: number; attachments: Attachment[]; context: EntryContext
@@ -283,6 +287,7 @@ export default function EntryCard({ entry, readOnly, experimentId, attachments, 
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4" /></svg>
         </button>
         <input className="entry-title" value={title} disabled={readOnly} aria-label="Section title"
+          style={{ '--title-ch': Math.max(4, title.length + 1) } as React.CSSProperties}
           onChange={e => { edits.current++; setTitle(e.target.value); setState('dirty') }} />
         <span className="entry-kind" title={entry.kind === 'custom' && content?.schema?.plugin ? `From the ${content.schema.plugin} plugin` : undefined}><KindIcon kind={entry.kind} />{entry.kind === 'custom' ? (content?.schema?.name || 'Plugin section') : KIND_LABEL[entry.kind]}</span>
         <span className={`save-state${state === 'dirty' || state === 'saving' ? ' dirty' : ''}${state === 'error' ? ' err' : ''}`} title={error}>{stateText}</span>

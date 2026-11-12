@@ -232,7 +232,7 @@ export function PredictionPanel({ pred, assignment, nucleus, observedLabel, stat
       <h4 className="sp-h4">Predicted shifts <span className="faint">· {nucleus}</span></h4>
       <div className="pred-grid">
         <img className="pred-struct" alt="Structure with atom numbers" src={`/api/chem/depict?smiles=${encodeURIComponent(pred.smiles)}&w=360&h=240&numbers=true${hl.length ? `&atoms=${hl.join(',')}` : ''}`} />
-        <table className="plain pred-table">
+        <div className="pred-table-wrap"><table className="plain pred-table">
           <thead><tr><th>Atoms</th>{nucleus === '1H' && <th>H</th>}<th>Predicted</th><th>Observed</th></tr></thead>
           <tbody>{pred.groups.map((g, gi) => {
             const a = assignment?.byGroup[gi]
@@ -261,7 +261,7 @@ export function PredictionPanel({ pred, assignment, nucleus, observedLabel, stat
                 : g.shift !== null ? <span className="warn-text">no signal near {g.shift.toFixed(nucleus === '1H' ? 1 : 0)}</span> : ''}</td>
             </tr>
           })}</tbody>
-        </table>
+        </table></div>
       </div>
       {(editable || confirmed) && <div className="asg-confirm">
         {confirmed

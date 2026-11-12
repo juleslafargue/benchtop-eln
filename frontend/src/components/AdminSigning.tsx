@@ -148,7 +148,7 @@ export function TimestampSettingsPanel() {
     <section className="stack" style={{ gap: 10 }}>
       <div className="spread" style={{ alignItems: 'center' }}><h2 style={{ fontSize: 17 }}>Trusted timestamps</h2>
         <label className="switch-row"><input type="checkbox" checked={s.enabled} disabled={fixed('enabled') || !s.available} onChange={e => save({ enabled: e.target.checked })} /> On</label></div>
-      <p className="faint" style={{ margin: 0 }}>Every signature is also certified by an independent timestamp service (RFC 3161, as used for patents and in
+      <p className="faint" style={{ margin: 0 }}>While this is on, every signature is also certified by an independent timestamp service (RFC 3161, as used for patents and in
         industry ELNs): proof, checkable without Benchtop, that it existed at that time. Only a fingerprint of the signature is sent, never the record.
         Offline, signing still works and the timestamp is fetched later.</p>
       {!s.available && <p className="notice" style={{ margin: 0 }}>Stop Benchtop and start it again so it can install what trusted timestamps need.</p>}

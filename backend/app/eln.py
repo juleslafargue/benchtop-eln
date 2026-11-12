@@ -18,6 +18,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import textwrap
 import unicodedata
 import zipfile
 from datetime import datetime, timezone
@@ -167,6 +168,7 @@ class _Crate:
         self.z, self.root = z, root
         self.graph: dict[str, dict[str, Any]] = {}
         self.people: dict[int, str] = {}
+        self.signatures = self.proofs = 0  # what HOW-TO-CHECK.txt may say about trusted timestamps (0.36.1)
 
     def add(self, node: dict[str, Any]) -> str:
         node = _clean(node)
@@ -369,6 +371,7 @@ def _experiment(session: Session, crate: _Crate, exp: Experiment, folders: _Uniq
     stamps = {t.signature_id: t for t in session.exec(select(SignatureTimestamp).where(
         SignatureTimestamp.signature_id.in_(list(rows)), SignatureTimestamp.status == "ok"))} if rows else {}
     variables: list[Optional[dict]] = []
+    crate.signatures += len(sigs)
     for i, s in enumerate(sigs):
         t = stamps.get(s["id"])
         if t is not None:
@@ -376,6 +379,7 @@ def _experiment(session: Session, crate: _Crate, exp: Experiment, folders: _Uniq
                 proof = timestamps.proof_zip(session, rows[s["id"]], t)
                 path = f"{folder}/signatures/{exp.eid}-signature-{s['id']}-timestamp.zip"
                 crate.write_bytes(path, proof)
+                crate.proofs += 1
                 parts.append(_ref(crate.add({"@id": _id(path), "@type": "File", "name": path.rsplit("/", 1)[1],
                                               "encodingFormat": "application/zip", "contentSize": str(len(proof)), "sha256": _sha(proof),
                                               "description": f"Trusted timestamp (RFC 3161) for the {s['meaning']} signature by "
@@ -486,10 +490,58 @@ s = json.dumps(d['snapshot'], sort_keys=True, separators=(',', ':'))
 print(hashlib.sha256(s.encode()).hexdigest())" record.benchtop.json"""
 
 
-def _how_to_check() -> bytes:
+def _timestamp_text(n_sigs: int, n_proofs: int) -> tuple[str, str, str]:
+    """HOW-TO-CHECK.txt's three mentions of trusted timestamps, true to what is in the file (0.36.1: it described
+    timestamp proofs, and how to check them, in files that had none): the signatures/ line, the end of the fingerprint
+    sentence, and the section on checking a timestamp."""
+    from .archive import stamp_claim
+    if n_sigs == 0:
+        return "", " and the fingerprint printed\nin report.html", ""
+    if n_proofs <= 0:
+        claim = textwrap.fill(stamp_claim(n_sigs, 0, "in this file"), 96)
+        return "", " and the fingerprint printed\nin report.html", f"\nTRUSTED TIMESTAMPS\n\n{claim}\n"
+    some = n_proofs < n_sigs
+    folder = ("signatures/             A trusted-timestamp proof (.zip) for each signature that has one.\n" if some else
+              "signatures/             A trusted-timestamp proof (.zip) for each signature.\n")
+    tail = (", the fingerprint printed\nin report.html, and \"content_sha256\" in that signature's timestamp proof, if it has one" if some
+            else ", the fingerprint printed\nin report.html, and \"content_sha256\" in that signature's timestamp proof")
+    claim = textwrap.fill(stamp_claim(n_sigs, n_proofs, "in this file"), 96)
+    section = f"""
+HOW TO CHECK A TRUSTED TIMESTAMP
+
+{claim}
+
+When a record has signatures/, each .zip in it holds a signature's proof from the timestamp
+service:
+    signature.json   the exact text that was timestamped (the record, the signer, the time and
+                     the record's content_sha256)
+    token.tst        the timestamp token from the service
+    tsa-certs.pem    the service's certificates, as included in the token
+    README.txt       the same steps, for that signature
+
+Unzip it, then, with OpenSSL (macOS, Linux):
+    openssl ts -verify -data signature.json -in token.tst -token_in \\
+        -CAfile /etc/ssl/cert.pem -untrusted tsa-certs.pem
+
+On Debian and Ubuntu the -CAfile is /etc/ssl/certs/ca-certificates.crt. "Verification: OK"
+means the service certifies that signature.json, and so the content_sha256 in it, existed at the
+time in the token (openssl ts -reply -token_in -in token.tst -text shows that time).
+
+A timestamp service's certificates expire, and in a few years its root certificate may no longer
+be on your computer. Keep a copy of the service's root certificate with these files: you may
+need to give it to openssl as -CAfile. If openssl says a certificate has expired, check the
+token as of its own time by adding -attime followed by that time in seconds since 1970 (as
+OpenSSL 3 allows).
+"""
+    return folder, tail, section
+
+
+def _how_to_check(n_sigs: int = 0, n_proofs: int = 0) -> bytes:
     """A plain-text guide at the top of the file (0.36): what each file is, and how to check a record and its trusted
-    timestamps with ordinary tools, without Benchtop."""
+    timestamps with ordinary tools, without Benchtop. `n_sigs` signatures are in the file, `n_proofs` of them with a
+    timestamp proof; it speaks of timestamps only as far as there are some (0.36.1)."""
     rule = "-" * 72
+    folder, tail, section = _timestamp_text(n_sigs, n_proofs)
     return f"""How to check these records without Benchtop
 {rule}
 Exported from Benchtop ELN {__version__} on {datetime.now(timezone.utc):%d %B %Y}.
@@ -514,9 +566,7 @@ record.benchtop.json    Everything Benchtop knows about the record. "snapshot" i
                         signature covers; "content_hash" is its fingerprint (SHA-256).
 files/                  Every attached file, unchanged.
 chemistry/              The reaction (.rxn) and each compound (.mol), when there is a reaction.
-signatures/             A trusted-timestamp proof (.zip) for each signature, when the lab uses
-                        trusted timestamps.
-
+{folder}
 HOW TO RECOMPUTE A RECORD'S FINGERPRINT
 
 The fingerprint is the SHA-256 of the record's snapshot written as compact JSON, with keys in
@@ -526,40 +576,16 @@ non-ASCII characters escaped). With Python 3, in the record's folder:
 {HOW_TO_RECOMPUTE}
 
 The result should equal "content_hash" in the same file. For a signed record it should also
-equal the "content_hash" of its latest signature (under "signatures"), the fingerprint printed
-in report.html, and "content_sha256" in that signature's timestamp proof. (An earlier signature,
-withdrawn before the record was changed, has the fingerprint of what it signed then.) Other JSON
-tools may write numbers or characters differently and give another SHA-256.
+equal the "content_hash" of its latest signature (under "signatures"){tail}.
+(An earlier signature, withdrawn before the record was changed, has the fingerprint of what it
+signed then.) Other JSON tools may write numbers or characters differently and give another
+SHA-256.
 
 Each attached file's SHA-256 is listed under "snapshot", "attachments" (and in
 ro-crate-metadata.json). To check a file against it:
     macOS, Linux:  shasum -a 256 "files/blot.tif"
     Windows:       certutil -hashfile "files\\blot.tif" SHA256
-
-HOW TO CHECK A TRUSTED TIMESTAMP
-
-When a record has signatures/, each .zip in it holds a signature's proof from an independent
-timestamp service (RFC 3161):
-    signature.json   the exact text that was timestamped (the record, the signer, the time and
-                     the record's content_sha256)
-    token.tst        the timestamp token from the service
-    tsa-certs.pem    the service's certificates, as included in the token
-    README.txt       the same steps, for that signature
-
-Unzip it, then, with OpenSSL (macOS, Linux):
-    openssl ts -verify -data signature.json -in token.tst -token_in \\
-        -CAfile /etc/ssl/cert.pem -untrusted tsa-certs.pem
-
-On Debian and Ubuntu the -CAfile is /etc/ssl/certs/ca-certificates.crt. "Verification: OK"
-means the service certifies that signature.json, and so the content_sha256 in it, existed at the
-time in the token (openssl ts -reply -token_in -in token.tst -text shows that time).
-
-A timestamp service's certificates expire, and in a few years its root certificate may no longer
-be on your computer. Keep a copy of the service's root certificate with these files: you may
-need to give it to openssl as -CAfile. If openssl says a certificate has expired, check the
-token as of its own time by adding -attime followed by that time in seconds since 1970 (as
-OpenSSL 3 allows).
-""".encode()
+{section}""".encode()
 
 
 def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, name: str,
@@ -590,12 +616,14 @@ def export(session: Session, user: User, exps: Iterable[Experiment], out: Path, 
                    "result": _ref("./")})
         preview = _preview(root, exps, folder_of)
         crate.write_bytes("ro-crate-preview.html", preview)
-        how = _how_to_check()  # 0.36: last in the root's hasPart, after the records (importers take the Datasets only)
+        how = _how_to_check(crate.signatures, crate.proofs)  # 0.36: last in the root's hasPart, after the records (importers take the Datasets only)
         crate.write_bytes(HOW_TO_CHECK, how)
         parts.append(_ref(crate.add({"@id": _id(HOW_TO_CHECK), "@type": "File", "name": HOW_TO_CHECK, "encodingFormat": "text/plain",
                                       "contentSize": str(len(how)), "sha256": _sha(how),
-                                      "description": "How to check these records without Benchtop: what each file is, how to "
-                                                     "recompute a record's fingerprint, and how to check a trusted timestamp"})))
+                                      "description": "How to check these records without Benchtop: " + (
+                                          "what each file is, how to recompute a record's fingerprint, and how to check a "
+                                          "trusted timestamp" if crate.proofs else
+                                          "what each file is and how to recompute a record's fingerprint")})))
         root_node = {"@id": "./", "@type": "Dataset", "conformsTo": [_ref(CRATE), _ref(ELN_SPEC)], "name": f"{root}.eln",
                      "description": description or f"{len(exps)} experiment{'s' if len(exps) != 1 else ''} exported from Benchtop ELN",
                      "datePublished": now, "license": _ref(lic), "hasPart": parts,

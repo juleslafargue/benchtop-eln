@@ -359,9 +359,11 @@ def test_the_eln_says_how_to_check_it_and_its_one_liner_works_as_printed(client,
     z = zipfile.ZipFile(io.BytesIO(raw))
     root = z.namelist()[0].split("/")[0]
     how = z.read(f"{root}/HOW-TO-CHECK.txt").decode()
-    for words in ("record.benchtop.json", "report.html", "ro-crate-metadata.json", "files/", "signatures/",
-                  "openssl ts -verify", "certificates expire", "root certificate"):
+    for words in ("record.benchtop.json", "report.html", "ro-crate-metadata.json", "files/"):
         assert words in how, words
+    # signed without trusted timestamps: it says so, and explains openssl only where there is a token to check (0.36.1;
+    # tests/test_v36_1_demo_fixes.py has a lab with them)
+    assert "weren't timestamped" in how and "openssl ts -verify" not in how and "signatures/" not in how
     # listed as a file of the crate, with its fingerprint, after the records
     graph = {n["@id"]: n for n in json.loads(z.read(f"{root}/ro-crate-metadata.json"))["@graph"]}
     node = graph["./HOW-TO-CHECK.txt"]

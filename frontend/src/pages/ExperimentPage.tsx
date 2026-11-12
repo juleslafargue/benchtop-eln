@@ -18,6 +18,7 @@ import { parseSpectrumBuffer, techniqueFor } from '../spectra'
 import { DoiLine, PublishPanel } from '../components/Publish'
 import { reminderText } from '../signCheck'
 import { sigLine } from '../display'
+import { onReturn } from '../onReturn'
 import type { Attachment, Entry, User, UserBrief } from '../api'
 
 const STATUS_WORD = { open: 'Draft', signed: 'Signed', witnessed: 'Witnessed', voided: 'Voided', locked: 'Locked' }
@@ -221,11 +222,15 @@ interface Mention { id: number; eid: string; title: string; status: Experiment['
  *  when there are none. */
 function MentionedIn({ expId }: { expId: number }) {
   const [m, setM] = useState<{ total: number; items: Mention[] } | null>(null)
-  useEffect(() => {
-    let live = true
-    api.get<{ total: number; items: Mention[] }>(`/api/experiments/${expId}/mentioned-in`).then(r => { if (live) setM(r) }).catch(() => {})
-    return () => { live = false }
+  const alive = useRef(true)
+  useEffect(() => () => { alive.current = false }, [])
+  const load = useCallback(() => {
+    api.get<{ total: number; items: Mention[] }>(`/api/experiments/${expId}/mentioned-in`).then(r => { if (alive.current) setM(r) }).catch(() => {})
   }, [expId])
+  useEffect(() => { load() }, [load])
+  // a record that names this one may have been written in another tab meanwhile: look again when the page is shown
+  // again, as the rest of the page does (0.36.1: it only looked when the page opened)
+  useEffect(() => onReturn(load), [load])
   if (!m?.items.length) return null
   return (
     <div className="mentioned-in">
@@ -320,15 +325,13 @@ function ExperimentRecord() {
   }, [id])
   useEffect(() => { load(); setVerify(null); setTab('record'); setBench(null) }, [load])
   // pick up changes made elsewhere (the bench log, your phone, a colleague) when you come back to the tab
+  useEffect(() => onReturn(load), [load])  // the same moments refresh Mentioned in (src/onReturn.ts)
   useEffect(() => {
-    const again = () => { if (document.visibilityState === 'visible') load() }
     const logged = (e: Event) => { if ((e as CustomEvent).detail?.experimentId === Number(id)) load() }
-    document.addEventListener('visibilitychange', again)
-    window.addEventListener('focus', again)
     const reload = async (e: Event) => { if ((e as CustomEvent).detail?.experimentId === Number(id)) { await load(); setReloadKey(k => k + 1) } }
     window.addEventListener('benchtop:logged', logged)
     window.addEventListener('benchtop:reload', reload)
-    return () => { document.removeEventListener('visibilitychange', again); window.removeEventListener('focus', again); window.removeEventListener('benchtop:logged', logged); window.removeEventListener('benchtop:reload', reload) }
+    return () => { window.removeEventListener('benchtop:logged', logged); window.removeEventListener('benchtop:reload', reload) }
   }, [id, load])
   // L: log a note · T: timer · P: phone · ⌘S: save every section now
   useEffect(() => {
@@ -357,7 +360,8 @@ function ExperimentRecord() {
 
   const rxnRows: any[] = exp.entries.find(e => e.kind === 'reaction' && e.content?.rows?.length)?.content.rows || []
   const product = rxnRows.filter(r => r.role === 'product').sort((a, b) => (b.yield_pct ?? -1) - (a.yield_pct ?? -1))[0]
-  const context = { productFormula: product?.formula || null, productSmiles: product?.smiles || null, productMW: product?.mw ?? null, openAttachmentId: justAdded }
+  const context = { productFormula: product?.formula || null, productSmiles: product?.smiles || null, productMW: product?.mw ?? null, openAttachmentId: justAdded,
+    signed: exp.status === 'signed' || exp.status === 'witnessed' || exp.status === 'voided' }
 
   /** Signing (or voiding) covers what the server has: every section's typing is saved first, and the dialog opens only
    *  once all of it is in (0.30.1: a save still on its way was left out of the signed record). */

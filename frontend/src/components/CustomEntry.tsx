@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { useApp } from '../App'
 import type { EntryEditorProps } from './EntryCard'
 import { amountProblem } from './bits'
+import { blankFieldRow, fieldPasteMessage, pasteFields } from '../tablePaste'
 
 /** A section whose layout comes from a plugin file. The definition travels with the record
  *  (content.schema), so it renders the same way even if the plugin later changes or is removed. */
@@ -55,13 +57,27 @@ function NumInput({ f, v, set, compact, common }: { f: CField; v: any; set: (v: 
 }
 
 export default function CustomEntry({ content, onChange, readOnly }: EntryEditorProps) {
+  const { toast } = useApp()
   const schema: Schema | undefined = content?.schema
   if (!schema) return <p className="error">This section's definition is missing.</p>
   const values: Record<string, any> = content.values || {}
   const rows: Record<string, Record<string, any>[]> = content.rows || {}
   const setVal = (id: string, v: any) => onChange({ ...content, values: { ...values, [id]: v } })
   const setRows = (id: string, r: Record<string, any>[]) => onChange({ ...content, rows: { ...rows, [id]: r } })
-  const blankRow = (t: CTable) => Object.fromEntries(t.columns.map(c => [c.id, c.type === 'checkbox' ? false : null]))
+  const blankRow = (t: CTable) => blankFieldRow(t.columns)
+  /** Cells copied from a spreadsheet fill the table from the cell pasted into, each as its column takes it (0.36.1:
+   *  the whole block went into that one cell). A single value is left to the cell itself, as typing. */
+  const pasteInto = (e: React.ClipboardEvent, t: CTable, r: Record<string, any>[], ri: number, ci: number) => {
+    if (readOnly) return
+    const text = e.clipboardData.getData('text')
+    if (!text.includes('\t') && !text.includes('\n')) return
+    e.preventDefault()
+    ;(e.target as HTMLElement).blur?.()  // a number box shows what it holds once it isn't being typed in
+    const p = pasteFields(t.columns, r, text, ri, ci)
+    setRows(t.id, p.rows)
+    const say = fieldPasteMessage(p)
+    if (say) toast(say)
+  }
   const missing = schema.fields.filter(f => f.required && empty(values[f.id])).length
   const checks = schema.fields.filter(f => f.type === 'checkbox')
   const ticked = checks.filter(f => values[f.id]).length
@@ -102,7 +118,7 @@ export default function CustomEntry({ content, onChange, readOnly }: EntryEditor
                 <tbody>
                   {r.map((row, i) => (
                     <tr key={i}>
-                      {t.columns.map(c => <td key={c.id} className={c.type === 'checkbox' ? 'cf-cb' : undefined}>
+                      {t.columns.map((c, ci) => <td key={c.id} className={c.type === 'checkbox' ? 'cf-cb' : undefined} onPaste={e => pasteInto(e, t, r, i, ci)}>
                         <Input f={c} v={row[c.id]} compact label={`${c.label}, row ${i + 1}`} readOnly={readOnly}
                           set={x => setRows(t.id, r.map((rr, j) => j === i ? { ...rr, [c.id]: x } : rr))} /></td>)}
                       {!readOnly && <td className="cf-del"><button className="btn ghost sm" aria-label={`Delete row ${i + 1}`} onClick={() => setRows(t.id, r.filter((_, j) => j !== i))}>×</button></td>}

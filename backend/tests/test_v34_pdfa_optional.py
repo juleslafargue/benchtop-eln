@@ -79,7 +79,9 @@ def test_without_the_pdfa_package_the_archive_is_made_and_says_where_the_proofs_
     text = pdfa_checks.text(pdf)
     assert "PDF/A-3" not in text and "attached to this file" not in text and "qpdf" not in text
     assert "the PDF/A package isn't installed there" in text
-    assert "record.benchtop.json" in text and "Proof" in text and "openssl ts -verify" in text
+    assert "record.benchtop.json" in text
+    # no trusted timestamps here: it says so, and doesn't explain how to check proofs that aren't there (0.36.1)
+    assert "weren't timestamped" in " ".join(text.replace("’", "'").split()) and "openssl ts -verify" not in text
     assert f"{e1['eid']} · page" in text  # the footers
     client.delete(f"/api/archive/jobs/{job['id']}", headers=a)
 

@@ -1632,3 +1632,43 @@ table.rxn-grid th.name-h { background: var(--paper-2); box-shadow: 1px 0 0 var(-
 }
 /* a group's name ("Reactants") stays in view too */
 table.rxn-grid tr.group .group-label { position: sticky; left: 8px; display: inline-block; }
+
+/* ---------- 0.36.1: narrow columns, as with the browser zoomed to 125% (a 1024-pixel-wide page)
+   Each part follows the width it actually has (container queries), not the window's: the record's middle column is
+   narrow at 1024 even though the window isn't. Containers are never set on anything that holds the expanded spectrum
+   viewer (position: fixed). */
+/* a section's title is never cut short: it keeps the width of its text and the tools move to a line of their own */
+.entry-head { container-type: inline-size; }
+.entry-title { min-width: min(calc(100% - 40px), calc(var(--title-ch, 8) * 1ch + 4px)); }
+@container (max-width: 600px) {
+  .entry-kind { display: none; }
+  .entry-title { flex: 1 1 0; }
+  .entry-head .save-state { min-width: 0; }
+  .entry-actions { flex-basis: 100%; justify-content: flex-end; gap: 2px 6px; }
+}
+/* a characterisation item: the data file and its View spectrum button get a row of their own */
+.char-head-box { container-type: inline-size; }
+@container (max-width: 620px) {
+  .char-head { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto; }
+  .char-head .char-file-wrap { grid-column: 1 / -1; grid-row: 2; }
+  .char-head .char-remove { grid-column: 3; grid-row: 1; }
+  .char-file .select { max-width: none; flex: 1; }
+}
+/* the NMR viewer's side: the signals table narrower, the predicted shifts under the structure, all inside the card */
+.sp-side { container-type: inline-size; }
+@container (max-width: 640px) {
+  .sp-table .select { width: 74px; } .sp-table .sp-j { width: 58px; }
+  .sp-table td, .sp-table th { padding-left: 4px; padding-right: 4px; }
+  .sp-table td:nth-last-child(2) { white-space: normal; min-width: 60px; }
+}
+.pred-panel { container-type: inline-size; }
+.pred-table-wrap { overflow-x: auto; max-width: 100%; min-width: 0; }
+@container (max-width: 560px) { .pred-grid { grid-template-columns: minmax(0, 1fr); } .pred-struct { max-width: 260px; } }
+/* a dashboard list in a narrow card: the number and status on one line, the title under them on up to two */
+.w-body { container-type: inline-size; }
+.w-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
+@container (max-width: 360px) {
+  .w-list li a { flex-wrap: wrap; row-gap: 2px; }
+  .w-list li a > .w-main { order: 2; flex-basis: 100%; }
+  .w-list li a > .status, .w-list li a > .faint:last-child { margin-left: auto; }
+}

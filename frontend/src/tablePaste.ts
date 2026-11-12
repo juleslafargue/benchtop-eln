@@ -1,4 +1,5 @@
-// Pasting cells from a spreadsheet into a Data table section (0.36). No imports, so `npm test` can check it directly.
+// Pasting cells from a spreadsheet into a Data table section (0.36), and into a plugin section's table (0.36.1, below).
+// No imports, so `npm test` can check it directly.
 //
 // Pasted into a table that's still as it was added (its own column names, every cell empty), a first line that looks
 // like column headings becomes the column names instead of the first row. The section says so, with a way to keep it as
@@ -53,4 +54,96 @@ export function paste(cols: Col[], rows: string[][], text: string, ri: number, c
   const grid = parseTsv(text)
   const header = isBlankTable(cols, rows) && looksLikeHeader(grid)
   return { ...pasteCells(cols, rows, grid, ri, ci, header), header }
+}
+
+// ---------------------------------------------------------------- a plugin section's table (0.36.1)
+// Its columns are fixed and typed (number, choice, tick box, date…). Pasted cells fill rows and columns from the cell
+// pasted into, adding rows as needed; a cell its column can't take is left as it was and counted, never stored
+// silently as something else (0.36: the whole block went into the first cell, and nothing was saved).
+
+export interface FieldCol { id: string; label: string; type: string; unit?: string; options?: string[] }
+export type FieldRow = Record<string, unknown>
+
+/** A new, empty row, as "+ Add row" makes it. */
+export const blankFieldRow = (cols: FieldCol[]): FieldRow =>
+  Object.fromEntries(cols.map(c => [c.id, c.type === 'checkbox' ? false : null]))
+
+const YES = ['yes', 'y', 'true', '1', 'x', '✓', '✔', 'done', 'ok']
+const NO = ['no', 'n', 'false', '0', '']
+
+/** A pasted cell as its column takes it, by the same rules as typing: { value }, or { skip } saying what the column
+ *  takes. An empty cell empties the cell. */
+export function fieldValue(c: FieldCol, raw: string): { value: unknown } | { skip: string } {
+  const t = raw.trim()
+  if (c.type === 'checkbox') {
+    if (YES.includes(t.toLowerCase())) return { value: true }
+    if (NO.includes(t.toLowerCase())) return { value: false }
+    return { skip: 'takes a tick (yes or no)' }
+  }
+  if (t === '') return { value: null }
+  if (c.type === 'number') {
+    // as typed: "1,000" could be one thousand or one, so it isn't kept (src/components/bits.tsx, amountProblem)
+    if (/^[-+]?[1-9]\d{0,2},\d{3}$/.test(t)) return { skip: 'takes numbers only (type 1000 or 1.000 without the comma)' }
+    const n = Number(t.replace(',', '.'))
+    return Number.isFinite(n) && /\d/.test(t) ? { value: n } : { skip: 'takes numbers only' }
+  }
+  if (c.type === 'select') {
+    const o = (c.options || []).find(x => x.trim().toLowerCase() === t.toLowerCase())
+    return o !== undefined ? { value: o } : { skip: `takes ${(c.options || []).join(' or ')}` }
+  }
+  if (c.type === 'date') return /^\d{4}-\d{2}-\d{2}$/.test(t) ? { value: t } : { skip: 'takes dates written as 2026-11-30' }
+  if (c.type === 'datetime') {
+    const m = t.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/)
+    return m ? { value: `${m[1]}T${m[2]}` } : { skip: 'takes dates and times written as 2026-11-30 14:30' }
+  }
+  return { value: raw.replace(/\r/g, '') }
+}
+
+/** Is this pasted line the table's own headings (each cell its column's label, with or without its unit, in any case)? */
+export function isFieldHeader(cols: FieldCol[], ci: number, line: string[]): boolean {
+  const cells = line.slice(0, Math.max(0, cols.length - ci))
+  const norm = (s: string) => s.trim().toLowerCase()
+  return cells.length > 0 && cells.every((cell, j) => {
+    const c = cols[ci + j]
+    return norm(cell) !== '' && [c.label, c.unit ? `${c.label} (${c.unit})` : c.label].some(x => norm(x) === norm(cell))
+  })
+}
+
+export interface FieldPaste { rows: FieldRow[]; header: boolean; filled: number; added: number; extra: number; skipped: { row: number; column: string; why: string }[] }
+
+/** Paste spreadsheet cells into a plugin table at row `ri`, column `ci`. */
+export function pasteFields(cols: FieldCol[], rows: FieldRow[], text: string, ri: number, ci: number): FieldPaste {
+  let grid = parseTsv(text)
+  const header = grid.length > 0 && isFieldHeader(cols, ci, grid[0])
+  if (header) grid = grid.slice(1)
+  const out = rows.map(r => ({ ...r }))
+  const before = out.length
+  const res: FieldPaste = { rows: out, header, filled: 0, added: 0, extra: 0, skipped: [] }
+  grid.forEach((line, i) => {
+    while (out.length <= ri + i) out.push(blankFieldRow(cols))
+    line.forEach((raw, j) => {
+      const c = cols[ci + j]
+      if (!c) { if (raw.trim()) res.extra++; return }
+      const v = fieldValue(c, raw)
+      if ('skip' in v) res.skipped.push({ row: ri + i + 1, column: c.label, why: v.skip })
+      else { out[ri + i][c.id] = v.value; res.filled++ }
+    })
+  })
+  res.added = out.length - before
+  return res
+}
+
+/** What to tell the person after a paste, or '' when it all went in as it was. */
+export function fieldPasteMessage(p: FieldPaste): string {
+  const bits: string[] = []
+  if (p.skipped.length) {
+    const by = new Map<string, number>()
+    for (const s of p.skipped) by.set(`${s.column} ${s.why}`, (by.get(`${s.column} ${s.why}`) || 0) + 1)
+    const n = p.skipped.length
+    bits.push(`${n} cell${n === 1 ? '' : 's'} not pasted, left as ${n === 1 ? 'it was' : 'they were'}: ` +
+      [...by].map(([k, c]) => `${k}${by.size > 1 || c > 1 ? ` (${c})` : ''}`).join('; ') + '.')
+  }
+  if (p.header) bits.push('The heading row was left out.')
+  if (p.extra) bits.push(`${p.extra} cell${p.extra === 1 ? '' : 's'} beyond the last column ${p.extra === 1 ? 'was' : 'were'} left out.`)
+  return bits.join(' ')
 }

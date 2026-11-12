@@ -224,6 +224,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += supporting_info(browser, tok["slaurent"])
         problems += yearly_archive(browser, tok["hweiss"], tok["slaurent"])
         problems += beyond_chemistry(browser, tok["hweiss"])
+        problems += zoomed(browser, tok["slaurent"])
         browser.close()
     return problems
 
@@ -2520,6 +2521,52 @@ def beyond_chemistry(browser, admin_token: str) -> list[tuple[str, str, str, str
         except Exception as e:  # noqa: BLE001
             bad("error", str(e).splitlines()[0][:160])
         ctx.close()
+    return found
+
+
+def zoomed(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """0.36.1: with the browser zoomed to 125% (a 1024-pixel-wide page), section titles were cut to "Characterisatic"
+    and "Safety &", and the NMR viewer's predicted shifts and "Hide spectrum" stuck out of their card. Every section
+    title shows whole (its box as wide as its text), and nothing in an open spectrum's card goes past its edge (tables
+    that scroll sideways inside it are fine)."""
+    print("Zoomed to 125%: section titles whole, the NMR viewer inside its card…", flush=True)
+    H = {"Authorization": "Bearer " + token}
+    me = httpx.get(B + "/api/auth/me", headers=H).json()
+    exps = httpx.get(B + "/api/experiments?limit=1000", headers=H).json()
+    picks = [e for e in exps if e["eid"] == "EXP-00020"]
+    picks += [e for e in exps if e["status"] == "open" and (e.get("owner") or {}).get("id") == me["id"]][:1]
+    picks += [e for e in exps if e not in picks][:3]
+    found: list[tuple[str, str, str, str]] = []
+    ctx = browser.new_context(viewport={"width": 1024, "height": 640}, device_scale_factor=1.25)
+    pg = ctx.new_page()
+    pg.goto(B)
+    pg.evaluate(f"localStorage.setItem('benchtop.token', '{token}')")
+    for e in picks:
+        path = f"/experiments/{e['id']}"
+        try:
+            pg.goto(B + path)
+            pg.wait_for_load_state("networkidle")
+            pg.wait_for_selector(".tabs, .entry", timeout=15000)  # the record is shown (it may have no sections)
+            pg.wait_for_timeout(500)
+            cut = pg.evaluate("""() => [...document.querySelectorAll('.entry-title')]
+                .filter(t => t.scrollWidth > t.clientWidth + 1).map(t => `"${t.value}" shows ${t.clientWidth} of ${t.scrollWidth}px`)""")
+            for c in cut:
+                found.append(("zoomed 125%", path, "title cut short", c))
+            view = pg.locator(".char-card button:has-text('View spectrum')")
+            if view.count():
+                view.first.click()
+                pg.wait_for_selector(".char-card.open .sp-plot canvas", timeout=15000)
+                pg.wait_for_timeout(1500)
+                out = pg.evaluate("""() => { const c = document.querySelector('.char-card.open'); if (!c) return []
+                    const edge = c.getBoundingClientRect().right
+                    return [...c.querySelectorAll('*')].filter(el => !el.closest('.sp-table-wrap, .pred-table-wrap, .grid-wrap'))
+                      .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.right > edge + 1 })
+                      .map(el => `${el.tagName.toLowerCase()} "${(el.innerText || '').trim().slice(0, 30)}" ${Math.round(el.getBoundingClientRect().right - edge)}px past`).slice(0, 3) }""")
+                for o in out:
+                    found.append(("zoomed 125%", path, "outside the spectrum's card", o))
+        except Exception as ex:  # noqa: BLE001
+            found.append(("zoomed 125%", path, "error", str(ex).splitlines()[0][:160]))
+    ctx.close()
     return found
 
 

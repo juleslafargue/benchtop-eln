@@ -1609,12 +1609,17 @@ def report_html(session, exp: Experiment, pdf: bool = False, *, page_size: str =
         if t["status"] == "ok":
             return f"{t['gen_time'][:19].replace('T', ' ')} UTC, {html.escape(t['tsa'] or '')}"
         return "pending" if t["status"] == "pending" else "not obtained"
+    # a column of trusted timestamps only where a signature was sent for one (0.36.1: in a lab without them, every
+    # record printed an empty "Trusted timestamp" column)
+    stamps = any(s.get("timestamp") for s in sigs)
     sig_html = "".join(
         f"<tr><td>{html.escape(s['meaning'])}</td><td>{html.escape(s['signer_name'] or s['user']['username'])}</td>"
-        f"<td>{s['signed_at'][:16].replace('T', ' ') if pdf else s['signed_at']}</td><td>{html.escape(s['comment'])}</td><td><code class='mono'>{s['content_hash'][:16]}…</code></td><td>{stamp(s)}</td></tr>"
-        for s in sigs) or "<tr><td colspan=6>Not signed</td></tr>"
+        f"<td>{s['signed_at'][:16].replace('T', ' ') if pdf else s['signed_at']}</td><td>{html.escape(s['comment'])}</td><td><code class='mono'>{s['content_hash'][:16]}…</code></td>"
+        + (f"<td>{stamp(s)}</td>" if stamps else "") + "</tr>"
+        for s in sigs) or f"<tr><td colspan={6 if stamps else 5}>Not signed</td></tr>"
     heads = (("Meaning", "11%"), ("Signer", "17%"), ("Signed (UTC)", "13%"), ("Comment", "24%"), ("Content hash", "19%"),
-             ("Trusted timestamp", "16%"))
+             ("Trusted timestamp", "16%")) if stamps else (
+             ("Meaning", "12%"), ("Signer", "20%"), ("Signed (UTC)", "15%"), ("Comment", "32%"), ("Content hash", "21%"))
     sig_head = "".join(f"<th width='{w}'>{t}</th>" if pdf else f"<th>{t}</th>" for t, w in heads)
     pdf_fix = pdf  # glyphs the PDF's built-in fonts lack
     size = page_size if page_size in PAGE_SIZES else "a4"

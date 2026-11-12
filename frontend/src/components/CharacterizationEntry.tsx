@@ -54,7 +54,7 @@ export default function CharacterizationEntry({ content, onChange, readOnly, exp
         const defaultCond = TECHNIQUES.find(t => t[0] === it.technique)?.[1]
         return (
           <div key={i} className={`char-card${open === i ? ' open' : ''}`}>
-            <div className="char-head">
+            <div className="char-head-box"><div className="char-head">
               <label className="fld"><span className="fld-cap">Technique</span>
                 <input className="input char-tech" list="char-techniques" disabled={readOnly} value={it.technique}
                   onChange={e => patch(i, { technique: e.target.value })} /></label>
@@ -81,7 +81,7 @@ export default function CharacterizationEntry({ content, onChange, readOnly, exp
               </div>
               {!readOnly && <button className="btn ghost sm char-remove" aria-label={`Remove ${it.technique}`} title={`Remove this ${it.technique || 'item'}`}
                 onClick={() => set(items.filter((_, j) => j !== i))}>×</button>}
-            </div>
+            </div></div>
             <label className="fld"><span className="fld-cap" title="The line that goes into your write-up. From a spectrum, click 'Use as characterisation data' to fill it.">Reported data</span>
               <textarea className="input char-data" rows={rowsFor(it.data)}
                 placeholder={readOnly ? undefined : PLACEHOLDER[it.technique] || 'Result as it should appear in the write-up'} disabled={readOnly} value={it.data}
