@@ -1474,7 +1474,13 @@ th:has(> .vh), td:has(> .vh) { position: relative; }
 .mat-overview { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 24px; }
 @media (max-width: 700px) { .mat-overview { grid-template-columns: minmax(0, 1fr); gap: 14px; } .mat-overview .kv { grid-template-columns: 96px minmax(0, 1fr); } }
 table.rxn-grid { font-size: 13px; }
-table.rxn-grid th { white-space: normal; padding: 6px 4px; vertical-align: bottom; line-height: 1.2; }
+/* 0.36.2: a heading's name on one line and its unit under it, smaller; lined up with the numbers below it (right, the
+   limiting-reagent dot centred) and in the middle of the heading row */
+table.rxn-grid th { white-space: nowrap; padding: 6px 6px 6px 4px; vertical-align: middle; line-height: 1.2; text-align: right; }
+table.rxn-grid th.name-h { text-align: left; }
+table.rxn-grid th.lim-h { text-align: center; }
+table.rxn-grid th .h-label, table.rxn-grid th .h-unit { display: block; }
+table.rxn-grid th .h-unit { font-size: 11.5px; font-weight: 400; color: var(--ink-3); }
 table.rxn-grid th:first-child, table.rxn-grid td:first-child { padding-left: 4px; }
 table.rxn-grid td { padding: 2px 1px; }
 table.rxn-grid .name-cell a { font-size: 11.5px; }
@@ -1672,3 +1678,8 @@ table.rxn-grid tr.group .group-label { position: sticky; left: 8px; display: inl
   .w-list li a > .w-main { order: 2; flex-basis: 100%; }
   .w-list li a > .status, .w-list li a > .faint:last-child { margin-left: auto; }
 }
+
+/* ---------- 0.36.2: a reaction table in a narrow column (a phone, the browser zoomed to 125%) already scrolls sideways;
+   there a long heading ("Theor. mass") may take two lines, so the table isn't made wider still */
+.rxn-wrap { container-type: inline-size; }
+@container (max-width: 680px) { table.rxn-grid th .h-label { white-space: normal; } }

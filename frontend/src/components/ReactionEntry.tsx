@@ -34,6 +34,14 @@ const COL_LABEL: Partial<Record<keyof StoichRow, string>> = {
   purity: 'Purity (%)', actual_mass_mg: 'Isolated mass (mg)',
 }
 
+/** A reaction table's column heading: its name on one line and, under it, its unit in smaller type ("Mass" over "mg").
+ *  Read aloud as "Mass mg". */
+function ColHead({ label, unit, title, className }: { label: string; unit?: string; title?: string; className?: string }) {
+  return <th className={className} title={title}>
+    <span className="h-label">{label}</span>{unit && <>{' '}<span className="h-unit">{unit}</span></>}
+  </th>
+}
+
 const blank = (role: StoichRow['role']): StoichRow => ({
   role, name: '', smiles: '', formula: '', mw: null, material_id: null, lot_id: null,
   equiv: role === 'product' ? 1 : null, mmol: null, mass_mg: null, volume_ml: null, density: null, conc_m: null,
@@ -251,11 +259,13 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
       <ConditionsBar value={conditions} onChange={setConditions} readOnly={readOnly} />
 
       {rows.length > 0 && (
-        <div className="grid-wrap">
+        <div className="grid-wrap rxn-wrap">
           <table className="grid rxn-grid">
             <thead><tr>
-              <th><span className="vh">Structure</span></th><th className="name-h">Name</th><th>MW</th><th title="Limiting reagent">Lim.</th><th>Equiv</th><th>mmol</th>
-              <th>Mass (mg)</th><th>Vol (mL)</th><th title="Density">ρ (g/mL)</th><th title="Concentration of a solution">Conc (M)</th><th>Purity %</th><th><span className="vh">Remove</span></th>
+              <th><span className="vh">Structure</span></th><ColHead className="name-h" label="Name" /><ColHead label="MW" unit="g/mol" />
+              <ColHead className="lim-h" title="Limiting reagent" label="Lim." /><ColHead label="Equiv" /><ColHead label="mmol" />
+              <ColHead label="Mass" unit="mg" /><ColHead label="Vol" unit="mL" /><ColHead title="Density" label="ρ" unit="g/mL" />
+              <ColHead title="Concentration of a solution" label="Conc" unit="M" /><ColHead label="Purity" unit="%" /><th><span className="vh">Remove</span></th>
             </tr></thead>
             <tbody>
               {nonProduct.map(g => [
@@ -288,11 +298,12 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
       )}
 
       {products.length > 0 && (
-        <div className="grid-wrap">
+        <div className="grid-wrap rxn-wrap">
           <table className="grid rxn-grid">
             <thead><tr>
-              <th><span className="vh">Structure</span></th><th className="name-h">Product</th><th>MW</th><th>Equiv</th><th title="Theoretical amount">Theor. mmol</th><th title="Theoretical mass">Theor. mass (mg)</th>
-              <th>Isolated (mg)</th><th>Purity %</th><th>Yield</th><th><span className="vh">Register or remove</span></th>
+              <th><span className="vh">Structure</span></th><ColHead className="name-h" label="Product" /><ColHead label="MW" unit="g/mol" />
+              <ColHead label="Equiv" /><ColHead title="Theoretical amount" label="Theor. mmol" /><ColHead title="Theoretical mass" label="Theor. mass" unit="mg" />
+              <ColHead label="Isolated" unit="mg" /><ColHead label="Purity" unit="%" /><ColHead label="Yield" /><th><span className="vh">Register or remove</span></th>
             </tr></thead>
             <tbody>
               {products.map(({ r, i }) => (

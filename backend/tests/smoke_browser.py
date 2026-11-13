@@ -225,6 +225,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += yearly_archive(browser, tok["hweiss"], tok["slaurent"])
         problems += beyond_chemistry(browser, tok["hweiss"])
         problems += zoomed(browser, tok["slaurent"])
+        problems += reaction_headings(browser, tok["slaurent"])
         browser.close()
     return problems
 
@@ -2566,6 +2567,91 @@ def zoomed(browser, token: str) -> list[tuple[str, str, str, str]]:
                     found.append(("zoomed 125%", path, "outside the spectrum's card", o))
         except Exception as ex:  # noqa: BLE001
             found.append(("zoomed 125%", path, "error", str(ex).splitlines()[0][:160]))
+    ctx.close()
+    return found
+
+
+def reaction_headings(browser, token: str) -> list[tuple[str, str, str, str]]:
+    """0.36.2: the reaction tables' headings wrapped at every space ("Theor." / "mass" / "(mg)" on three lines), sat at
+    different heights, and were left-aligned over right-aligned numbers ("Purity %" far from its 100, "Lim." running into
+    "Equiv"). At a desktop width each heading's name is on one line (its unit under it, read aloud as "Mass mg"), a
+    number's heading ends where the numbers below it end, the limiting-reagent heading is over its dot, every heading
+    is in the middle of the heading row, and neither table scrolls sideways at 1280 px."""
+    print("Reaction table headings: one line each, over their numbers, in the middle of the row…", flush=True)
+    found: list[tuple[str, str, str, str]] = []
+    # Priya's open draft KX-105 (EXP-00021): reactants, reagents, a solvent filled to a concentration, and a product
+    exp, user_token = None, token
+    r = httpx.post(B + "/api/auth/login", json={"username": "pnair", "password": PW})
+    if r.status_code == 200:
+        user_token = r.json()["token"]
+        exp = next((e for e in httpx.get(B + "/api/experiments?limit=1000", headers={"Authorization": "Bearer " + user_token}).json()
+                    if e["eid"] == "EXP-00021"), None)
+    H = {"Authorization": "Bearer " + user_token}
+    if exp is None or "KX-105" not in json.dumps(httpx.get(f"{B}/api/experiments/{exp['id']}", headers=H).json()):
+        # an older demo lab without it: a record of its own, with both tables
+        user_token, H = token, {"Authorization": "Bearer " + token}
+        nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Reaction headings check"}).json()
+        exp = httpx.post(B + "/api/experiments", headers=H, json={"title": "Amide coupling", "notebook_id": nb["id"]}).json()
+        rows = [{"role": "reactant", "name": "Benzoic acid", "smiles": "OC(=O)c1ccccc1", "limiting": True, "basis": "mass", "mass_mg": 122.12},
+                {"role": "reactant", "name": "Benzylamine", "smiles": "NCc1ccccc1", "equiv": 1.1, "basis": "equiv"},
+                {"role": "product", "name": "N-Benzylbenzamide", "smiles": "O=C(NCc1ccccc1)c1ccccc1", "equiv": 1, "basis": "equiv"}]
+        httpx.post(f"{B}/api/experiments/{exp['id']}/entries", headers=H, json={"kind": "reaction", "title": "Coupling", "content": {"rows": rows}})
+    path = f"/experiments/{exp['id']}"
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{user_token}')")
+    pg = ctx.new_page()
+    try:
+        pg.goto(B + path)
+        pg.wait_for_load_state("networkidle")
+        pg.wait_for_selector("table.rxn-grid tbody tr:not(.group) td", timeout=15000)
+        pg.wait_for_timeout(800)
+        if pg.locator("table.rxn-grid").count() < 2:
+            found.append(("reaction headings", path, "tables", "expected a reagents table and a products table"))
+        problems = pg.evaluate("""() => {
+            const out = [], rect = n => { const r = document.createRange(); r.selectNodeContents(n); return r }
+            const lines = n => new Set([...rect(n).getClientRects()].filter(r => r.width > 0).map(r => Math.round(r.top))).size
+            document.querySelectorAll('div.grid-wrap:has(table.rxn-grid)').forEach(w => {
+              if (w.scrollWidth > w.clientWidth + 1) out.push(['too wide', `a reaction table scrolls sideways by ${w.scrollWidth - w.clientWidth}px`])
+            })
+            for (const table of document.querySelectorAll('table.rxn-grid')) {
+              const heads = [...table.querySelectorAll('thead th')]
+              // the first row of amounts with a cell under every heading (a solvent's row joins two)
+              const row = [...table.querySelectorAll('tbody tr:not(.group)')].find(tr => tr.children.length === heads.length)
+              heads.forEach((th, i) => {
+                if (th.querySelector('.vh')) return
+                const label = th.querySelector('.h-label') || th, name = label.textContent.trim(), box = th.getBoundingClientRect()
+                if (lines(label) !== 1) out.push(['wraps', `"${name}" takes ${lines(label)} lines`])
+                const text = rect(th).getBoundingClientRect()
+                const off = (text.top + text.bottom) / 2 - (box.top + box.bottom) / 2
+                if (Math.abs(off) > 2) out.push(['not centred', `"${name}" is ${Math.round(Math.abs(off))}px ${off > 0 ? 'below' : 'above'} the middle of the heading row`])
+                const td = row && row.children[i]
+                if (!td || th.classList.contains('name-h')) return
+                if (th.title === 'Limiting reagent') {
+                  const dot = td.querySelector('input[type=radio]'); if (!dot) return
+                  const d = dot.getBoundingClientRect(), by = (text.left + text.right) / 2 - (d.left + d.right) / 2
+                  if (Math.abs(by) > 4) out.push(['not over its column', `"${name}" is ${Math.round(by)}px from the centre of the limiting-reagent dot`])
+                  return
+                }
+                let end = null
+                const input = td.querySelector('input:not([type=checkbox]):not([type=radio])')
+                if (input) {
+                  const s = getComputedStyle(input), r = input.getBoundingClientRect()
+                  end = r.right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth)
+                } else if (td.textContent.trim()) end = rect(td).getBoundingClientRect().right
+                if (end === null) return
+                const ends = rect(label).getBoundingClientRect().right
+                if (Math.abs(ends - end) > 4) out.push(['not over its numbers', `"${name}" ends ${Math.round(ends - end)}px from where the numbers below it end`])
+              })
+            }
+            return out }""")
+        for kind, what in problems:
+            found.append(("reaction headings", path, kind, what))
+        # each heading is read aloud whole: its name, then its unit
+        for name in ("Mass mg", "Purity %", "Lim."):
+            if pg.get_by_role("columnheader", name=name, exact=True).count() < 1:
+                found.append(("reaction headings", path, "read aloud", f'no column heading is read as "{name}"'))
+    except Exception as ex:  # noqa: BLE001
+        found.append(("reaction headings", path, "error", str(ex).splitlines()[0][:160]))
     ctx.close()
     return found
 
