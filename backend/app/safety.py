@@ -126,6 +126,11 @@ def ensure(session: Session, *, inchikey: str = "", cas: str = "", name: str = "
         return None
     cs = session.exec(select(ChemSafety).where(ChemSafety.key == key)).first()
     if cs is None:
+        # look again with the write lock held: two people opening the same new experiment at once both found it
+        # missing, and the second one's page gave "Internal Server Error" (the key is unique)
+        audit._take_write_lock(session)
+        cs = session.exec(select(ChemSafety).where(ChemSafety.key == key)).first()
+    if cs is None:
         cs = ChemSafety(key=key, title=name)
         session.add(cs)
         session.flush()

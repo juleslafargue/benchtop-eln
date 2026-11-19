@@ -931,6 +931,127 @@
     "Concentrations (at least 3 rows)",
     "Wells (at least 1 row)"
    ]
+  },
+  {
+   "name": "spaces alone are nothing (0.36.4: text is kept as typed)",
+   "content": {
+    "schema": {
+     "plugin": "test",
+     "id": "assay",
+     "name": "Assay",
+     "title": "Assay",
+     "description": "",
+     "fields": [
+      {
+       "id": "compound",
+       "label": "Compound",
+       "type": "text",
+       "required": true
+      },
+      {
+       "id": "passage",
+       "label": "Passage",
+       "type": "number",
+       "required": true
+      },
+      {
+       "id": "outcome",
+       "label": "Result",
+       "type": "select",
+       "options": [
+        "Fitted",
+        "Inactive"
+       ],
+       "required": true
+      },
+      {
+       "id": "image",
+       "label": "Uncropped image added",
+       "type": "checkbox",
+       "required": true
+      },
+      {
+       "id": "notes",
+       "label": "Notes",
+       "type": "longtext"
+      }
+     ],
+     "tables": [
+      {
+       "id": "points",
+       "label": "Concentrations",
+       "min_rows": 3,
+       "help": "",
+       "columns": [
+        {
+         "id": "conc",
+         "label": "Concentration",
+         "type": "number",
+         "required": true
+        },
+        {
+         "id": "r1",
+         "label": "Replicate 1",
+         "type": "number"
+        },
+        {
+         "id": "ok",
+         "label": "Included",
+         "type": "checkbox"
+        }
+       ]
+      },
+      {
+       "id": "wells",
+       "label": "Wells",
+       "min_rows": 1,
+       "help": "",
+       "columns": [
+        {
+         "id": "well",
+         "label": "Well",
+         "type": "text",
+         "required": true
+        }
+       ]
+      }
+     ]
+    },
+    "values": {
+     "compound": "  \n ",
+     "passage": 12,
+     "outcome": "Fitted",
+     "image": true,
+     "notes": ""
+    },
+    "rows": {
+     "points": [
+      {
+       "conc": 0.1,
+       "r1": 96.2,
+       "ok": false
+      },
+      {
+       "conc": 1,
+       "r1": 71.5,
+       "ok": false
+      },
+      {
+       "conc": 10,
+       "r1": 18.9,
+       "ok": false
+      }
+     ],
+     "wells": [
+      {
+       "well": "A1"
+      }
+     ]
+    }
+   },
+   "missing": [
+    "Compound"
+   ]
   }
  ]
 }

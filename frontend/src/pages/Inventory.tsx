@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useApp } from '../App'
 import { unitLabel, api, day, fmt, type Lot, type Material } from '../api'
-import { Mol, NumInput, useDebounced } from '../components/bits'
+import { Mol, NumInput, useDebounced, useOneAtATime } from '../components/bits'
 import Modal from '../components/Modal'
 import MaterialPicker from '../components/MaterialPicker'
 import Scanner from '../components/Scanner'
@@ -16,12 +16,14 @@ function AdjustDialog({ lot, onClose, onDone }: { lot: Lot; onClose: () => void;
   const [direction, setDirection] = useState('out')
   const [note, setNote] = useState('')
   const [err, setErr] = useState('')
-  const go = async () => {
+  const [busy, once] = useOneAtATime()
+  const go = () => once(async () => {
+    setErr('')
     try { await api.post(`/api/lots/${lot.id}/transactions`, { amount, unit, direction, note }); onDone() } catch (e: any) { setErr(e.message) }
-  }
+  })
   return (
     <Modal title={`Adjust ${lot.barcode}`} onClose={onClose} footer={<>
-      <button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!amount} onClick={go}>Record change</button></>}>
+      <button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!amount || busy} onClick={go}>{busy ? 'Recording…' : 'Record change'}</button></>}>
       <p className="muted" style={{ marginTop: 0 }}>{lot.material_name}: {fmt(lot.amount, 4)} {unitLabel(lot.unit)} on hand.</p>
       <div className="form-grid">
         <label className="field">Change<select className="select" value={direction} onChange={e => setDirection(e.target.value)}><option value="out">Remove (used)</option><option value="in">Add (correction)</option></select></label>

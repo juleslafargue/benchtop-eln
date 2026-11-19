@@ -1,6 +1,7 @@
 """Materials registry and inventory (lots/containers with a usage ledger)."""
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime
 from typing import Any
@@ -32,6 +33,33 @@ def convert(amount: float, from_unit: str, to_unit: str, density: float | None =
             raise HTTPException(400, f"Need a density to convert {from_unit} to {to_unit}")
         base = base * density if fk == "vol" else base / density
     return base / tf
+
+
+LOT_STATUSES = ("available", "empty", "quarantined", "disposed")
+
+
+def _number(label: str, v: float | None, *, lo: float, hi: float, lo_ok: bool = False) -> None:
+    """A number that makes sense for this field, or a plain 422 (0.36.4: a density of -1 turned a withdrawal into a
+    top-up; a purity of 250 % or 1e300 was kept). None (not given, or cleared) is fine."""
+    if v is None:
+        return
+    if not (math.isfinite(v) and (v >= lo if lo_ok else v > lo) and v <= hi):
+        raise HTTPException(422, f"{label} must be a number {'from' if lo_ok else 'above'} {lo:g} {'to' if lo_ok else 'and up to'} {hi:g}")
+
+
+def _check_material_numbers(density: float | None, mw: float | None) -> None:
+    _number("Density (g/mL)", density, lo=0, hi=100)
+    _number("Molecular weight (g/mol)", mw, lo=0, hi=1e9)
+
+
+def _check_purity(purity: float | None) -> None:
+    _number("Purity (%)", purity, lo=0, hi=100, lo_ok=True)
+
+
+def _like(column, q: str):
+    """`column` contains `q` (any case). % and _ are searched for as themselves, not as wildcards (0.36.4: a search
+    for % matched every lot)."""
+    return col(column).icontains(q, autoescape=True)
 
 
 def lot_out(lot: Lot) -> dict[str, Any]:
@@ -88,9 +116,8 @@ def list_materials(_: CurrentUser, session: DB, response: Response, q: str = "",
     match, and `offset` fetches the rest."""
     stmt = select(Material)
     if q:
-        like = f"%{q}%"
-        stmt = stmt.where(or_(col(Material.name).ilike(like), col(Material.cas).ilike(like),
-                              col(Material.synonyms).ilike(like), col(Material.formula).ilike(like)))
+        stmt = stmt.where(or_(_like(Material.name, q), _like(Material.cas, q), _like(Material.synonyms, q),
+                              _like(Material.formula, q)))
     if kind:
         stmt = stmt.where(Material.kind == kind)
     paging.set_total(response, paging.count(session, stmt))
@@ -108,8 +135,12 @@ def _fetch_safety_later(mat_id: int) -> None:
 
 @router.post("/materials", status_code=201)
 def create_material(body: MaterialIn, user: Writer, session: DB, background: BackgroundTasks):
+    _check_material_numbers(body.density, body.mw)
     m = Material(**body.model_dump(), created_by=user.id)
     _apply_structure(m)
+    # the check and the new material as one step (0.36.4: twelve people registering the same structure at the same
+    # moment got two MAT numbers for it)
+    audit._take_write_lock(session)
     if m.inchikey:
         dup = session.exec(select(Material).where(Material.inchikey == m.inchikey)).first()
         if dup:
@@ -184,6 +215,7 @@ class MaterialPatch(BaseModel):
 def update_material(mat_id: int, body: MaterialPatch, user: Writer, session: DB):
     m = get_or_404(session, Material, mat_id)
     changes = cleaned(m, body.model_dump(exclude_unset=True))
+    _check_material_numbers(changes.get("density"), changes.get("mw"))
     for k, v in changes.items():
         setattr(m, k, v)
     if "smiles" in changes:
@@ -275,9 +307,11 @@ def create_lot(mat_id: int, body: LotIn, user: Writer, session: DB):
         raise HTTPException(400, f"unit must be one of {list(_UNITS)}")
     if not (body.amount > 0 and body.amount < 1e12):
         raise HTTPException(400, "Amount must be a positive number")
+    _check_purity(body.purity)
     fields = body.model_dump(exclude={"allow_duplicate"})
     fields["barcode"] = clean_code(fields["barcode"])
-    others = lots_with_code(session, fields["barcode"])
+    audit._take_write_lock(session)  # look for the barcode and add the lot as one step (0.36.4: a double-click on
+    others = lots_with_code(session, fields["barcode"])  # "Add lot" made two lots with the same new barcode)
     if others and not body.allow_duplicate:
         _refuse_duplicate(session, others)
     lot = Lot(material_id=m.id, created_by=user.id, **fields)
@@ -333,11 +367,9 @@ def list_lots(_: CurrentUser, session: DB, response: Response, q: str = "", loca
     """Containers by material name; every match unless `limit` is given."""
     stmt = select(Lot, Material).join(Material, Material.id == Lot.material_id)
     if q:
-        like = f"%{q}%"
-        stmt = stmt.where(or_(col(Lot.barcode).ilike(like), col(Material.name).ilike(like),
-                              col(Material.cas).ilike(like)))
+        stmt = stmt.where(or_(_like(Lot.barcode, q), _like(Material.name, q), _like(Material.cas, q)))
     if location:
-        stmt = stmt.where(col(Lot.location).ilike(f"%{location}%"))
+        stmt = stmt.where(_like(Lot.location, location))
     if status:
         stmt = stmt.where(Lot.status == status)
     paging.set_total(response, paging.count(session, stmt))
@@ -358,8 +390,13 @@ class LotPatch(BaseModel):
 
 @router.patch("/lots/{lot_id}")
 def update_lot(lot_id: int, body: LotPatch, user: Writer, session: DB):
-    lot = get_or_404(session, Lot, lot_id)
+    audit._take_write_lock(session)  # the barcode check below, and no withdrawal changes the lot meanwhile
+    lot = _lot_now(session, lot_id)
     changes = cleaned(lot, body.model_dump(exclude_unset=True, exclude={"allow_duplicate"}))
+    if "status" in changes and changes["status"] != lot.status and changes["status"] not in LOT_STATUSES:
+        raise HTTPException(422, f"Status must be one of: {', '.join(LOT_STATUSES)}")
+    if "purity" in changes:
+        _check_purity(changes["purity"])
     others: list[Lot] = []
     if "barcode" in changes:
         changes["barcode"] = clean_code(changes["barcode"])
@@ -389,9 +426,20 @@ class TxIn(BaseModel):
     note: str = ""
 
 
+def _lot_now(session: Session, lot_id: int) -> Lot:
+    """The lot as it is now. Call with the write lock held: until this request commits, nobody else can change its
+    amount, so the amount read here is the one the change is made to (0.36.4: 60 people withdrawing 250 mg from a
+    10 g bottle at once were all accepted, and the bottle's amount no longer matched its ledger)."""
+    lot = session.get(Lot, lot_id, populate_existing=True)
+    if lot is None:
+        raise HTTPException(404, "Lot not found")
+    return lot
+
+
 @router.post("/lots/{lot_id}/transactions", status_code=201)
 def lot_transaction(lot_id: int, body: TxIn, user: Writer, session: DB):
-    lot = get_or_404(session, Lot, lot_id)
+    audit._take_write_lock(session)
+    lot = _lot_now(session, lot_id)
     m = get_or_404(session, Material, lot.material_id)
     if body.unit not in _UNITS:
         raise HTTPException(400, "unknown unit")
@@ -401,8 +449,12 @@ def lot_transaction(lot_id: int, body: TxIn, user: Writer, session: DB):
         raise HTTPException(400, "direction must be 'out' or 'in'")
     if not (body.amount > 0 and body.amount < 1e12):
         raise HTTPException(400, "Amount must be a positive number")
+    if body.unit != lot.unit and _UNITS[body.unit][0] != _UNITS[lot.unit][0] and not (m.density and m.density > 0):
+        raise HTTPException(400, f"Need a density to convert {body.unit} to {lot.unit}")  # an old negative one too
     qty = convert(body.amount, body.unit, lot.unit, m.density)
     delta = -qty if body.direction == "out" else qty
+    if not math.isfinite(delta) or lot.amount + delta >= 1e12:
+        raise HTTPException(400, "That would make the amount in this lot too large to record")
     if lot.amount + delta < -1e-9:
         raise HTTPException(409, f"Only {lot.amount:g} {lot.unit} left in {lot.barcode}")
     lot.amount = round(lot.amount + delta, 6)
@@ -418,16 +470,27 @@ def lot_transaction(lot_id: int, body: TxIn, user: Writer, session: DB):
     return {"lot": lot_out(lot), "transaction_id": tx.id}
 
 
+def reversal_of(session: Session, tx: LotTransaction) -> LotTransaction | None:
+    """The entry that undid this one, if any. Its note is "Reversal of #12 (…)": the bracket matters, or undoing #1
+    would find #12's reversal (before 0.36.4 it then said #1 had "already been reversed")."""
+    marker = f"Reversal of #{tx.id}"
+    return session.exec(select(LotTransaction).where(LotTransaction.lot_id == tx.lot_id, or_(
+        LotTransaction.note == marker, col(LotTransaction.note).startswith(f"{marker} (", autoescape=True)))).first()
+
+
 @router.post("/lots/transactions/{tx_id}/reverse", status_code=201)
 def reverse_transaction(tx_id: int, user: Writer, session: DB):
     """Undo a usage entry by posting the opposite amount. The original stays in the ledger."""
+    audit._take_write_lock(session)  # "already reversed?" and the reversal as one step (0.36.4: three at once all went in)
     tx = get_or_404(session, LotTransaction, tx_id)
     marker = f"Reversal of #{tx.id}"
-    if session.exec(select(LotTransaction).where(LotTransaction.note.startswith(marker))).first():
+    if reversal_of(session, tx):
         raise HTTPException(409, "This entry has already been reversed")
     if tx.note.startswith("Reversal of #"):
         raise HTTPException(409, "A reversal can't itself be reversed; record a new adjustment instead")
-    lot = get_or_404(session, Lot, tx.lot_id)
+    lot = _lot_now(session, tx.lot_id)
+    if lot.amount - tx.delta >= 1e12:
+        raise HTTPException(400, "That would make the amount in this lot too large to record")
     if lot.amount - tx.delta < -1e-9:
         raise HTTPException(409, f"Only {lot.amount:g} {lot.unit} left in {lot.barcode}")
     lot.amount = round(lot.amount - tx.delta, 6)
@@ -478,7 +541,11 @@ class RegisterProductIn(BaseModel):
 @router.post("/materials/register-product", status_code=201)
 def register_product(body: RegisterProductIn, user: Writer, session: DB):
     exp = read_experiment(session, user, body.experiment_id)
-    m = None
+    _check_purity(body.purity)
+    if body.amount_mg is not None and not (math.isfinite(body.amount_mg) and 0 <= body.amount_mg < 1e12):
+        raise HTTPException(422, "The amount must be a positive number of mg")
+    audit._take_write_lock(session)  # look for the structure and register it as one step (0.36.4: a double-click on
+    m = None  # "Register" made two materials for one product)
     if body.smiles:
         try:
             ik = chem.properties(body.smiles)["inchikey"]

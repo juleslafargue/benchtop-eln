@@ -30,3 +30,31 @@ export function mergeStoich(sent: Content, now: Content, answer: StoichAnswer): 
   }
   return { ...now, rows: merged, totals: answer.totals, warnings: answer.warnings }
 }
+
+// "Deduct amounts from inventory" records one withdrawal per row, each a request (seconds on a slow network). Its
+// marks ("✓ used") go into the section as it is now, so what was typed meanwhile stays (0.36.4: the section was put
+// back as it was when Deduct was clicked, wiping names and notes typed while it ran).
+export interface DeductMark { tx_id: number; amount: number; unit: string }
+const markOf = (r: Row) => r.deducted as DeductMark | null | undefined
+
+/** The section with `mark` on the row it was made for: the row at `at` if it is still on that lot and unmarked, else
+ *  the first unmarked row on that lot (rows were added or removed meanwhile). null when there is no such row. */
+export function withDeduction(now: Content, at: number, lotId: unknown, mark: DeductMark): Content | null {
+  const rows = (now.rows || []) as Row[]
+  const fits = (r: Row | undefined) => !!r && r.lot_id === lotId && !markOf(r)
+  const i = fits(rows[at]) ? at : rows.findIndex(fits)
+  if (i < 0) return null
+  return { ...now, rows: rows.map((r, j) => (j === i ? { ...r, deducted: mark } : r)) }
+}
+
+/** May this row (as it is now) still be deducted? The confirmation names rows as they were when it opened. */
+export function stillUnmarked(now: Content, at: number, lotId: unknown): boolean {
+  const r = ((now.rows || []) as Row[])[at]
+  return !!r && r.lot_id === lotId && !markOf(r)
+}
+
+/** The section without the mark for this withdrawal (it was undone), wherever that row is now. */
+export function withoutDeduction(now: Content, txId: number): Content {
+  const rows = (now.rows || []) as Row[]
+  return { ...now, rows: rows.map(r => (markOf(r)?.tx_id === txId ? { ...r, deducted: null } : r)) }
+}

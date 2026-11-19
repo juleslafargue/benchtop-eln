@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react'
 import { useApp } from '../App'
 import type { EntryEditorProps } from './EntryCard'
-import { amountProblem } from './bits'
+import { NumInput as AmountInput } from './bits'
 import { blankFieldRow, fieldPasteMessage, pasteFields } from '../tablePaste'
 
 /** A section whose layout comes from a plugin file. The definition travels with the record
@@ -14,7 +13,7 @@ export interface CField {
 interface CTable { id: string; label: string; columns: CField[]; min_rows: number; help?: string }
 interface Schema { plugin: string; id: string; name: string; description: string; fields: CField[]; tables: CTable[] }
 
-const empty = (v: unknown) => v === null || v === undefined || v === '' || v === false
+const empty = (v: unknown) => v === null || v === undefined || v === false || (typeof v === 'string' && v.trim() === '')
 
 function warning(f: CField, v: unknown): string | null {
   if (f.type !== 'number' || typeof v !== 'number') return null
@@ -34,25 +33,25 @@ function Input({ f, v, set, readOnly, compact, label }: { f: CField; v: any; set
       {(f.options || []).map(o => <option key={o} value={o}>{o}</option>)}
     </select>)
   if (f.type === 'longtext') return <textarea className="input" rows={compact ? 1 : 3} value={v ?? ''} placeholder={readOnly ? undefined : f.placeholder} onChange={e => set(e.target.value)} {...common} />
-  if (f.type === 'number') return <NumInput f={f} v={v} set={set} compact={compact} common={common} />
+  if (f.type === 'number') return <NumInput f={f} v={v} set={set} compact={compact} label={label || f.label} disabled={readOnly} />
   const type = f.type === 'date' ? 'date' : f.type === 'datetime' ? 'datetime-local' : 'text'
   return <input className="input" type={type} value={type === 'datetime-local' ? String(v ?? '').slice(0, 16) : v ?? ''} placeholder={readOnly ? undefined : f.placeholder}
     onChange={e => set(e.target.value || null)} {...common} />
 }
 
-/** Keeps what you're typing ("1.", "-") locally and passes the number up, so saves don't eat the decimal point. */
-function NumInput({ f, v, set, compact, common }: { f: CField; v: any; set: (v: any) => void; compact?: boolean; common: Record<string, any> }) {
-  const [text, setText] = useState(v == null ? '' : String(v))
-  const [focus, setFocus] = useState(false)
-  useEffect(() => { if (!focus) setText(v == null ? '' : String(v)) }, [v, focus])
-  const problem = amountProblem(text)  // "1,000": one thousand, or one? (0.30.1: it was kept as 1)
+// a plugin field's unit that the reaction table's number boxes also convert ("1.2 g" in a mg field is 1200)
+const AMOUNT_UNIT: Record<string, 'mg' | 'mL' | 'mmol' | 'h' | 'M' | 'C'> = { mg: 'mg', mL: 'mL', mmol: 'mmol', h: 'h', M: 'M', '°C': 'C' }
+
+/** The reaction table's number box (bits.tsx), so plugin sections behave the same way (0.36.4: "1,000", "25 °C",
+ *  "abc" or "1e400" emptied the box and erased the value without a word, "0x10" was 16, Escape didn't put the
+ *  value back, and a whole-number field took 0.5). Text that can't be read stays in the box, with why, and the value
+ *  is kept; "1 000" is 1000 and "0,5" is 0.5; Escape puts back what was there. Saved after a pause in typing. */
+function NumInput({ f, v, set, compact, label, disabled }: { f: CField; v: any; set: (v: any) => void; compact?: boolean; label: string; disabled: boolean }) {
   return (
     <span className="cf-num">
-      <input className={`input${problem ? ' num-bad' : ''}`} inputMode="decimal" value={text} placeholder={common.disabled ? undefined : f.placeholder} onFocus={() => setFocus(true)}
-        onBlur={() => setFocus(false)} aria-invalid={problem ? true : undefined}
-        onChange={e => { const t = e.target.value; setText(t); const n = Number(t.replace(',', '.')); set(t.trim() === '' || amountProblem(t) ? null : Number.isFinite(n) ? n : null) }} {...common} />
+      <AmountInput className="input" label={label} value={typeof v === 'number' ? v : null} onCommit={set} live={600} disabled={disabled}
+        unit={f.unit ? AMOUNT_UNIT[f.unit] : undefined} whole={f.decimals === 0} nd={f.decimals ?? 6} placeholder={f.placeholder} required={f.required} />
       {f.unit && !compact && <span className="cf-unit">{f.unit}</span>}
-      {problem && !focus && <span className="num-problem" role="alert">{problem}</span>}
     </span>)
 }
 

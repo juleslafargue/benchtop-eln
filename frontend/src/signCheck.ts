@@ -46,8 +46,9 @@ export function reminderText(entries: EntryLike[]): string {
 // filled in. The dialog shows them before the password is typed (0.35 only said so after). This mirrors
 // backend/app/plugins.py missing_required() rule for rule, so the dialog lists exactly what the server would refuse.
 
-/** Nothing typed or ticked (plugins.is_blank). 0 is a value. */
-const blank = (v: unknown) => v === null || v === undefined || v === false || v === ''
+/** Nothing typed or ticked (plugins.is_blank). 0 is a value; spaces alone are not (0.36.4: text is stored as typed,
+ *  spaces included). */
+const blank = (v: unknown) => v === null || v === undefined || v === false || (typeof v === 'string' && v.trim() === '')
 
 /** The labels of a plugin section's required items still empty, as the server words them. */
 export function missingRequired(content: any): string[] {

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useId, useState, type ComponentProps } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState, type ComponentProps } from 'react'
 import { depictUrl } from '../api'
 
 const StructureEditorLazy = lazy(() => import('./StructureEditor'))
@@ -73,7 +73,7 @@ export function numberProblem(text: string, unit?: keyof typeof UNITS): string |
  *  (0.30.1: it was thrown away without a word). Escape puts back what was there.
  *  With `unit`, a typed unit is converted (e.g. "1.2 g" into a mg field). With `live`, what's typed is used after that
  *  many milliseconds without typing, without leaving the box (filters, and dialogs whose button needs the amount). */
-export function NumInput({ value, onCommit, disabled, className, label, nd = 4, unit, sig, onProblem, live, fit }: {
+export function NumInput({ value, onCommit, disabled, className, label, nd = 4, unit, sig, onProblem, live, fit, whole, placeholder, required }: {
   value: number | null | undefined; onCommit: (v: number | null) => void
   disabled?: boolean; className?: string; label: string; nd?: number; unit?: keyof typeof UNITS
   /** show at most this many significant figures (whole numbers stay whole): the value kept is unchanged */
@@ -83,6 +83,10 @@ export function NumInput({ value, onCommit, disabled, className, label, nd = 4, 
   live?: number
   /** grow to show the whole number (a table's narrow boxes: "123457" mg, "0.000123" equiv were cut) */
   fit?: boolean
+  /** whole numbers only (a plugin field with decimals = 0, such as a passage number): "0.5" is refused, with why */
+  whole?: boolean
+  placeholder?: string
+  required?: boolean
 }) {
   // tiny amounts (after a big scale-down) keep 3 significant figures instead of rounding to 0.00
   const shown = value === null || value === undefined ? ''
@@ -99,17 +103,23 @@ export function NumInput({ value, onCommit, disabled, className, label, nd = 4, 
     return () => { if (problem) onProblem?.(label, '') }
   }, [problem]) // eslint-disable-line react-hooks/exhaustive-deps
   const same = (n: number | null) => n === (value ?? null)
+  const problemOf = (text: string) => {
+    const bad = numberProblem(text, unit)
+    if (bad || !whole) return bad
+    const n = parseAmount(text, unit)
+    return typeof n === 'number' && !Number.isInteger(n) ? 'Whole numbers only here.' : null
+  }
   useEffect(() => {  // live: use what's typed after a pause (what can't be read is said when the box is left)
     if (live === undefined || !draft) return
     const t = setTimeout(() => {
-      const n = numberProblem(draft.text, unit) ? undefined : parseAmount(draft.text, unit)
+      const n = problemOf(draft.text) ? undefined : parseAmount(draft.text, unit)
       if (n !== undefined && !same(n)) onCommit(n)
     }, live)
     return () => clearTimeout(t)
   }, [draft?.text]) // eslint-disable-line react-hooks/exhaustive-deps
   const commit = () => {
     if (!draft) return
-    const bad = numberProblem(draft.text, unit)
+    const bad = problemOf(draft.text)
     if (bad) { setProblem(bad); return }
     setDraft(null)
     const t = draft.text.trim()
@@ -125,7 +135,7 @@ export function NumInput({ value, onCommit, disabled, className, label, nd = 4, 
     <input
       style={chars > 5 ? { minWidth: `calc(${chars.toFixed(1)}ch + 10px)` } : undefined}
       aria-label={label} inputMode={unit ? 'text' : 'decimal'} className={[className, problem && 'num-bad'].filter(Boolean).join(' ') || undefined}
-      disabled={disabled} value={text} aria-invalid={problem ? true : undefined} aria-describedby={problem && !onProblem ? problemId : undefined}
+      disabled={disabled} value={text} placeholder={disabled ? undefined : placeholder} aria-required={required || undefined} aria-invalid={problem ? true : undefined} aria-describedby={problem && !onProblem ? problemId : undefined}
       title={[sig && value != null && !draft && String(value) !== shown ? `${value}${unit && unit !== 'C' ? ` ${unit}` : ''} in full` : '',
         unit ? unit === 'C' ? 'Temperature in °C' : `Number in ${unit}, or type a unit (e.g. ${UNIT_EXAMPLE[unit]})` : ''].filter(Boolean).join('. ') || undefined}
       onFocus={() => { if (!problem) setDraft(null) }}
@@ -153,4 +163,19 @@ export function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value)
   useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t) }, [value, ms])
   return v
+}
+
+/** For a button whose request must be sent once: `run(fn)` does nothing while an earlier run is still going (a double
+ *  click, Enter pressed twice, a tap repeated on a slow network). `busy` is true meanwhile, for the button's label and
+ *  `disabled`. 0.36.4: double clicks on "Record change", "Add lot", "Register", "Create group" and "New document" sent
+ *  the request twice. */
+export function useOneAtATime(): [boolean, (fn: () => Promise<unknown>) => Promise<void>] {
+  const going = useRef(false)
+  const [busy, setBusy] = useState(false)
+  const run = useCallback(async (fn: () => Promise<unknown>) => {
+    if (going.current) return
+    going.current = true; setBusy(true)
+    try { await fn() } finally { going.current = false; setBusy(false) }
+  }, [])
+  return [busy, run]
 }

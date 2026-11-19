@@ -52,6 +52,7 @@ def create_token(body: TokenIn, user: CurrentUser, session: DB):
         raise HTTPException(403, "Read-only accounts can only make read tokens")
     if body.days is not None and not 1 <= body.days <= 366:
         raise HTTPException(422, "Tokens last between 1 and 366 days (or never expire)")
+    audit._take_write_lock(session)  # the count and the new token as one step
     if len(list_tokens(user, session)) >= 25:
         raise HTTPException(409, "You have 25 tokens already; revoke some you no longer use")
     raw = new_api_token()
@@ -227,7 +228,8 @@ def toggle_plugin(plugin_id: str, body: PluginToggle, user: Admin, session: DB):
         raise HTTPException(404, "No such plugin")
     if body.enabled and p.errors:
         raise HTTPException(422, "Fix this plugin's errors before switching it on")
-    st = session.get(PluginState, plugin_id) or PluginState(plugin_id=plugin_id)
+    audit._take_write_lock(session)  # two clicks at once: one row, not a database error
+    st = session.get(PluginState, plugin_id, populate_existing=True) or PluginState(plugin_id=plugin_id)
     st.enabled, st.changed_by, st.changed_at = body.enabled, user.id, utcnow()
     session.add(st)
     audit.record(session, user, "plugin_enabled" if body.enabled else "plugin_disabled", "plugin", None, plugin=plugin_id, version=p.version)
@@ -264,7 +266,8 @@ def install_plugin(user: Admin, session: DB, file: UploadFile = File(...)):
             __import__("pathlib").Path(other.path).unlink(missing_ok=True)
             replaced = True
     dest.write_text(text, encoding="utf-8")
-    st = session.get(PluginState, p.id) or PluginState(plugin_id=p.id, enabled=True)
+    audit._take_write_lock(session)  # two clicks at once: one row, not a database error
+    st = session.get(PluginState, p.id, populate_existing=True) or PluginState(plugin_id=p.id, enabled=True)
     st.changed_by, st.changed_at = user.id, utcnow()
     session.add(st)
     audit.record(session, user, "plugin_installed", "plugin", None, plugin=p.id, version=p.version, replaced=replaced,

@@ -104,6 +104,7 @@ def connect(session: Session, user: User, token: str) -> dict[str, Any]:
     except zenodo.ZenodoError as e:
         if e.kind not in ("unreachable", "server", "busy"):
             raise PublishError(422, str(e)) from None  # a wrong token is never kept
+    audit._take_write_lock(session)  # two clicks on Connect at once: one account row, not a database error
     acc = _account(session, user) or ZenodoAccount(user_id=user.id, server=url, token="")
     acc.server, acc.token, acc.hint = url, sitesettings.encrypt(token), token[-4:]
     acc.connected_at, acc.checked_at = utcnow(), checked

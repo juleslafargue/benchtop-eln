@@ -97,6 +97,7 @@ def list_instruments(_: Admin, session: DB):
 @router.post("/instruments", status_code=201)
 def add_instrument(body: InstrumentIn, user: Admin, session: DB):
     _check(session, body.name, body.kind, body.audience, body.settle_minutes)
+    audit._take_write_lock(session)  # "does another instrument watch it?" and the new one as one step
     folder = _folder(session, body.folder)
     i = Instrument(name=body.name.strip(), kind=body.kind, folder=folder, audience=sorted(set(body.audience)),
                    settle_seconds=int(body.settle_minutes * 60), enabled=body.enabled,
@@ -111,6 +112,7 @@ def add_instrument(body: InstrumentIn, user: Admin, session: DB):
 
 @router.patch("/instruments/{iid}")
 def edit_instrument(iid: int, body: InstrumentPatch, user: Admin, session: DB):
+    audit._take_write_lock(session)
     i = get_or_404(session, Instrument, iid)
     _check(session, body.name, body.kind, body.audience, body.settle_minutes)
     changes: dict[str, Any] = {}

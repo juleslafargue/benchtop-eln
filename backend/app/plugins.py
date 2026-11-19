@@ -263,11 +263,25 @@ def _value(f: dict, v: Any) -> Any:
     if t in ("date", "datetime"):
         s = _s(v, 25)
         return s if re.match(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?$", s) else None
-    return _s(v, 20000 if t == "longtext" else 500)
+    # text as typed, spaces and new lines included, as in every other section (0.36.4: they were stripped on each
+    # save, and the page took the stripped copy back while the person was still typing: "DMEM " + "high glucose"
+    # became "DMEMhigh glucose")
+    return str(v)[:20000 if t == "longtext" else 500]
+
+
+def installed_section(session, schema: Any) -> dict | None:
+    """The section type, as the installed and switched-on plugin defines it, that a definition sent with a new section
+    names (by plugin and section id); None if there's no such plugin or section here."""
+    if not isinstance(schema, dict):
+        return None
+    pid, sid = schema.get("plugin"), schema.get("id")
+    return next((s for s in enabled_sections(session) if s["plugin"] == pid and s["id"] == sid), None)
 
 
 def clean_content(content: dict) -> dict:
-    """Keep only what the section's own (stored) definition allows, typed properly."""
+    """Keep only what the section's own (stored) definition allows, typed properly. Requests from the app or a script
+    never choose that definition (0.36.4): routers/experiments.py puts in the installed plugin's for a new section,
+    and the one stored with the section for an edit, before this is called."""
     schema = content.get("schema")
     if not isinstance(schema, dict) or not isinstance(schema.get("fields"), list):
         raise PluginError("This section has no definition")
@@ -287,8 +301,9 @@ def clean_content(content: dict) -> dict:
 
 def is_blank(v: Any) -> bool:
     """Nothing typed or ticked. Not 0: a passage number or a vehicle's concentration of 0 is a value (before 0.36,
-    `v in (None, "", False)` counted 0 as empty, since 0 == False in Python, and such a record couldn't be signed)."""
-    return v is None or v is False or (isinstance(v, str) and v == "")
+    `v in (None, "", False)` counted 0 as empty, since 0 == False in Python, and such a record couldn't be signed).
+    Spaces alone are nothing too: text is kept as typed (0.36.4), so "   " is stored, but doesn't fill a required item."""
+    return v is None or v is False or (isinstance(v, str) and v.strip() == "")
 
 
 def missing_required(content: dict) -> list[str]:
@@ -315,10 +330,12 @@ def text_of(content: dict) -> str:
     for f in schema.get("fields", []):
         v = vals.get(f["id"])
         if not is_blank(v):
+            v = v.strip() if isinstance(v, str) else v
             parts.append(f"{f['label']}: {'yes' if v is True else v}{(' ' + f['unit']) if f.get('unit') and f['type'] == 'number' else ''}")
     for t in schema.get("tables", []):
         for r in (content.get("rows") or {}).get(t["id"], []):
-            cells = [f"{c['label']} {r.get(c['id'])}" for c in t["columns"] if not is_blank(r.get(c["id"]))]
+            cells = [f"{c['label']} {str(r.get(c['id'])).strip() if isinstance(r.get(c['id']), str) else r.get(c['id'])}"
+                     for c in t["columns"] if not is_blank(r.get(c["id"]))]
             if cells:
                 parts.append(f"{t['label']}: " + ", ".join(cells))
     return "\n".join(parts)

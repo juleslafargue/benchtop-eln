@@ -789,7 +789,7 @@ def _remap(content: Any, ids: dict[int, int]) -> Any:
     if isinstance(content, dict):
         out = {}
         for k, v in content.items():
-            if k in ("material_id", "lot_id", "experiment_id"):
+            if k in ("material_id", "lot_id", "experiment_id", "deducted"):  # deducted: a line in that lab's ledger
                 out[k] = None
             elif k == "attachment_id":
                 out[k] = ids.get(v) if isinstance(v, int) else None

@@ -292,12 +292,16 @@ def test_mentioned_in_leaves_out_follow_ups_and_puts_voided_records_last(client,
     assert one["total"] == 3 and len(one["items"]) == 1
 
 
-def test_mentioned_in_reads_what_was_typed_in_a_plugin_section_not_its_labels(client, users, notebook):
+def test_mentioned_in_reads_what_was_typed_in_a_plugin_section_not_its_labels(client, users, notebook, admin):
     a = users["alice"]
     target = _exp(client, a, notebook, "Plugin target")
     eid = target["eid"]
-    schema = {"plugin": "test", "id": "assay", "name": "Assay", "title": "Assay", "description": f"about {eid}",
-              "fields": [{"id": "batch", "label": f"Batch (e.g. {eid})", "type": "text", "placeholder": eid}], "tables": []}
+    toml = (f'[plugin]\nid = "test-assay"\nname = "Test assay"\napi = 1\n\n[[sections]]\nid = "assay"\nname = "Assay"\n'
+            f'description = "about {eid}"\n\n[[sections.fields]]\nid = "batch"\nlabel = "Batch (e.g. {eid})"\ntype = "text"\n'
+            f'placeholder = "{eid}"\n')
+    r = client.post("/api/plugins", headers=admin, files={"file": ("test-assay.toml", toml.encode())})
+    assert r.status_code == 201, r.text
+    schema = {"plugin": "test-assay", "id": "assay"}  # 0.36.4: the server puts in the installed plugin's definition
     only_labels = _exp(client, a, notebook, "Labels only")
     r = client.post(f"/api/experiments/{only_labels['id']}/entries", headers=a,
                     json={"kind": "custom", "title": "Assay", "content": {"schema": schema, "values": {"batch": ""}}})

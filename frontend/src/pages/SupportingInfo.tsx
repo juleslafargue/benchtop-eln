@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../App'
 import { ago, api, ApiError, depictUrl, type ExperimentSummary } from '../api'
-import { Mol } from '../components/bits'
+import { Mol, useOneAtATime } from '../components/bits'
 import Modal from '../components/Modal'
 import { checkLines, siFileName, siModel, techniqueLabel, type SiCompound, type SiDocument, type SiImage, type SiItem } from '../si'
 import { hydrogensInFormula } from '../spectra'
@@ -33,12 +33,13 @@ function SiList() {
   const [err, setErr] = useState('')
   const [title, setTitle] = useState('')
   useEffect(() => { api.get<Listed[]>('/api/si-documents').then(setDocs).catch(e => setErr(e.message)) }, [])
-  const create = async () => {
+  const [busy, once] = useOneAtATime()
+  const create = () => once(async () => {
     try {
       const d = await api.post<SiDocument>('/api/si-documents', { title: title.trim() })
       nav(`/si/${d.id}`)
     } catch (e: any) { toast(e.message) }
-  }
+  })
   return (
     <div className="stack" style={{ gap: 18 }}>
       <div>
@@ -49,7 +50,7 @@ function SiList() {
       {canWrite && <form className="panel panel-pad row si-new" onSubmit={e => { e.preventDefault(); create() }}>
         <label className="field" style={{ flex: '1 1 260px' }}>Paper title
           <input className="input" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Suzuki couplings of electron-poor aryl bromides" maxLength={300} /></label>
-        <button className="btn primary" type="submit" style={{ alignSelf: 'flex-end' }}>New document</button>
+        <button className="btn primary" type="submit" disabled={busy} style={{ alignSelf: 'flex-end' }}>{busy ? 'Making it…' : 'New document'}</button>
       </form>}
       {err && <p className="error">{err}</p>}
       <div className="panel">

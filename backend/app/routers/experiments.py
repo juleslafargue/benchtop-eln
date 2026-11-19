@@ -615,6 +615,9 @@ def clone_experiment(exp_id: int, user: Writer, session: DB, as_template: bool =
     session.flush()
     for e in live_entries(session, src.id):
         content = copy.deepcopy(e.content)
+        if e.kind == EntryKind.reaction and isinstance(content.get("rows"), list):  # the copy hasn't used anything yet
+            content["rows"] = [{k: v for k, v in r.items() if k != "deducted"} if isinstance(r, dict) else r
+                               for r in content["rows"]]
         if e.kind == EntryKind.file:
             content = {"attachment_ids": [], "caption": content.get("caption", "")}
         if scale:
@@ -678,9 +681,35 @@ _ROW_NUMS = ("mw", "equiv", "mmol", "mass_mg", "volume_ml", "density", "conc_m",
              "actual_mass_mg", "theoretical_mass_mg", "yield_pct")
 
 
+_DEDUCT_UNITS = ("mg", "g", "kg", "uL", "mL", "L")  # routers/materials.py _UNITS
+
+
+def _clean_deducted(d: Any) -> dict[str, Any] | None:
+    """A row's "taken from inventory" mark, {tx_id, amount, unit}, in exactly that shape, or None. Until 0.36.4 the
+    mark was dropped on every save (only plain values were kept), so the page offered "Deduct" again and the bottle was
+    deducted twice. Whether tx_id is a real withdrawal for this row is checked with the database (_real_deductions)."""
+    if not isinstance(d, dict):
+        return None
+    tx, amount, unit = d.get("tx_id"), d.get("amount"), d.get("unit")
+    if isinstance(tx, bool) or not isinstance(tx, int) or tx <= 0:
+        return None
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount <= 0:
+        return None
+    if unit not in _DEDUCT_UNITS:
+        return None
+    return {"tx_id": tx, "amount": amount, "unit": unit}
+
+
 def _clean_row(r: dict[str, Any]) -> dict[str, Any]:
-    """One reagent row as the app writes it: plain values only, numbers as numbers, ids as ints."""
+    """One reagent row as the app writes it: plain values only, numbers as numbers, ids as ints; and its "taken from
+    inventory" mark (0.36.4), if it is one."""
     out = {k: v for k, v in r.items() if isinstance(k, str) and (v is None or isinstance(v, (str, int, float, bool)))}
+    if isinstance(r.get("deducted"), dict):
+        mark = _clean_deducted(r["deducted"])
+        if mark:
+            out["deducted"] = mark
+    elif "deducted" in out and out["deducted"] is not None:
+        del out["deducted"]  # true, a number, some text: not a mark
     for k in _ROW_TEXT:
         if k in out:
             out[k] = _str(out[k], 2000)
@@ -793,6 +822,37 @@ def _clean_content(kind: EntryKind, content: dict[str, Any]) -> dict[str, Any]:
     return content
 
 
+def _same_json(a: Any, b: Any) -> bool:
+    """The same JSON, a number written 0 or 0.0 alike (a browser sends 0.0 back as 0)."""
+    def norm(x):
+        return json.loads(json.dumps(x), parse_int=float)
+    try:
+        return norm(a) == norm(b)
+    except (TypeError, ValueError):
+        return False
+
+
+def _real_deductions(session, exp: Experiment, kind: EntryKind, content: dict[str, Any]) -> dict[str, Any]:
+    """Keep a row's "taken from inventory" mark only when it names a withdrawal that really happened: a transaction
+    on that row's lot, made for this experiment, taking something out, and not undone since. Anything else is
+    dropped, so a mark can't be made up (and "undo" can't be pointed at someone else's entry in a lot's ledger)."""
+    if kind != EntryKind.reaction or not any(isinstance(r, dict) and r.get("deducted") for r in content.get("rows") or []):
+        return content
+    from ..models import LotTransaction
+    from .materials import reversal_of
+    rows = []
+    for r in content.get("rows") or []:
+        d = r.get("deducted") if isinstance(r, dict) else None
+        if isinstance(d, dict):
+            tx = session.get(LotTransaction, d["tx_id"])
+            ok = (tx is not None and tx.lot_id == r.get("lot_id") and tx.experiment_id == exp.id and tx.delta < 0
+                  and not tx.note.startswith("Reversal of #") and reversal_of(session, tx) is None)
+            if not ok:
+                r = {k: v for k, v in r.items() if k != "deducted"}
+        rows.append(r)
+    return {**content, "rows": rows}
+
+
 _entry_lock = threading.Lock()  # positions are read-then-written; serialise adds and reorders
 
 
@@ -828,7 +888,14 @@ def _add_entry(exp_id: int, body: EntryIn, user, session) -> dict[str, Any]:
             raise HTTPException(422, "That section type isn't available; an admin may have switched its plugin off")
         content, title = plugins.new_content(sec), title or sec["title"]
     else:
-        content = _clean_content(body.kind, body.content or copy.deepcopy(DEFAULT_CONTENT.get(body.kind, {})))
+        raw = body.content or copy.deepcopy(DEFAULT_CONTENT.get(body.kind, {}))
+        if body.kind == EntryKind.custom:  # the installed plugin's definition, never one sent with the request (0.36.4)
+            sec = plugins.installed_section(session, raw.get("schema"))
+            if sec is None:
+                raise HTTPException(422, "That section type isn't available; an admin may have switched its plugin off")
+            raw = {**raw, "schema": sec}
+        content = _clean_content(body.kind, raw)
+        content = _real_deductions(session, exp, body.kind, content)
     e = _new_entry(session, exp.id, body.kind, title or body.kind.value.title(), content, pos, user)
     exp.updated_at = utcnow()
     session.add(exp)
@@ -855,7 +922,18 @@ def update_entry(entry_id: int, body: EntryUpdate, user: Writer, session: DB):
         raise HTTPException(status.HTTP_409_CONFLICT,
                             f"Entry was changed elsewhere (now v{e.version}); reload before saving")
     new_title = body.title if body.title is not None else e.title
-    new_content = _clean_content(e.kind, body.content) if body.content is not None else e.content
+    new_content = e.content
+    if body.content is not None:
+        sent = body.content
+        if e.kind == EntryKind.custom:
+            # the definition stored with the section when it was made, never one sent with the edit (0.36.4: sending
+            # it without "required" let a record be signed with its checklist empty). The app sends back the stored
+            # one unchanged; a different one is refused rather than quietly ignored.
+            stored = (e.content or {}).get("schema")
+            if "schema" in sent and not _same_json(sent["schema"], stored):
+                raise HTTPException(422, "A section's definition comes from its plugin and can't be changed here")
+            sent = {**sent, "schema": stored}
+        new_content = _real_deductions(session, exp, e.kind, _clean_content(e.kind, sent))
     if new_title == e.title and audit.canonical(new_content) == audit.canonical(e.content):
         return entry_out(e)
     e.title, e.content = new_title, new_content

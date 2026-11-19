@@ -73,10 +73,22 @@ def no_mentions(text: str) -> str:
     return "".join(out)
 
 
+def _worth_telling(root: Path, commits: list[str]) -> list[str]:
+    """The commits whose messages go on the release page. A release commit ("v0.36.3: …") sums up the "(work in
+    progress)" commits before it, so those are left out when there is one; "Tests: …" commits mean nothing to people
+    using Benchtop. 0.36.4: the v0.36.3 page said everything twice, and once more for a test fix. If that would leave
+    nothing, every commit is listed, as before."""
+    subjects = {h: git("log", "-1", "--format=%s", h, root=root).strip() for h in commits}
+    released = any(re.match(r"^v\d+\.\d+\.\d+:", s) for s in subjects.values())
+    kept = [h for h in commits if not subjects[h].startswith("Tests:")
+            and not (released and subjects[h].endswith("(work in progress)"))]
+    return kept or commits
+
+
 def notes(root: Path = ROOT, v: str | None = None) -> str:
     v = v or version(root)
     parts = []
-    for h in _commits(root, v):
+    for h in _worth_telling(root, _commits(root, v)):
         subject = no_mentions(git("log", "-1", "--format=%s", h, root=root).strip())
         body = [no_mentions(ln) for ln in git("log", "-1", "--format=%b", h, root=root).splitlines() if not TRAILERS.match(ln.strip())]
         title = re.sub(r"^v\d+(\.\d+)*:\s*", "", subject)
@@ -87,6 +99,8 @@ def notes(root: Path = ROOT, v: str | None = None) -> str:
            f"(it shows what's new, backs up your data first, and `./benchtop rollback` undoes it). "
            f"Versions before 0.19 don't have that command yet: download **benchtop-eln-v{v}.zip** below and run "
            f"`./benchtop upgrade ~/Downloads/benchtop-eln-v{v}.zip` once. "
+           f"On a Mac, a copy from a zip on versions 0.19 to 0.36.3 may stop with \"unbound variable\": do the same, "
+           f"download **benchtop-eln-v{v}.zip** below and run `./benchtop upgrade ~/Downloads/benchtop-eln-v{v}.zip` once. "
            f"A lab server updates with `deploy/update-server.sh` (docs/SERVER.md).\n\n"
            f"**New install:** download **benchtop-eln-v{v}.zip** below, unzip it, and double-click Benchtop.command "
            f"(README: Quick start (Mac)). On Linux, or on Windows through WSL, follow the README's Quick start (Linux) "

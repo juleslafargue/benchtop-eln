@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useApp } from '../App'
 import { api, displayName, type Group, type User } from '../api'
 import Modal from '../components/Modal'
+import { useOneAtATime } from '../components/bits'
 import { initials } from '../components/Layout'
 
 function GroupForm({ g, onClose, onSaved }: { g?: Group; onClose: () => void; onSaved: () => void }) {
@@ -10,17 +11,19 @@ function GroupForm({ g, onClose, onSaved }: { g?: Group; onClose: () => void; on
   const [description, setDescription] = useState(g?.description || '')
   const [iLead, setILead] = useState(true)  // 0.35: whoever makes the group usually leads it
   const [err, setErr] = useState('')
-  const save = async () => {
+  const [busy, once] = useOneAtATime()
+  const save = () => once(async () => {
+    setErr('')
     try {
       if (g) await api.patch(`/api/groups/${g.id}`, { name, description })
       else await api.post('/api/groups', { name, description, i_lead: iLead })
       onSaved()
     } catch (e: any) { setErr(e.message) }
-  }
+  })
   return (
     <Modal title={g ? `Edit ${g.name}` : 'New group'} onClose={onClose} footer={<>
       <button className="btn" onClick={onClose}>Cancel</button>
-      <button className="btn primary" disabled={!name.trim()} onClick={save}>{g ? 'Save' : 'Create group'}</button></>}>
+      <button className="btn primary" disabled={!name.trim() || busy} onClick={save}>{busy ? (g ? 'Saving…' : 'Creating…') : g ? 'Save' : 'Create group'}</button></>}>
       <div className="stack">
         <label className="field">Name<input className="input" autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Batey group, Process chemistry" /></label>
         <label className="field">Description<textarea className="input" rows={2} value={description} onChange={e => setDescription(e.target.value)} /></label>

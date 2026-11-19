@@ -60,6 +60,7 @@ def list_groups(user: CurrentUser, session: DB):
 @router.post("/groups", status_code=201)
 def create_group(body: GroupIn, user: Admin, session: DB):
     name = body.name.strip()
+    audit._take_write_lock(session)  # check and add as one step (0.36.4: a double-click gave "Internal Server Error")
     if session.exec(select(LabGroup).where(LabGroup.name == name)).first():
         raise HTTPException(409, f"There is already a group called {name}")
     g = LabGroup(name=name, description=body.description.strip())

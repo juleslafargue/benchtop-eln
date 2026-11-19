@@ -578,7 +578,7 @@ def test_release_notes_never_mention_a_github_account():
 @needs_tools
 def test_release_notes_put_an_at_word_from_any_commit_in_code(tmp_path):
     src = make_program(tmp_path / "src", "50.0.0")
-    for msg in ("Mentions work (work in progress)\n\n- @mentions with accents; @nn picks Nadia",
+    for msg in ("Mentions work\n\n- @mentions with accents; @nn picks Nadia",
                 "v50.1.0: mentions\n\n- Fixed\n\nCo-Authored-By: Someone <s@example.invalid>"):
         (src / "docs" / f"{len(msg)}.md").write_text(msg)
         git(src, "add", "-A")
@@ -587,6 +587,46 @@ def test_release_notes_put_an_at_word_from_any_commit_in_code(tmp_path):
     n = release.notes(src, "50.1.0")
     assert "- `@mentions` with accents; `@nn` picks Nadia" in n
     assert re.search(r"(?<![\w`])@\w", n) is None
+
+
+def _commit_all(src, msg):
+    (src / "docs" / f"{abs(hash(msg))}.md").write_text(msg)
+    git(src, "add", "-A")
+    git(src, "commit", "-qm", msg)
+
+
+@needs_tools
+def test_release_notes_say_each_change_once(tmp_path):
+    """0.36.4: the v0.36.3 release page showed its "Updating safely" section, then both "(work in progress)" commits
+    again in full, and a "Tests: …" commit. The release commit sums up the work in progress; tests aren't news."""
+    src = make_program(tmp_path / "src", "50.0.0")
+    for msg in ("Safer updates: backups first (work in progress)\n\n- Backs up before updating, step one",
+                "Safer updates: rollback (work in progress)\n\n- Rollback, step two",
+                "Fix the yield chart\n\n- Medians were off by one",
+                "v50.1.0: updating safely\n\n- Backs up first\n- Rollback undoes it",
+                "Tests: the update check fakes its new release\n\n- Only the test changed"):
+        _commit_all(src, msg)
+    set_version(src, "50.1.0")
+    n = release.notes(src, "50.1.0")
+    head = n.split("\n---\n")[0]
+    assert "### Updating safely\n\n- Backs up first\n- Rollback undoes it" in head
+    assert "### Fix the yield chart\n\n- Medians were off by one" in head
+    assert head.index("### Updating safely") < head.index("### Fix the yield chart")  # newest first, as before
+    assert "work in progress" not in head and "step one" not in head and "step two" not in head
+    assert "Tests:" not in head and "Only the test changed" not in head
+    assert "**To update:**" in n
+
+    # no release commit in the range yet: the work in progress is all there is, so it is listed
+    src2 = make_program(tmp_path / "src2", "50.0.0")
+    _commit_all(src2, "Half done (work in progress)\n\n- The first half")
+    set_version(src2, "50.0.1")
+    assert "### Half done (work in progress)\n\n- The first half" in release.notes(src2, "50.0.1")
+
+    # only a test commit: listed, rather than empty notes
+    src3 = make_program(tmp_path / "src3", "50.0.0")
+    _commit_all(src3, "Tests: steadier timing")
+    set_version(src3, "50.0.1")
+    assert "### Tests: steadier timing" in release.notes(src3, "50.0.1")
 
 
 def test_terminal_shows_what_changed_not_how_to_install(tmp_path, monkeypatch, capsys):

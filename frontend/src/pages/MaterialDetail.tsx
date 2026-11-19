@@ -4,7 +4,7 @@ import { useApp } from '../App'
 import { unitLabel, api, ApiError, displayName, fmt, when, type Lot, type Material } from '../api'
 import Scanner from '../components/Scanner'
 import { StatusDot } from '../components/ExperimentList'
-import { Mol, NumInput } from '../components/bits'
+import { Mol, NumInput, useOneAtATime } from '../components/bits'
 import Modal from '../components/Modal'
 import { MaterialForm } from './Materials'
 import { GhsDetails, type SafetySummary } from '../components/Safety'
@@ -17,17 +17,18 @@ export function LotForm({ material, barcode = '', onSaved, onClose }: { material
   const [dup, setDup] = useState('')  // another lot has this barcode already: the server's message, naming it
   const [scanning, setScanning] = useState(false)
   const codeBox = useRef<HTMLInputElement>(null)
-  const save = async (allowDuplicate = false) => {
+  const [busy, once] = useOneAtATime()
+  const save = (allowDuplicate = false) => once(async () => {
     setErr('')
     try { onSaved(await api.post<Lot>(`/api/materials/${material.id}/lots`, { ...f, allow_duplicate: allowDuplicate })) } catch (e: any) {
       if (e instanceof ApiError && e.status === 409) setDup(e.message)
       else setErr(e.message)
     }
-  }
+  })
   const setCode = (barcode: string) => { setF(p => ({ ...p, barcode })); setDup('') }
   return (
     <Modal title={`Receive a lot of ${material.name}`} onClose={onClose} footer={<>
-      <button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!f.amount || !!dup} onClick={() => save()}>Add lot</button></>}>
+      <button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!f.amount || !!dup || busy} onClick={() => save()}>{busy && !dup ? 'Adding…' : 'Add lot'}</button></>}>
       <div className="form-grid">
         <label className="field">Amount<NumInput className="input" label="Amount" value={f.amount} onCommit={v => setF(p => ({ ...p, amount: v }))} live={0} /></label>
         <label className="field">Unit<select className="select" value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })}>{UNITS.map(u => <option key={u} value={u}>{unitLabel(u)}</option>)}</select></label>
@@ -46,7 +47,7 @@ export function LotForm({ material, barcode = '', onSaved, onClose }: { material
         <p>A supplier's barcode can be the same on every bottle of a batch; a container label, such as VIM's, is one per bottle.
           If this bottle's label really is shared, add it anyway: scanning the code will then show both bottles to choose from.</p>
         <div className="row" style={{ gap: 8 }}>
-          <button className="btn sm" onClick={() => save(true)}>Add anyway</button>
+          <button className="btn sm" disabled={busy} onClick={() => save(true)}>{busy ? 'Adding…' : 'Add anyway'}</button>
           <button className="btn sm ghost" onClick={() => { setDup(''); codeBox.current?.focus() }}>Change the barcode</button>
         </div>
       </div>}

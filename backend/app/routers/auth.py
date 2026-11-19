@@ -224,6 +224,7 @@ class UsernameIn(BaseModel):
 @router.post("/auth/username")
 def change_username(body: UsernameIn, user: CurrentUser, session: DB):
     _confirm_password(session, user, body.password)
+    audit._take_write_lock(session)  # two people taking the same name at once: one gets it, the other a plain 409
     new = _check_username(session, body.new_username, user.id)
     old = user.username
     if new != old:
@@ -312,6 +313,7 @@ class SetupIn(BaseModel):
 @router.post("/setup", status_code=201)
 def run_setup(body: SetupIn, request: Request, session: DB):
     """Create the first real account (an admin) and retire the default admin login."""
+    audit._take_write_lock(session)  # two setup forms sent at once: the second finds setup already done
     if not _needs_setup(session):
         raise HTTPException(409, "Setup has already been done; sign in instead")
     if settings.admin_password == "admin" and not _is_local(request):
@@ -471,6 +473,7 @@ class UserIn(BaseModel):
 
 @router.post("/users", status_code=201)
 def create_user(body: UserIn, actor: Admin, session: DB):
+    audit._take_write_lock(session)  # check and add as one step (two clicks at once: one account, then a plain 409)
     if session.exec(select(User).where(User.username == body.username)).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "Username taken")
     uname = _check_username(session, body.username)

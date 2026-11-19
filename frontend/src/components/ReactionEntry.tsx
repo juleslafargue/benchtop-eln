@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from "react"
 import { Link } from 'react-router-dom'
 import { useApp } from '../App'
 import { api, fmt, greenOk, type Material, type StoichRow } from '../api'
-import { Mol, NumInput, StructureEditor } from './bits'
+import { Mol, NumInput, StructureEditor, useOneAtATime } from './bits'
 import MaterialPicker from './MaterialPicker'
 import type { LookupResult } from './Safety'
 import Modal from './Modal'
 import type { EntryEditorProps } from './EntryCard'
 import ConditionsBar, { type Conditions } from './ConditionsBar'
 import SimilarReactions from './SimilarReactions'
-import { mergeStoich } from '../stoichMerge'
+import { mergeStoich, stillUnmarked, withDeduction, withoutDeduction } from '../stoichMerge'
 import { fullValue as full, sig4 } from '../display'
 
 const ROLE_ORDER: StoichRow['role'][] = ['reactant', 'reagent', 'catalyst', 'solvent', 'product']
@@ -163,41 +163,53 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
     if (!todo.length) { toast('Nothing to deduct: add rows from the registry (so they have a lot) and enter amounts first'); return }
     setDeducting(todo)
   }
-  const runDeduct = async (todo: StoichRow[]) => {
+  // one at a time: a second click on Deduct, undo or Register while the first is still going does nothing (0.36.4:
+  // a double click deducted twice, and made two materials for one product)
+  const [stockBusy, onceStock] = useOneAtATime()
+  const runDeduct = (todo: StoichRow[]) => onceStock(async () => {
     setDeducting(null)
-    const next = [...rows]
+    let done = 0
     for (const r of todo) {
+      const at = rows.indexOf(r)
+      if (!stillUnmarked(now.current, at, r.lot_id)) continue  // deducted meanwhile (another tab), or the row has gone
       const u = usage(r)
       try {
         const res = await api.post<{ transaction_id: number }>(`/api/lots/${r.lot_id}/transactions`, {
           ...u, direction: 'out', experiment_id: experimentId, note: `${rowLabel(r, rows)} in reaction`,
         })
-        next[rows.indexOf(r)] = { ...r, deducted: { tx_id: res.transaction_id, ...u } } as StoichRow
+        done++
+        const next = withDeduction(now.current, at, r.lot_id, { tx_id: res.transaction_id, ...u })
+        if (next) { now.current = next; onChange(next) }
+        else toast(`${rowLabel(r, rows)}: taken from inventory, but the row has gone from the table; the lot's usage list shows it`)
       } catch (e: any) { toast(`${rowLabel(r, rows)}: ${e.message}`) }
     }
-    onChange({ ...content, rows: next })
-    toast('Inventory updated')
-  }
-  const undoDeduct = async (i: number) => {
+    if (done) toast('Inventory updated')
+  })
+  const undoDeduct = (i: number) => onceStock(async () => {
     const d = (rows[i] as any).deducted
     try {
       if (d && typeof d === 'object') await api.post(`/api/lots/transactions/${d.tx_id}/reverse`)
-      onChange({ ...content, rows: rows.map((r, j) => (j === i ? { ...r, deducted: null } : r)) })
+      const next = d && typeof d === 'object' ? withoutDeduction(now.current, d.tx_id)
+        : { ...now.current, rows: (now.current.rows || []).map((r: StoichRow, j: number) => (j === i ? { ...r, deducted: null } : r)) }
+      now.current = next; onChange(next)
       toast('Returned to inventory')
     } catch (e: any) { toast(e.message) }
-  }
+  })
 
-  const register = async (r: StoichRow) => {
+  const [registering, onceRegister] = useOneAtATime()
+  const register = (r: StoichRow) => onceRegister(async () => {
     try {
       const res = await api.post<{ material: Material }>('/api/materials/register-product', {
         experiment_id: experimentId, name: r.name || r.formula || 'Product', smiles: r.smiles,
         amount_mg: r.actual_mass_mg, purity: r.purity,
       })
       const i = rows.indexOf(r)
-      onChange({ ...content, rows: rows.map((x, j) => (j === i ? { ...x, material_id: res.material.id } : x)) })
+      const cur: StoichRow[] = now.current.rows || []
+      const next = { ...now.current, rows: cur.map((x, j) => (j === i ? { ...x, material_id: res.material.id } : x)) }
+      now.current = next; onChange(next)
       toast(`Registered as ${res.material.mid}`)
     } catch (e: any) { toast(e.message) }
-  }
+  })
 
   const grouped = ROLE_ORDER.map(role => ({ role, items: rows.map((r, i) => ({ r, i })).filter(x => x.r.role === role) }))
     .filter(g => g.items.length)
@@ -288,7 +300,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
                     {n(r, i, 'density', undefined, 4)}{n(r, i, 'conc_m', undefined, 4)}{n(r, i, 'purity', undefined, 2)}
                     <td>{!readOnly && <button className="btn ghost sm" onClick={() => removeRow(i)} aria-label={`Remove ${rowLabel(r, rows)}`}>×</button>}
                       {(r as any).deducted && <span className="faint used" title="Deducted from inventory">✓ used
-                        {!readOnly && <button className="btn ghost sm" style={{ padding: '0 4px' }} onClick={() => undoDeduct(i)}>undo</button>}</span>}</td>
+                        {!readOnly && <button className="btn ghost sm" style={{ padding: '0 4px' }} disabled={stockBusy} onClick={() => undoDeduct(i)}>undo</button>}</span>}</td>
                   </tr>
                 )),
               ])}
@@ -316,7 +328,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
                   {n(r, i, 'actual_mass_mg', undefined, 2)}{n(r, i, 'purity', undefined, 2)}
                   <td className="calc yield">{r.yield_pct !== null ? `${fmt(r.yield_pct, 1)}%` : ''}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    {!readOnly && r.actual_mass_mg && !r.material_id && <button className="btn sm" onClick={() => register(r)} title="Add the product to the registry, as a lot of what you isolated">Register</button>}
+                    {!readOnly && r.actual_mass_mg && !r.material_id && <button className="btn sm" disabled={registering} onClick={() => register(r)} title="Add the product to the registry, as a lot of what you isolated">{registering ? 'Registering…' : 'Register'}</button>}
                     {!readOnly && <button className="btn ghost sm" onClick={() => removeRow(i)} aria-label={`Remove ${rowLabel(r, rows)}`}>×</button>}
                   </td>
                 </tr>
@@ -338,7 +350,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
             <span>Total volume: <b>{fmt(totals.total_volume_ml, 2) || '—'}</b> mL</span>
             {totals.concentration_m && <span>Concentration: <b>{fmt(totals.concentration_m, 3)}</b> M</span>}
           </div>
-          {!readOnly && rows.some(r => !!r.lot_id && r.role !== 'product') && <button className="btn sm" onClick={deduct}>Deduct amounts from inventory</button>}
+          {!readOnly && rows.some(r => !!r.lot_id && r.role !== 'product') && <button className="btn sm" disabled={stockBusy} onClick={deduct}>{stockBusy ? 'Updating inventory…' : 'Deduct amounts from inventory'}</button>}
         </div>
       )}
       {(() => {
@@ -393,7 +405,7 @@ export default function ReactionEntry({ content, onChange, readOnly, experimentI
       )}
       {deducting && <Modal title="Deduct from inventory" onClose={() => setDeducting(null)} footer={<>
         <button className="btn" onClick={() => setDeducting(null)}>Cancel</button>
-        <button className="btn primary" onClick={() => runDeduct(deducting)}>Deduct {deducting.length} amount{deducting.length === 1 ? '' : 's'}</button>
+        <button className="btn primary" disabled={stockBusy} onClick={() => runDeduct(deducting)}>Deduct {deducting.length} amount{deducting.length === 1 ? '' : 's'}</button>
       </>}>
         <p style={{ marginTop: 0 }}>These amounts will be taken from their lots and linked to this experiment. You can undo each one afterwards.</p>
         <table className="plain"><thead><tr><th>Material</th><th>Amount</th></tr></thead>

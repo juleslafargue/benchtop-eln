@@ -369,7 +369,7 @@ update_zip() {
   [ -n "${CHECK_ONLY:-}" ] && exit 0
   confirm "Update to $NEWV now? Your data is backed up first."
   TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-  say "Downloading Benchtop $NEWV…"
+  say "Downloading Benchtop ${NEWV}…"
   curl -fL --progress-bar -o "$TMP/new.zip" "$url" || fail "The download didn't finish. Nothing was changed; try again."
   if [ -n "$sha" ]; then
     got="$("$VENV/bin/python" -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$TMP/new.zip")"
