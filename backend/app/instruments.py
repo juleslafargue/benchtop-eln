@@ -462,10 +462,22 @@ def _handle(session: Session, row: InstrumentFile, inst: Instrument, p: Path, no
     OSError before anything is written. Returns what happened: handled | changed."""
     max_bytes = settings.instrument_max_mb * 1024 * 1024
     if row.size > max_bytes:
-        row.state, row.files = "inbox", []
-        row.note = (f"It's {row.size / 1e6:,.0f} MB, more than the {settings.instrument_max_mb:,} MB limit, so it wasn't "
-                    "copied into Benchtop. Raise BENCHTOP_INSTRUMENT_MAX_MB, or keep it on the instrument drive.")
+        # matched first, like any other arrival, so only the people it would have gone to see it (0.36.4: it was shown
+        # to the folder's whole audience, whatever record its name pointed to, and not to that record's owner)
+        d = decide(session, row.path, describe_text(p, inst.kind))
+        too_big = (f"It's {row.size / 1e6:,.0f} MB, more than the {settings.instrument_max_mb:,} MB limit, so it wasn't "
+                   "copied into Benchtop. Raise BENCHTOP_INSTRUMENT_MAX_MB, or keep it on the instrument drive.")
+        exp = d.experiment
+        row.state, row.files, row.person_id = "inbox", [], d.person_id
+        row.matched_ids = [exp.id] if exp is not None else d.matched_ids
+        row.note = (f"Matched {exp.eid}. " if exp is not None else "") + too_big
         session.add(row)
+        if d.person_id is not None:
+            notify(session, d.person_id, f"has a file from {inst.name} ({row.path}) with your sample code that was too big "
+                                         "to copy; it's in your Inbox", kind="inbox")
+        elif len(row.matched_ids) == 1 and (target := session.get(Experiment, row.matched_ids[0])):
+            notify(session, target.owner_id, f"has a file from {inst.name} ({row.path}) for {target.eid} that was too big "
+                                             "to copy; it's in your Inbox", kind="inbox")
         session.commit()
         return "handled"
     files = pack(row.path, p, inst.kind)
@@ -514,10 +526,8 @@ def scan(session: Session, inst: Instrument, now: Optional[datetime] = None) -> 
     departmental drive with tens of thousands of files mustn't lock the database), then handle each arrival
     that has been quiet long enough, each in its own short transaction."""
     now = now or utcnow()
-    root = Path(inst.folder)
+    root = watched_root(inst)
     counts: dict[str, Any] = {"seen": 0, "new": 0, "handled": 0, "errors": 0, "problems": []}
-    if not root.is_dir():
-        raise FileNotFoundError(f"{root} isn't there. If it's a network or external drive, check it's connected.")
     first = inst.baseline_at is None  # the first look: whatever is there already is noted, not taken
     quiet = timedelta(seconds=inst.settle_seconds)
     inst_id, kind, since = inst.id, inst.kind, inst.import_since
@@ -662,8 +672,48 @@ def _clear_stale_incoming() -> None:
             continue
 
 
+class FolderRefused(Exception):
+    """A watched folder Benchtop won't read: it has become a link, or it is (or holds) Benchtop's own data."""
+
+
+def _benchtop_folders() -> list[Path]:
+    """Benchtop's data folder, its backups and their second copy: never a watched folder, nor inside or around one."""
+    from . import backup
+    out = [settings.data_dir.resolve(), settings.backup_dir.resolve()]
+    try:
+        c = backup.copy_dir()
+    except Exception:  # noqa: BLE001 - an unreadable setting isn't a reason to stop
+        c = None
+    if c is not None:
+        out.append(c.resolve())
+    return out
+
+
+def _overlaps_benchtop(p: Path) -> bool:
+    return any(p == d or d in p.parents or p in d.parents for d in _benchtop_folders())
+
+
+def watched_root(inst: Instrument) -> Path:
+    """The instrument's folder, checked before anything in it is read. It was resolved when the admin set it, so if it
+    now resolves somewhere else, it (or a folder above it) has been replaced by a link since: refused, as is anything
+    that is, or holds, Benchtop's own data (0.36.4: a watched folder replaced by a link to the data folder copied
+    benchtop.db into the Inbox)."""
+    root = Path(inst.folder)
+    if root.is_symlink() or (root.exists() and Path(os.path.realpath(root)) != root):
+        raise FolderRefused(f"{root} has been replaced by a link to another folder since it was set, so Benchtop doesn't "
+                            "read it. If that's intended, set the folder again in Admin › Instruments (Edit).")
+    if _overlaps_benchtop(root):
+        raise FolderRefused(f"{root} is, or holds, Benchtop's own data or backups, so Benchtop doesn't read it. "
+                            "Choose the instrument's own folder.")
+    if not root.is_dir():
+        raise FileNotFoundError(f"{root} isn't there. If it's a network or external drive, check it's connected.")
+    return root
+
+
 def folder_problem(exc: BaseException) -> str:
     """A folder error in words that say what to do."""
+    if isinstance(exc, FolderRefused):
+        return str(exc)
     if isinstance(exc, PermissionError):
         return ("Benchtop isn't allowed to read this folder. On a Mac: System Settings → Privacy & Security → "
                 "Files and Folders (or Full Disk Access), allow Terminal, then restart Benchtop.")
@@ -682,9 +732,8 @@ def validate_folder(raw: str) -> Path:
     if not p.is_absolute():
         raise ValueError("Give the full path of the folder, starting with / (e.g. /Volumes/NMR/data/ruizlab)")
     p = p.resolve()
-    data = settings.data_dir.resolve()
-    if p == data or data in p.parents or p in data.parents:
-        raise ValueError("Choose a folder outside Benchtop's own data folder")
+    if _overlaps_benchtop(p):
+        raise ValueError("Choose a folder outside Benchtop's own data and backup folders")
     try:
         if not p.is_dir():
             raise ValueError(f"{p} isn't there. If it's on a network or external drive, check it's connected.")
@@ -735,7 +784,7 @@ def old_items(session: Session, inst: Instrument, q: str = "", offset: int = 0, 
     total = session.exec(select(func.count()).select_from(InstrumentFile).where(*cond)).one()
     rows = session.exec(select(InstrumentFile).where(*cond).order_by(InstrumentFile.path)
                         .offset(max(0, offset)).limit(max(1, min(limit, 200)))).all()
-    root = Path(inst.folder)
+    root = watched_root(inst)
     items = []
     for r in rows:
         p = root / r.path
@@ -760,7 +809,7 @@ def take_old(session: Session, inst: Instrument, paths: list[str]) -> dict[str, 
     matched like any other: attached to a draft it names, or waiting in the Inbox). Unchanged since Benchtop
     noted it, it's already quiet, so it doesn't wait the quiet time again."""
     now = utcnow()
-    root = Path(inst.folder)
+    root = watched_root(inst)
     wanted = list(dict.fromkeys(p for p in paths if isinstance(p, str)))[:MAX_TAKE]
     taken, gone, not_old = [], [], []
     with _scan_lock:  # not while a look at the folders is half-way through its bookkeeping

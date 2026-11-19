@@ -1,6 +1,7 @@
 """Instrument folders (admins), the Inbox, follow-up experiments and "Not mine"."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -176,7 +177,10 @@ def check_folder(body: PreviewIn, _: Admin, session: DB):
 def old_data(iid: int, _: Admin, session: DB, q: str = "", offset: int = 0, limit: int = 100):
     """What was already in the folder when it was added, and what would happen to each if taken now."""
     inst = get_or_404(session, Instrument, iid)
-    return instruments.old_items(session, inst, q, offset, limit)
+    try:
+        return instruments.old_items(session, inst, q, offset, limit)
+    except (instruments.FolderRefused, FileNotFoundError) as exc:
+        raise HTTPException(409, instruments.folder_problem(exc)) from None
 
 
 class TakeIn(BaseModel):
@@ -193,7 +197,10 @@ def take_old_data(iid: int, body: TakeIn, user: Admin, session: DB):
         raise HTTPException(409, f"{inst.name} is paused. Resume it first.")
     if len(body.paths) > instruments.MAX_TAKE:
         raise HTTPException(422, f"Choose at most {instruments.MAX_TAKE:,} at a time")
-    res = instruments.take_old(session, inst, body.paths)
+    try:
+        res = instruments.take_old(session, inst, body.paths)
+    except (instruments.FolderRefused, FileNotFoundError) as exc:
+        raise HTTPException(409, instruments.folder_problem(exc)) from None
     if res["taken"]:
         audit.record(session, user, "take_old", "instrument", inst.id, name=inst.name, count=len(res["taken"]),
                      paths=res["taken"][:100])
@@ -226,14 +233,18 @@ def _visible(session: Session, user: User, row_id: int) -> tuple[InstrumentFile,
 
 def item_out(session: Session, user: User, row: InstrumentFile, inst: Instrument) -> dict[str, Any]:
     acc = access_for(session, user)
-    matched = []
+    matched, note = [], row.note or ""
     for eid in row.matched_ids or []:
         e = session.get(Experiment, eid)
         if e and acc.can_read(e):
             matched.append({"id": e.id, "eid": e.eid, "title": e.title, "status": e.status.value,
                             "notebook_id": e.notebook_id})
+        elif e:
+            # a record this person can't open isn't named in the note (0.36.4: "JL-013 (EXP-00001), TQ-007 (EXP-00006)"
+            # told someone who can read only EXP-00001 which record TQ-007 was handed to)
+            note = re.sub(rf"(?<![A-Za-z0-9]){re.escape(e.eid)}(?!\d)", "a record you can't open", note)
     exp = session.get(Experiment, row.experiment_id) if row.experiment_id else None
-    return {"id": row.id, "path": row.path, "revision": row.revision, "state": row.state, "note": row.note,
+    return {"id": row.id, "path": row.path, "revision": row.revision, "state": row.state, "note": note,
             "instrument": {"id": inst.id, "name": inst.name, "kind": inst.kind},
             "files": [{"n": n, "name": f["name"], "size": f["size"], "content_type": f["content_type"]}
                       for n, f in enumerate(row.files or [])],
@@ -490,6 +501,7 @@ def not_mine(att_id: int, user: Writer, session: DB):
     """Send a file that arrived from an instrument back to the Inbox: it isn't this experiment's (a mistyped
     number, someone else's sample). Only on a draft; the file leaves the record, and the audit trail says who
     sent it back and when."""
+    audit._take_write_lock(session)  # before reading anything: a second click finds it already sent back (0.36.4)
     a = get_or_404(session, Attachment, att_id)
     exp = read_experiment(session, user, a.experiment_id)
     if a.instrument_file_id is None or a.withdrawn_at is not None:
@@ -499,7 +511,6 @@ def not_mine(att_id: int, user: Writer, session: DB):
     inst = session.get(Instrument, row.instrument_id) if row else None
     if row is None or inst is None:
         raise HTTPException(404, "That file's arrival record is missing")
-    audit._take_write_lock(session)
     gone = set(row.attachment_ids or [a.id])
     now = utcnow()
     for att in session.exec(select(Attachment).where(Attachment.id.in_(gone), Attachment.experiment_id == exp.id)):
