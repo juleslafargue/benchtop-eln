@@ -97,6 +97,9 @@ class Settings:
         self.oidc_domains = [d.strip().lower().lstrip("@") for d in os.environ.get("BENCHTOP_OIDC_ALLOWED_DOMAINS", "").split(",") if d.strip()]
         self.oidc_auto_create = os.environ.get("BENCHTOP_OIDC_AUTO_CREATE", "on").lower() not in ("0", "off", "false", "no")
         self.oidc_default_role = os.environ.get("BENCHTOP_OIDC_DEFAULT_ROLE", "scientist")
+        # 0.36.4: link a first sign-in to an account by its email even when the provider doesn't say it checked it
+        # (Microsoft Entra ID never does). Only for a provider where your organisation sets everyone's address.
+        self.oidc_trust_email = os.environ.get("BENCHTOP_OIDC_TRUST_EMAIL", "off").lower() in ("1", "on", "true", "yes")
         self.password_login = os.environ.get("BENCHTOP_PASSWORD_LOGIN", "on").lower() not in ("0", "off", "false", "no")
         self.public_url = os.environ.get("BENCHTOP_PUBLIC_URL", "").rstrip("/")  # e.g. https://eln.mylab.ca
         self.lan_url = os.environ.get("BENCHTOP_LAN_URL", "").rstrip("/")  # set by ./benchtop lab: this computer's address on the network

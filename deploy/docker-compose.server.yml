@@ -24,6 +24,7 @@ services:
       BENCHTOP_OIDC_NAME: ${BENCHTOP_OIDC_NAME:-}
       BENCHTOP_OIDC_ALLOWED_DOMAINS: ${BENCHTOP_OIDC_ALLOWED_DOMAINS:-}
       BENCHTOP_OIDC_AUTO_CREATE: ${BENCHTOP_OIDC_AUTO_CREATE:-on}
+      BENCHTOP_OIDC_TRUST_EMAIL: ${BENCHTOP_OIDC_TRUST_EMAIL:-off}
       BENCHTOP_PASSWORD_LOGIN: ${BENCHTOP_PASSWORD_LOGIN:-on}
       # A server set up before 0.18.2 kept its records in Postgres. If deploy/.env still has POSTGRES_PASSWORD,
       # Benchtop refuses to start on an empty database here rather than look as if the records were gone.

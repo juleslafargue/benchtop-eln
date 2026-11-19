@@ -31,6 +31,51 @@ function UsernameDialog({ current, onDone, onClose }: { current: string; onDone:
   )
 }
 
+/** Single sign-on, under Sign-in (0.36.4): link the account you sign in with at your university or company, so it
+ *  signs you in here. A first sign-in links itself only when the provider vouches for your email address, and never
+ *  for an admin; this is how everyone else links theirs. */
+function SsoLink({ name, hasPassword }: { name: string; hasPassword: boolean }) {
+  const { toast } = useApp()
+  const [linked, setLinked] = useState<{ email: string; last_login_at: string | null }[] | null>(null)
+  const [asking, setAsking] = useState(false)
+  const [password, setPassword] = useState('')
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    api.get<{ email: string; last_login_at: string | null }[]>('/api/auth/sso/linked').then(setLinked).catch(() => setLinked([]))
+    const ok = /[#&]sso_linked=1/.test(location.hash)
+    const bad = /[#&]sso_error=([^&]*)/.exec(location.hash)
+    if (ok) toast(`Linked: you can now sign in with ${name}`)
+    if (bad) setErr(decodeURIComponent(bad[1].replace(/\+/g, ' ')))
+    if (ok || bad) history.replaceState(null, '', location.pathname)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const go = async () => {
+    setBusy(true); setErr('')
+    try { location.href = (await api.post<{ url: string }>('/api/auth/sso/link', { password })).url }
+    catch (e: any) { setErr(e.message); setBusy(false) }
+  }
+  return (
+    <div className="section">
+      <div className="spread" style={{ alignItems: 'center' }}>
+        <div><div className="faint">Single sign-on ({name})</div>{linked === null ? '…' : linked.length
+          ? <span>Linked{linked[0].email ? ` (${linked[0].email})` : ''}</span> : <span>Not linked</span>}</div>
+        {hasPassword && linked !== null && !linked.length && <button className="btn" onClick={() => { setAsking(true); setErr('') }}>Link {name}</button>}
+      </div>
+      {err && !asking && <p className="error" style={{ margin: '6px 0 0' }}>{err}</p>}
+      {asking && <Modal title={`Link ${name}`} onClose={() => setAsking(false)} footer={<>
+        <button className="btn" onClick={() => setAsking(false)}>Cancel</button>
+        <button className="btn primary" disabled={!password || busy} onClick={go}>{busy ? 'Going to sign in…' : `Continue to ${name}`}</button></>}>
+        <div className="stack">
+          <p style={{ margin: 0 }}>You'll sign in with {name} once, and come back here. From then on, that sign-in opens this account.</p>
+          <label className="field">Current password<input className="input" type="password" autoFocus autoComplete="current-password" value={password}
+            onChange={e => setPassword(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && password && !busy) go() }} /></label>
+          {err && <p className="error">{err}</p>}
+        </div>
+      </Modal>}
+    </div>
+  )
+}
+
 export default function Account() {
   const { user, setUser, notebooks, archivedNotebooks = [], toast } = useApp()
   const archivedDefault = archivedNotebooks.find(n => n.id === user.preferences?.default_notebook_id)
@@ -38,6 +83,8 @@ export default function Account() {
   const [email, setEmail] = useState(user.email)
   const [orcid, setOrcid] = useState(user.orcid || '')
   const [err, setErr] = useState('')
+  const [sso, setSso] = useState<{ enabled: boolean; name: string | null } | null>(null)
+  useEffect(() => { api.get<{ enabled: boolean; name: string | null }>('/api/auth/sso').then(setSso).catch(() => setSso(null)) }, [])
   const [busy, setBusy] = useState(false)
   const [pw, setPw] = useState(false)
   const [uname, setUname] = useState(false)
@@ -112,6 +159,7 @@ export default function Account() {
               ? <span className="warn-text">Not set: you sign in with single sign-on, and need a password to sign records</span> : '••••••••'}</div>
             <button className={`btn${user.has_password === false ? ' primary' : ''}`} onClick={() => setPw(true)}>{user.has_password === false ? 'Set signing password' : 'Change password'}</button>
           </div>
+          {sso?.enabled && <SsoLink name={sso.name || 'single sign-on'} hasPassword={user.has_password !== false} />}
         </div>
 
         <div><h2>Where you're signed in</h2><p className="help">Each browser you've signed in with. Sign out any you don't recognise, or that you can't get to any more (a lab computer, a lost laptop). Changing your password signs out all the others automatically.</p></div>

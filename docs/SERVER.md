@@ -159,9 +159,27 @@ you may need IT to do this for you):
 (Web application) with the same redirect URI; issuer `https://accounts.google.com`. Use
 `BENCHTOP_OIDC_ALLOWED_DOMAINS=yourlab.org` so only your domain's accounts get in.
 
-How accounts are matched: the first time someone signs in, Benchtop links them to an existing account
-with the same email address, or (with `BENCHTOP_OIDC_AUTO_CREATE=on`, the default) creates a
-scientist account. With it `off`, an admin adds people first and their email decides who is who.
+How accounts are matched: after the first time, a sign-in always opens the account it was linked to.
+The first time, Benchtop links it to an existing account with the same email address only if the
+provider says it has **verified** that address (Google and most others do; Microsoft Entra ID doesn't
+say, see below). Otherwise, with `BENCHTOP_OIDC_AUTO_CREATE=on` (the default), it creates a scientist
+account; with it `off`, an admin adds people first. If an account with that address already exists but
+the address isn't verified, the person is told to sign in with their password once and link single
+sign-on under **Account › Sign-in › Link**, which asks for their password and then sends them to the
+provider and back. An admin's account is never linked automatically: admins always link it themselves
+that way. (Before 0.36.4 any first sign-in with a matching address was linked, so a provider account
+with someone else's address could sign in as them.)
+
+Microsoft Entra ID doesn't send `email_verified`. If your organisation sets everyone's address there
+(a single-tenant app registration, as above), add `BENCHTOP_OIDC_TRUST_EMAIL=on` so people are matched
+by email; otherwise each person links their own account once under Account › Sign-in.
+
+Benchtop checks that each sign-in's ID token was made for it (issuer, audience, expiry and the
+one-time nonce) and comes straight from the provider over HTTPS in exchange for the client secret, so
+it doesn't also check the token's signature (the OpenID Connect standard allows this for tokens
+fetched that way). Use the issuer of your own tenant, not Microsoft's `common` one. If the provider
+sends a reply Benchtop can't read, people see a plain message and can sign in with a password.
+
 Admins can always still sign in with a password, so a provider outage never locks you out.
 
 Signing records still asks for a password (the e-signature rules require re-authentication at signing),

@@ -236,6 +236,7 @@ def test_comments_mentions_and_notifications(client, lab):
 
 import base64 as _b64  # noqa: E402
 import json as _json  # noqa: E402
+import time  # noqa: E402
 from urllib.parse import parse_qs, urlparse  # noqa: E402
 
 import httpx  # noqa: E402
@@ -269,7 +270,9 @@ def idp(monkeypatch):
             who = state["people"].get(form["code"][0])
             if who is None:
                 return httpx.Response(400, json={"error": "invalid_grant", "error_description": "bad code"})
-            return httpx.Response(200, json={"access_token": f"at-{form['code'][0]}", "id_token": _idtoken({**who, "nonce": state["nonce"]})})
+            # what a real provider puts in every ID token (checked since 0.36.4); a person's own claims can override them
+            std = {"iss": "https://idp.example.edu", "aud": "benchtop", "exp": time.time() + 300, "nonce": state["nonce"]}
+            return httpx.Response(200, json={"access_token": f"at-{form['code'][0]}", "id_token": _idtoken({**std, **who})})
         if req.url.path == "/userinfo":
             code = req.headers["authorization"].split("at-")[1]
             return httpx.Response(200, json=state["people"][code])
@@ -314,7 +317,7 @@ def test_sso_signs_in_creates_and_links_accounts(client, admin, idp):
     assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {frag2['sso'][0]}"}).json()["id"] == me["id"]
     # an existing password account with the same email is linked rather than duplicated
     client.post("/api/users", headers=admin, json={"username": "quinn", "password": "lab-bench-pw-2026", "must_change": False, "email": "quinn@example.edu"})
-    frag3, _ = _sso_login(client, idp, "c3", {"sub": "u-999", "email": "quinn@example.edu", "name": "Quinn"})
+    frag3, _ = _sso_login(client, idp, "c3", {"sub": "u-999", "email": "quinn@example.edu", "name": "Quinn", "email_verified": True})
     assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {frag3['sso'][0]}"}).json()["username"] == "quinn"
 
 
