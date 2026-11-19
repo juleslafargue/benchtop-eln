@@ -44,6 +44,8 @@ from tests.test_v19_updates import (  # noqa: F401 - venv, git_lab and zip_lab a
 )
 
 PREV = ".benchtop-previous"
+MANIFEST = ".benchtop-files"
+CORE = ("benchtop", "backend/app/__init__.py", "backend/app/main.py", "backend/requirements.txt")
 
 
 def changes(root: Path) -> str:
@@ -104,7 +106,7 @@ def test_a_relative_data_folder_is_inside_backend_and_survives_rollback_from_any
 
 def test_the_copier_protects_a_relative_data_folder_whatever_folder_it_runs_in(tmp_path, monkeypatch):
     new, root = tmp_path / "new", tmp_path / "root"
-    for p in install.CORE:
+    for p in CORE:
         (new / p).parent.mkdir(parents=True, exist_ok=True)
         (new / p).write_text("x")
     (root / "backend/labdata").mkdir(parents=True)
@@ -131,12 +133,12 @@ def _my_files(root: Path) -> dict[str, str]:
 @needs_tools
 def test_update_and_rollback_leave_your_own_files_in_benchtops_folders(zip_lab, tmp_path):
     lab, new_zip, old_zip = zip_lab
-    assert (lab.root / install.MANIFEST).exists()
     mine = _my_files(lab.root)
     r = lab.run("update", "--yes")
-    assert version_of(lab.root) == "50.1.0" and not (lab.root / "docs/OLD-NOTES.md").exists()  # Benchtop's own old file
     for rel, text in mine.items():
-        assert (lab.root / rel).read_text() == text, rel
+        assert (lab.root / rel).exists() and (lab.root / rel).read_text() == text, rel
+    assert version_of(lab.root) == "50.1.0" and not (lab.root / "docs/OLD-NOTES.md").exists()  # Benchtop's own old file
+    assert (lab.root / MANIFEST).exists()
     assert "moved (not deleted)" not in r.out and not list(lab.root.glob("Benchtop-kept-files-*"))
 
     lab.run("rollback", "--yes")
@@ -161,15 +163,15 @@ def test_rollback_removes_a_new_top_level_file_of_the_newer_version(zip_lab, tmp
 @needs_tools
 def test_a_copy_without_the_list_of_files_moves_unknown_files_aside_never_deletes(zip_lab):
     lab, _, _ = zip_lab
-    (lab.root / install.MANIFEST).unlink()  # installed before releases listed their files
+    (lab.root / MANIFEST).unlink(missing_ok=True)  # installed before releases listed their files
     mine = _my_files(lab.root)
     r = lab.run("update", "--yes")
     assert version_of(lab.root) == "50.1.0"
     kept = list(lab.root.glob("Benchtop-kept-files-*"))
+    assert (lab.root / "backend/data copy/benchtop.db").read_text() == "a copy of my database"  # a folder with a database stays
     assert len(kept) == 1 and str(kept[0]) in r.out and "moved (not deleted)" in r.out
     assert (kept[0] / "docs/my-protocol.md").read_text() == "my protocol"
     assert (kept[0] / "docs/OLD-NOTES.md").exists()  # can't tell it from yours: kept too
-    assert (lab.root / "backend/data copy/benchtop.db").read_text() == "a copy of my database"  # a folder with a database stays
     assert (lab.root / "my-notes.txt").read_text() == "mine"
 
 
@@ -183,14 +185,14 @@ def test_the_release_zip_lists_its_own_files(tmp_path):
     z = _zip_of(src, tmp_path / "out")
     with zipfile.ZipFile(z) as zf:
         names = {n[len("benchtop/"):] for n in zf.namelist() if not n.endswith("/")}
-        listed = {ln for ln in zf.read(f"benchtop/{install.MANIFEST}").decode().splitlines() if ln and not ln.startswith("#")}
-    assert listed == names - {install.MANIFEST}
+        listed = {ln for ln in zf.read(f"benchtop/{MANIFEST}").decode().splitlines() if ln and not ln.startswith("#")}
+    assert listed == names - {MANIFEST}
     assert "frontend/dist/index.html" in listed and "benchtop" in listed and not any("tests/upgrades" in n for n in listed)
 
 
 def test_the_copier_never_deletes_your_files_and_only_removes_what_the_old_version_listed(tmp_path):
     new, root = tmp_path / "new", tmp_path / "root"
-    for p in (*install.CORE, "backend/app/a.py"):
+    for p in (*CORE, "backend/app/a.py"):
         for base in (new, root):
             (base / p).parent.mkdir(parents=True, exist_ok=True)
             (base / p).write_text("x")
@@ -199,8 +201,8 @@ def test_the_copier_never_deletes_your_files_and_only_removes_what_the_old_versi
     for rel in ("backend/app/gone.py", "backend/app/old_pkg/m.py", "OLD-TOP.txt"):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text("old")
-    install.write_manifest(new, {*install.CORE, "backend/app/a.py", "docs/guide.md"})
-    install.write_manifest(root, {*install.CORE, "backend/app/a.py", "backend/app/gone.py", "backend/app/old_pkg/m.py", "OLD-TOP.txt"})
+    install.write_manifest(new, {*CORE, "backend/app/a.py", "docs/guide.md"})
+    install.write_manifest(root, {*CORE, "backend/app/a.py", "backend/app/gone.py", "backend/app/old_pkg/m.py", "OLD-TOP.txt"})
     (root / "docs").mkdir()
     (root / "docs/guide.md").write_text("my own guide, where the new version puts one")
     (root / "backend/app/old_pkg/mine.txt").write_text("mine")
@@ -343,13 +345,13 @@ def test_the_copier_refuses_a_copy_that_isnt_whole(tmp_path):
     with pytest.raises(install.Refused, match="isn't a whole copy"):
         install.mirror(new, root)
     assert (root / "backend/app/main.py").read_text() == "keep me"
-    for p in install.CORE:
+    for p in CORE:
         (new / p).parent.mkdir(parents=True, exist_ok=True)
         (new / p).write_text('__version__ = "1.0"\n')
-    install.write_manifest(new, {*install.CORE, "docs/missing.md"})
+    install.write_manifest(new, {*CORE, "docs/missing.md"})
     with pytest.raises(install.Refused, match="1 of its files are missing"):
         install.mirror(new, root)
-    (new / install.MANIFEST).unlink()
+    (new / MANIFEST).unlink()
     with pytest.raises(install.Refused, match="not 2.0"):
         install.mirror(new, root, expect_version="2.0")
     assert (root / "backend/app/main.py").read_text() == "keep me"
@@ -540,6 +542,7 @@ def test_update_sees_a_benchtop_running_on_another_port_and_a_second_one_wont_st
     lab, new_zip, _ = zip_lab
     port = _free_port()
     first = _serve(lab, port)
+    second = None
     try:
         _wait_up(port, first)
         second = _serve(lab, _free_port())
@@ -552,6 +555,9 @@ def test_update_sees_a_benchtop_running_on_another_port_and_a_second_one_wont_st
             assert r.returncode and "running" in r.out and str(first.pid) in r.out, (cmd, r.out)
         assert version_of(lab.root) == "50.0.0" and not lab.backups()
     finally:
+        if second is not None and second.poll() is None:
+            os.killpg(second.pid, signal.SIGKILL)
+            second.wait()
         os.killpg(first.pid, signal.SIGKILL)  # as if the power went: the lock goes with the process
         first.wait()
     r = lab.run("update", "--yes")
