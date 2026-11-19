@@ -3,14 +3,41 @@
 # Works with the bash that ships with macOS (3.2).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# the Benchtop folder: where this file really is, even when it's run through a link (say ~/bin/benchtop)
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  LINK_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$LINK_DIR/$SELF" ;; esac
+done
+ROOT="$(cd "$(dirname "$SELF")" && pwd)"
 BACKEND="$ROOT/backend"
 FRONTEND="$ROOT/frontend"
 VENV="$BACKEND/.venv"
+
+# A folder setting given as a relative path means inside backend/, where Benchtop runs (as it always has). Made
+# absolute here, once, so every command finds the same folder whichever folder this is run from (0.36.3).
+# $2 = ~: a leading ~ means your home folder, as Benchtop reads that setting (the data folder setting never did).
+in_backend() {
+  local p="$1"
+  if [ "${2:-}" = "~" ]; then
+    case "$p" in "~") p="$HOME" ;; "~/"*) p="$HOME/${p#??}" ;; "~"*) printf '%s' "$p"; return 0 ;; esac
+  fi
+  case "$p" in /*) printf '%s' "$p" ;; ./*) printf '%s' "$BACKEND/${p#./}" ;; *) printf '%s' "$BACKEND/$p" ;; esac
+}
+absolute_settings() {
+  if [ -n "${BENCHTOP_DATA_DIR:-}" ]; then export BENCHTOP_DATA_DIR="$(in_backend "$BENCHTOP_DATA_DIR")"; fi
+  if [ -n "${BENCHTOP_BACKUP_DIR:-}" ]; then export BENCHTOP_BACKUP_DIR="$(in_backend "$BENCHTOP_BACKUP_DIR" "~")"; fi
+  if [ -n "${BENCHTOP_BACKUP_COPY_DIR:-}" ]; then export BENCHTOP_BACKUP_COPY_DIR="$(in_backend "$BENCHTOP_BACKUP_COPY_DIR" "~")"; fi
+  if [ -n "${BENCHTOP_OBSIDIAN_DIR:-}" ]; then export BENCHTOP_OBSIDIAN_DIR="$(in_backend "$BENCHTOP_OBSIDIAN_DIR" "~")"; fi
+  if [ -n "${BENCHTOP_STATIC_DIR:-}" ]; then export BENCHTOP_STATIC_DIR="$(in_backend "$BENCHTOP_STATIC_DIR")"; fi
+  return 0
+}
+absolute_settings
 # Optional settings file (single sign-on, backup folder, port…): KEY=value lines.
 # It lives with your data, so upgrades never touch it.
 SETTINGS="${BENCHTOP_DATA_DIR:-$BACKEND/data}/settings.env"
-if [ -f "$SETTINGS" ]; then set -a; . "$SETTINGS"; set +a; fi
+if [ -f "$SETTINGS" ]; then set -a; . "$SETTINGS"; set +a; absolute_settings; fi
 PORT="${BENCHTOP_PORT:-8000}"
 export BENCHTOP_DATA_DIR="${BENCHTOP_DATA_DIR:-$BACKEND/data}"
 export BENCHTOP_STATIC_DIR="${BENCHTOP_STATIC_DIR:-$FRONTEND/dist}"
@@ -33,9 +60,15 @@ find_python() {
 }
 
 ensure_python_env() {
-  if [ -x "$VENV/bin/python" ] && ! "$VENV/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
-    say "Existing environment uses an old Python; rebuilding it."
-    rm -rf "$VENV"
+  if [ -d "$VENV" ] || [ -L "$VENV" ]; then
+    if ! "$VENV/bin/python" -c 'import sys' >/dev/null 2>&1; then
+      # e.g. Homebrew upgraded or removed the Python it was made with
+      say "The Python that Benchtop's environment was made with is gone (updated or removed); rebuilding the environment."
+      rm -rf "$VENV"
+    elif ! "$VENV/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+      say "Existing environment uses an old Python; rebuilding it."
+      rm -rf "$VENV"
+    fi
   fi
   if [ ! -x "$VENV/bin/python" ]; then
     PY="$(find_python)" || fail "Benchtop needs Python 3.11 or newer. Install it from https://www.python.org/downloads/ and run this again."
@@ -79,7 +112,17 @@ ensure_ui() {
   ui_is_stale || return 0
   if command -v npm >/dev/null 2>&1; then
     say "Building the web interface…"
-    ( cd "$FRONTEND" && { [ -d node_modules ] && [ node_modules -nt package-lock.json ] || npm install --no-audit --no-fund --loglevel=error; } && npm run build --silent )
+    # npm ci installs exactly what package-lock.json lists and never rewrites it (npm install did: it put this
+    # version's number into the lock, so Git saw a changed file and the next ./benchtop update refused, 0.36.3).
+    # The stamp holds the lock's checksum, so the packages are installed again only when the lock really changes.
+    ( cd "$FRONTEND" && {
+        stamp="node_modules/.benchtop-lock-sum"
+        if [ ! -f package-lock.json ]; then
+          [ -d node_modules ] || npm install --no-audit --no-fund --loglevel=error
+        elif [ ! -d node_modules ] || [ "$(cat "$stamp" 2>/dev/null)" != "$(cksum < package-lock.json)" ]; then
+          npm ci --no-audit --no-fund --loglevel=error && cksum < package-lock.json > "$stamp"
+        fi
+      } && npm run build --silent )
   elif [ -f "$BENCHTOP_STATIC_DIR/index.html" ]; then
     say "Web interface sources changed but Node isn't installed; using the existing build."
   else
@@ -87,7 +130,7 @@ ensure_ui() {
   fi
 }
 
-running() { curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; }
+running() { curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; }
 
 open_browser() {
   local url="http://localhost:$PORT"
@@ -107,11 +150,56 @@ version_in() { sed -nE 's/^__version__ = "([^"]+)".*/\1/p' "$1/backend/app/__ini
 # is version $1 newer than $2?
 newer_than() { py -c 'import sys; from app.updates import is_newer; sys.exit(0 if is_newer(sys.argv[1], sys.argv[2]) else 1)' "$1" "$2"; }
 
+# A running Benchtop holds a lock on its data folder (0.36.3), whatever port it's on. This prints the process
+# number of the one holding the lock of data folder $1, or nothing.
+lock_holder() {
+  local f="$1/benchtop.lock" pyexe
+  [ -f "$f" ] || return 0
+  if "$VENV/bin/python" -c '' >/dev/null 2>&1; then pyexe="$VENV/bin/python"; else pyexe="$(find_python)" || return 0; fi
+  "$pyexe" -I -c '
+import sys
+try:
+    import fcntl
+    f = open(sys.argv[1])
+    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    print((f.read().split() or ["?"])[0])
+except Exception:
+    pass' "$f" 2>/dev/null || true
+}
+
 refuse_if_running() {
+  local d holder
   if running || PORT="${BENCHTOP_DEMO_PORT:-8001}" running; then
     fail "Benchtop is running. Close its Terminal window (or press Ctrl+C there), then run this again. Nothing was changed."
   fi
+  for d in "$BENCHTOP_DATA_DIR" "$BACKEND/data/demo"; do
+    holder="$(lock_holder "$d")"
+    [ -z "$holder" ] || fail "Benchtop is running (process $holder, using the data in $d). Close its Terminal window (or press Ctrl+C there), then run this again. Nothing was changed."
+  done
 }
+
+# before starting: the port must be free, and no other Benchtop may be using this data folder ($1: host)
+refuse_to_start() {
+  local holder
+  holder="$(lock_holder "$BENCHTOP_DATA_DIR")"
+  [ -z "$holder" ] || fail "Benchtop is already running with this data (process $holder), perhaps on another port. Use that one, or close its Terminal window first. Two at once would get in each other's way."
+  if "$VENV/bin/python" -I -c '
+import socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind((sys.argv[2], int(sys.argv[1])))
+except OSError:
+    sys.exit(0)
+sys.exit(1)' "$PORT" "$1" 2>/dev/null; then
+    fail "Port $PORT is already used by another program, so Benchtop can't start on it. Close that program, or set ${2:-BENCHTOP_PORT}=$((PORT + 1)) (in settings.env, or: ${2:-BENCHTOP_PORT}=$((PORT + 1)) ./benchtop ${3:-start})."
+  fi
+}
+
+# Release notes and commit messages are other people's text: take out control characters, which could make the
+# terminal do things (clear it, retitle it, colour everything), before showing them (0.36.3)
+strip_controls() { LC_ALL=C tr -d '\000-\010\013-\037\177'; }
 
 confirm() {  # $1: question
   [ -n "${YES:-}" ] && return 0
@@ -132,15 +220,36 @@ backup_first() {
   BACKUP="$(printf '%s\n' "$out" | sed -nE 's/^Backup written: (.*) \([0-9.]+ MB.*/\1/p')"
 }
 
-# remember how to undo this update ($1 kind: git|zip, $2 new version, $3 Git commit we're leaving)
-save_previous() {
-  rm -rf "$PREV"; mkdir -p "$PREV"
+# How to undo the latest update lives in $PREV: info, and for a zip install a copy of the old program. A new record
+# is made beside it ($PREV.new) and takes its place only when complete; the record from before is kept ($PREV.old)
+# until the update has really happened, so an update that fails or is refused never loses the way back (0.36.3).
+# $1 kind: git|zip, $2 new version, $3 Git commit we're leaving, $4 Git commit we're going to
+prepare_previous() {
+  rm -f "$PREV.new/info"; rm -rf "$PREV.new"; mkdir -p "$PREV.new"
   if [ "$1" = zip ]; then
     say "Keeping a copy of $OLDV, so you can go back to it…"
-    py -m app.install snapshot "$ROOT" "$PREV/program"
+    py -m app.install snapshot "$ROOT" "$PREV.new/program"
   fi
-  { printf 'KIND=%q\nOLD_VERSION=%q\nNEW_VERSION=%q\nOLD_REV=%q\nBACKUP=%q\nWHEN=%q\n' \
-      "$1" "$OLDV" "$2" "${3:-}" "$BACKUP" "$(date '+%Y-%m-%d %H:%M')"; } > "$PREV/info"
+  { printf 'KIND=%q\nOLD_VERSION=%q\nNEW_VERSION=%q\nOLD_REV=%q\nNEW_REV=%q\nBACKUP=%q\nWHEN=%q\n' \
+      "$1" "$OLDV" "$2" "${3:-}" "${4:-}" "$BACKUP" "$(date '+%Y-%m-%d %H:%M')"; } > "$PREV.new/info"
+}
+# the new record takes over, with a note that the program files are being changed: if that's cut off part-way,
+# Benchtop won't start on a mix of two versions, and ./benchtop rollback puts the old one back
+use_new_previous() {
+  rm -f "$PREV.old/info"; rm -rf "$PREV.old"
+  if [ -d "$PREV" ]; then mv "$PREV" "$PREV.old"; fi
+  : > "$PREV.new/updating"
+  mv "$PREV.new" "$PREV"
+}
+# the update didn't happen (nothing was changed): the record from before comes back
+keep_old_previous() {
+  rm -f "$PREV/info"; rm -rf "$PREV"
+  if [ -d "$PREV.old" ]; then mv "$PREV.old" "$PREV"; fi
+}
+# the new program files are in place: the record from before goes
+done_previous() {
+  rm -f "$PREV/updating"
+  rm -f "$PREV.old/info"; rm -rf "$PREV.old"
 }
 
 # the folder inside an unpacked release that holds Benchtop (release zips and GitHub's "Download ZIP" both have one)
@@ -166,17 +275,22 @@ install_zip() {
   if newer_than "$OLDV" "$NEWV"; then
     fail "That zip is Benchtop $NEWV, older than this one ($OLDV). To go back to the version you had before your last update, run ./benchtop rollback. Nothing was changed."
   fi
+  if ! newer_than "$NEWV" "$OLDV"; then
+    fail "That zip is Benchtop $NEWV, the version you already have. Nothing was changed."
+  fi
   if [ ! -f "$new/frontend/dist/index.html" ] && ! command -v npm >/dev/null 2>&1; then
     fail "This zip doesn't include the ready-built web interface, and Node isn't installed to build it. Use the zip from the Releases page (benchtop-eln-v$NEWV.zip), or install Node from https://nodejs.org. Nothing was changed."
   fi
   say "Updating Benchtop $OLDV -> $NEWV"
   backup_first
-  save_previous zip "$NEWV"
-  # program files only: your data, settings, the Python environment and Git's files are never touched.
-  # The note says the files are being swapped; if this is cut off part-way, Benchtop won't start on the mix.
-  : > "$PREV/updating"
-  py -m app.install mirror "$new" "$ROOT"
-  rm -f "$PREV/updating"
+  prepare_previous zip "$NEWV"
+  use_new_previous
+  # program files only: your data, settings, the Python environment and Git's files are never touched
+  local rc=0
+  py -m app.install mirror "$new" "$ROOT" || rc=$?
+  if [ "$rc" = 3 ]; then keep_old_previous; exit 1; fi   # not a whole release: refused, nothing changed (it said so)
+  [ "$rc" = 0 ] || fail "The update to $NEWV stopped part-way (see above). Your data is safe. To go back to $OLDV, run: ./benchtop rollback"
+  done_previous
   chmod +x "$ROOT/benchtop" "$ROOT/Benchtop.command" 2>/dev/null || true
   rm -rf "$TMP"; trap - EXIT
   exec "$ROOT/benchtop" _finish-update   # the new version's launcher finishes (it knows what the new version needs)
@@ -185,33 +299,60 @@ install_zip() {
 update_git() {
   G() { git -C "$ROOT" "$@"; }
   command -v git >/dev/null 2>&1 || fail "This copy of Benchtop came from GitHub, but git isn't installed. On a Mac, run: xcode-select --install"
-  local branch target latest changed
+  local branch target latest changed err
   branch="$(G symbolic-ref --short -q HEAD || true)"
   [ "$branch" = main ] || fail "This copy is on '${branch:-an older commit}', not main. In GitHub Desktop choose Current Branch → main (or run: git switch main), then run this again. Nothing was changed."
   changed="$(G status --porcelain --untracked-files=no)"
+  # Building the interface used to change frontend/package-lock.json by itself (before 0.36.3): that change was
+  # Benchtop's own doing, not yours, so it's simply undone
+  case "$changed" in
+    " M frontend/package-lock.json"|"M  frontend/package-lock.json"|"MM frontend/package-lock.json")
+      G checkout --quiet HEAD -- frontend/package-lock.json
+      say "Put frontend/package-lock.json back as it was (an earlier build of the interface had changed it)."
+      changed="" ;;
+  esac
   if [ -n "$changed" ]; then
     printf '%s\n' "$changed" | sed 's/^/   /'
     fail "Benchtop's own files (above) have changes that aren't committed. Commit or discard them (GitHub Desktop lists them), then run this again. Your data isn't affected; nothing was changed."
   fi
   say "Looking for a newer version on GitHub…"
-  G fetch --quiet --tags origin main || fail "Couldn't reach GitHub. Check the internet connection and try again. Nothing was changed."
-  # releases are tagged vX.Y.Z once GitHub's tests have passed; update to the newest one (main, until the first release)
-  latest="$(G tag -l 'v[0-9]*' --sort=-v:refname | head -1)"
+  # --force: a release tag moved on GitHub must move here too (without it, Git refuses and nothing ever updates)
+  if ! err="$(G fetch --quiet --tags --force origin main 2>&1)"; then
+    printf '%s\n' "$err" | strip_controls | sed 's/^/   /' >&2
+    case "$err" in
+      *"Could not resolve"*|*"resolve host"*|*"connect to"*|*"Failed to connect"*|*"timed out"*|*"Network is unreachable"*|*"Connection refused"*|*"Connection reset"*|*"Could not read from remote"*)
+        fail "Couldn't reach GitHub (Git's message is above). Check the internet connection and try again. Nothing was changed." ;;
+      *) fail "Git couldn't get the newest version from GitHub (its message is above). Nothing was changed." ;;
+    esac
+  fi
+  # releases are tagged vX.Y.Z on main once GitHub's tests have passed: update to the newest one (main, until the
+  # first release). Other tags (v1.0.0-beta, or a tag on a commit that isn't on main) are never taken (0.36.3).
+  latest="$( { G tag -l 'v[0-9]*' --merged origin/main --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1; } 2>/dev/null || true)"
   target="${latest:-origin/main}"
   if G merge-base --is-ancestor "$target" HEAD; then say "You have the newest version ($OLDV)."; exit 0; fi
   G merge-base --is-ancestor HEAD "$target" ||
     fail "This copy has commits that aren't on GitHub, so it can't simply move forward to $target. Push or merge them first (GitHub Desktop: Push origin / Pull origin). Nothing was changed."
   NEWV="$(G show "$target:backend/app/__init__.py" | sed -nE 's/^__version__ = "([^"]+)".*/\1/p')"
   say "Benchtop $NEWV is available (you have $OLDV). What's new:"
-  G log --no-merges --format='  • %s' "HEAD..$target" | head -40
+  { G log --no-merges --format='  • %s' "HEAD..$target" | head -40 | strip_controls; } || true
   [ -n "${CHECK_ONLY:-}" ] && exit 0
   if ! command -v npm >/dev/null 2>&1 && ! G diff --quiet HEAD "$target" -- frontend; then
     fail "This update changes the web interface, which needs Node to build. Install Node from https://nodejs.org (LTS), then run this again. Nothing was changed."
   fi
   confirm "Update to $NEWV now? Your data is backed up first."
   backup_first
-  save_previous git "$NEWV" "$(G rev-parse HEAD)"
-  G merge --ff-only --quiet "$target" || fail "Git couldn't move to $NEWV. Nothing was changed; your data is as it was."
+  local old_rev
+  old_rev="$(G rev-parse HEAD)"
+  prepare_previous git "$NEWV" "$old_rev" "$(G rev-parse "$target^{commit}")"
+  use_new_previous
+  if ! G merge --ff-only --quiet "$target"; then
+    if [ "$(G rev-parse HEAD)" = "$old_rev" ] && [ -z "$(G status --porcelain --untracked-files=no)" ]; then
+      keep_old_previous
+      fail "Git couldn't move to $NEWV (see above). Nothing was changed; your data is as it was."
+    fi
+    fail "Git stopped part-way through the update to $NEWV (see above). Your data is safe. To go back to $OLDV, run: ./benchtop rollback"
+  fi
+  done_previous
   exec "$ROOT/benchtop" _finish-update
 }
 
@@ -233,6 +374,8 @@ update_zip() {
   if [ -n "$sha" ]; then
     got="$("$VENV/bin/python" -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$TMP/new.zip")"
     [ "$got" = "$sha" ] || fail "The download is damaged (its fingerprint doesn't match GitHub's). Nothing was changed; try again."
+  else
+    say "GitHub didn't give this download's fingerprint, so it couldn't be checked for damage (it's still checked to be a whole Benchtop)."
   fi
   install_zip "$TMP/new.zip"
 }
@@ -256,6 +399,8 @@ remove_old_login_item() {
 }
 
 cmd="${1:-start}"
+# an update or rollback cut off between swapping its records (see prepare_previous): the record from before is kept
+if [ ! -e "$PREV" ] && [ -f "$PREV.old/info" ]; then mv "$PREV.old" "$PREV" 2>/dev/null || true; fi
 # an update from a zip cut off while it swapped the program files (Terminal closed, the Mac turned off): the files are
 # a mix of two versions, so nothing runs until rollback puts the old version back (0.24.2)
 if [ -f "$PREV/updating" ] && [ -f "$PREV/info" ]; then
@@ -266,12 +411,19 @@ if [ -f "$PREV/updating" ] && [ -f "$PREV/info" ]; then
   esac
 fi
 case "$cmd" in
+  help|-h|--help) ;;
+  *) if [ -e "$BENCHTOP_DATA_DIR" ] && [ ! -d "$BENCHTOP_DATA_DIR" ]; then
+       fail "The data folder is set to $BENCHTOP_DATA_DIR, but that's a file, not a folder. Set BENCHTOP_DATA_DIR to a folder (or remove the setting to use backend/data). Nothing was changed."
+     fi ;;
+esac
+case "$cmd" in
   start)
     remove_old_login_item
     sync_github_workflow
     if running; then say "Benchtop is already running."; open_browser; exit 0; fi
     ensure_python_env
     ensure_ui
+    refuse_to_start 127.0.0.1
     say "Starting Benchtop on http://localhost:$PORT  (data: $BENCHTOP_DATA_DIR)"
     say "Leave this window open while you work. Close it or press Ctrl+C to stop."
     ( wait_up && open_browser ) &
@@ -283,9 +435,11 @@ case "$cmd" in
     export BENCHTOP_DATA_DIR="$BACKEND/data/demo" BENCHTOP_DEMO=1 BENCHTOP_BACKUP_INTERVAL_HOURS=0
     unset BENCHTOP_OBSIDIAN_DIR BENCHTOP_BACKUP_DIR BENCHTOP_OIDC_ISSUER
     PORT="${BENCHTOP_DEMO_PORT:-8001}"
+    export BENCHTOP_PORT="$PORT"  # so the demo's links (and its lock) name its own port
     if running; then say "The demo is already running."; open_browser; exit 0; fi
     ensure_python_env
     ensure_ui
+    refuse_to_start 127.0.0.1 BENCHTOP_DEMO_PORT demo
     if [ "${2:-}" = "--reset" ]; then rm -rf "$BENCHTOP_DATA_DIR"; say "Demo data cleared."; fi
     if [ ! -f "$BENCHTOP_DATA_DIR/benchtop.db" ]; then
       say "Building the demo lab (three months of a fictional group's work; about a minute)…"
@@ -303,6 +457,7 @@ case "$cmd" in
     if running; then fail "Benchtop is already running on this computer; close that window first, then run ./benchtop lab"; fi
     ensure_python_env
     ensure_ui
+    refuse_to_start 0.0.0.0 BENCHTOP_PORT lab
     host="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || hostname)"
     ip="$( (ipconfig getifaddr en0 || ipconfig getifaddr en1 || hostname -I 2>/dev/null | awk '{print $1}') 2>/dev/null | head -1)"
     [ -n "$ip" ] && export BENCHTOP_LAN_URL="http://$ip:$PORT"  # so phone QR codes point somewhere a phone can reach
@@ -316,7 +471,7 @@ case "$cmd" in
     ;;
 
   status)
-    v="$(curl -fsS "http://127.0.0.1:$PORT/api/health" 2>/dev/null | sed -E 's/.*"version":"([^"]+)".*/\1/' || true)"
+    v="$(curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/health" 2>/dev/null | sed -E 's/.*"version":"([^"]+)".*/\1/' || true)"
     if [ -n "$v" ]; then say "Running: version $v at http://localhost:$PORT"; else say "Not running."; fi
     echo "Folder: $ROOT"
     echo "Data:   $BENCHTOP_DATA_DIR"
@@ -339,8 +494,10 @@ case "$cmd" in
     # install a release zip you downloaded yourself (no internet needed)
     ZIP="${2:-}"
     { [ -n "$ZIP" ] && [ -f "$ZIP" ]; } || fail "Usage: ./benchtop upgrade ~/Downloads/benchtop-eln-vX.Y.Z.zip"
+    # a Git copy (from GitHub, perhaps used by GitHub Desktop) updates through Git: a zip would leave Git with
+    # hundreds of changed and deleted files, and the next update would refuse (0.36.3)
+    [ -d "$ROOT/.git" ] && fail "This copy of Benchtop came from GitHub with Git, so it updates through Git, not from a zip. Run ./benchtop update instead (it goes to the newest release). Nothing was changed."
     refuse_if_running
-    [ -d "$ROOT/.git" ] && say "Note: this copy is a Git clone; ./benchtop update keeps Git and GitHub Desktop in step, a zip doesn't."
     ensure_python_env
     OLDV="$(version_in "$ROOT")"
     TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -366,22 +523,40 @@ case "$cmd" in
     # put back the version from before the latest update (your data stays as it is)
     refuse_if_running
     [ -f "$PREV/info" ] || fail "There's no earlier version to go back to: Benchtop keeps the one from before the latest update, and there hasn't been one since this copy was installed."
+    NEW_REV=""
     . "$PREV/info"
+    CUT=""; [ -f "$PREV/updating" ] && CUT=1
     CURV="$(version_in "$ROOT")"
     say "Going back from Benchtop $CURV to $OLD_VERSION (from before the update on $WHEN). Your data stays as it is."
     YES="${2:-}"; [ "$YES" = "--yes" ] || YES=""
     confirm "Go back to $OLD_VERSION?"
-    if [ "$KIND" = git ]; then
+    if [ "$KIND" = git ] && [ -n "$CUT" ]; then
+      # Git was cut off while it moved the files: put every one of Benchtop's files back as it was. Before the update
+      # they had no changes (update refuses otherwise), so nothing of yours is lost. A lock file Git left behind is
+      # removed first, but only if no Git is running now.
+      if [ -f "$ROOT/.git/index.lock" ]; then
+        procs="$(ps -A -o stat= -o comm= 2>/dev/null || true)"  # (a process that has ended, Z, isn't running)
+        printf '%s\n' "$procs" | grep -v '^ *Z' | grep -qE '(^|[/ ])git$' || rm -f "$ROOT/.git/index.lock"
+      fi
+      { [ -z "$NEW_REV" ] || git -C "$ROOT" reset --quiet --hard "$NEW_REV"; } && git -C "$ROOT" reset --quiet --hard "$OLD_REV" ||
+        fail "Git couldn't go back (see above). Close GitHub Desktop and any other Git program, then run ./benchtop rollback again."
+    elif [ "$KIND" = git ]; then
       git -C "$ROOT" reset --quiet --keep "$OLD_REV" ||
         fail "Git couldn't go back (see above): commit or discard changes to Benchtop's files first. Nothing was changed."
     else
-      [ -f "$PREV/program/benchtop" ] || fail "The copy of $OLD_VERSION is missing from $PREV/program. Nothing was changed."
+      # a copy left half-made or half-removed by an update that was cut off is never put back (0.36.3)
+      if [ ! -f "$PREV/program/backend/app/__init__.py" ] || [ "$(version_in "$PREV/program")" != "$OLD_VERSION" ]; then
+        fail "The copy of $OLD_VERSION kept in $PREV isn't complete (an update was cut off while it was made or removed), so it can't be put back. Nothing was changed. Benchtop $CURV still works; ./benchtop update installs the newest version."
+      fi
       # run this version's copier from outside backend/app, which it's about to replace
       cp "$BACKEND/app/install.py" "$PREV/install.py"
-      "$VENV/bin/python" -I "$PREV/install.py" mirror "$PREV/program" "$ROOT"
+      : > "$PREV/updating"  # if this is cut off part-way, Benchtop won't start on the mix; rollback again finishes it
+      rc=0; "$VENV/bin/python" -I "$PREV/install.py" mirror "$PREV/program" "$ROOT" --expect-version "$OLD_VERSION" || rc=$?
+      if [ "$rc" = 3 ]; then [ -n "$CUT" ] || rm -f "$PREV/updating"; exit 1; fi  # refused: nothing changed (it said so)
+      [ "$rc" = 0 ] || fail "Going back stopped part-way (see above). Your data is safe. Run ./benchtop rollback again to finish."
       chmod +x "$ROOT/benchtop" "$ROOT/Benchtop.command" 2>/dev/null || true
     fi
-    rm -rf "$PREV"
+    rm -f "$PREV/info"; rm -rf "$PREV" "$PREV.old" "$PREV.new"
     ensure_python_env
     ensure_ui
     say "Back on Benchtop $OLD_VERSION."
@@ -408,6 +583,8 @@ case "$cmd" in
     if [ $# -lt 2 ]; then ensure_python_env; py -m app.backup restore; exit $?; fi
     running && fail "Stop Benchtop first (close its Terminal window or press Ctrl+C there), then run restore."
     ensure_python_env
+    holder="$(lock_holder "$BENCHTOP_DATA_DIR")"
+    [ -z "$holder" ] || fail "Stop Benchtop first (it's running as process $holder with this data: close its Terminal window or press Ctrl+C there), then run restore."
     if [ "${3:-}" = "--without-missing-files" ]; then py -m app.backup restore "$(abs_path "$2")" --without-missing-files
     else py -m app.backup restore "$(abs_path "$2")"; fi
     ;;

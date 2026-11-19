@@ -7,7 +7,8 @@ deploy/github-tests.yml), and publishes the result on the repository's Releases 
     python3 deploy/release.py --out DIR      (needs frontend/dist: run `npm run build` in frontend/ first)
 
 The zip holds this commit's files, as `git archive` gives them, plus the ready-built web interface
-(frontend/dist), so running it needs no Node. Everything sits in one benchtop/ folder, which is what
+(frontend/dist), so running it needs no Node, and a list of its own files (.benchtop-files), so an update knows
+which files are Benchtop's and which are the person's. Everything sits in one benchtop/ folder, which is what
 ./benchtop upgrade and ./benchtop update expect (including the launchers of older versions).
 """
 from __future__ import annotations
@@ -27,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TRAILERS = re.compile(r"^(Co-Authored-By|Claude-Session|Signed-off-by|Reviewed-by|Change-Id):", re.I)
 # GitHub's own settings (updates never touch them), the project website, and the upgrade test's old backups (tests only)
 LEAVE_OUT = (".github/", "site/", "backend/tests/upgrades/")
+MANIFEST = ".benchtop-files"  # backend/app/install.py's MANIFEST
 
 
 def git(*args: str, root: Path = ROOT) -> str:
@@ -93,6 +95,13 @@ def notes(root: Path = ROOT, v: str | None = None) -> str:
     return "\n\n".join(parts) + "\n\n---\n\n" + how + "\n"
 
 
+def manifest(names: set[str], v: str) -> str:
+    """The same format backend/app/install.py reads (and its snapshots write): one path per line, # for comments."""
+    head = (f"# The files of Benchtop {v}. Updates replace or remove only these; anything else in "
+            "Benchtop's folders is yours and is left alone.\n")
+    return head + "".join(f"{n}\n" for n in sorted(names))
+
+
 def build_zip(root: Path, v: str, out: Path) -> Path:
     dist = root / "frontend/dist"
     if not (dist / "index.html").is_file():
@@ -115,10 +124,18 @@ def build_zip(root: Path, v: str, out: Path) -> Path:
         now = time.localtime()[:6]
         for f in sorted(dist.rglob("*")):
             if f.is_file():
-                zi = zipfile.ZipInfo(f"benchtop/frontend/dist/{f.relative_to(dist).as_posix()}", now)
+                name = f"frontend/dist/{f.relative_to(dist).as_posix()}"
+                zi = zipfile.ZipInfo(f"benchtop/{name}", now)
                 zi.external_attr = 0o100644 << 16
                 zi.compress_type = zipfile.ZIP_DEFLATED
                 z.writestr(zi, f.read_bytes())
+                names.add(name)
+        # the list of this release's own files (0.36.3): an update removes only files on it, never the person's own
+        # (a copy of their data folder, a protocol saved in docs/); see backend/app/install.py
+        zi = zipfile.ZipInfo(f"benchtop/{MANIFEST}", now)
+        zi.external_attr = 0o100644 << 16
+        zi.compress_type = zipfile.ZIP_DEFLATED
+        z.writestr(zi, manifest(names, v))
     for must in ("benchtop", "Benchtop.command", "backend/app/__init__.py", "backend/requirements.txt"):
         if must not in names:
             raise SystemExit(f"The zip would be missing {must}")

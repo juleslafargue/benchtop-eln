@@ -1,0 +1,15 @@
+# What the Docker build doesn't need (the Dockerfile copies only the parts it uses; this keeps the rest, and
+# anything a person's computer made, such as node_modules built for another system, out of the image)
+.git
+.github
+.benchtop-previous*
+Benchtop-kept-files-*
+**/node_modules
+**/__pycache__
+**/.venv
+frontend/dist
+backend/data
+deploy/.env
+deploy/backups
+deploy/backup-copy
+site

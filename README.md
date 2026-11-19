@@ -168,7 +168,11 @@ Benchtop folder:
 It works for both kinds of install: a copy cloned from GitHub (it moves to the newest *release*, so you only
 get versions that passed all the automatic tests; GitHub Desktop stays in step) and an unzipped release (it
 downloads the new zip and checks its fingerprint). Your data, settings and backups are never touched, nor
-anything else you keep in the Benchtop folder. `./benchtop update --check` only looks.
+anything else you keep in the Benchtop folder, even inside Benchtop's own folders (a copy of your data folder,
+a protocol saved in `docs/`): a release lists its own files, and only those are replaced or removed. If an
+update is cut off part-way (the Mac turned off), Benchtop won't start on the mix and says to run
+`./benchtop rollback`. Only one Benchtop at a time can use a data folder, and `update` waits until it's closed,
+whatever port it's on. `./benchtop update --check` only looks.
 
 Rolling back keeps your data as it is now, so nothing you recorded after the update is lost. Most updates
 don't change how the data is stored; if one did, `rollback` says so and offers the backup made just before
@@ -182,7 +186,8 @@ the backup fails, Benchtop doesn't start and changes nothing.
 Versions before 0.19 don't have `update` yet. Once: with a GitHub clone, *Fetch origin* then *Pull origin* in
 GitHub Desktop (or `git pull`); with a zip, download `benchtop-eln-vX.Y.Z.zip` from the
 [Releases page](https://github.com/juleslafargue/benchtop-eln/releases) and run
-`./benchtop upgrade ~/Downloads/benchtop-eln-vX.Y.Z.zip`. A lab server updates with one command too:
+`./benchtop upgrade ~/Downloads/benchtop-eln-vX.Y.Z.zip` (zip installs only: a GitHub clone always updates
+through Git). A lab server updates with one command too:
 `deploy/update-server.sh` (docs/SERVER.md).
 
 Backups are automatic: one on start-up if the newest is more than a day old, then daily while running,
@@ -468,7 +473,7 @@ python tests/crash_test.py               # kills Benchtop mid-save, mid-backup, 
 
 # Web app (Node 20+)
 cd frontend
-npm install
+npm ci                                   # installs exactly what package-lock.json lists (and leaves it as it is)
 npm run dev                              # http://localhost:5173, proxies /api to :8000
 ```
 

@@ -99,8 +99,9 @@ deploy/update-server.sh --rollback # back to the version from before the last up
 It backs up with the version that's running (so the backup is one both versions can restore), moves to the
 newest release (tagged on GitHub only once every automatic test has passed, including a real update and
 rollback of this setup), rebuilds the image and waits until the new version answers. Benchtop is unavailable
-for the minute or two of the restart, so pick a quiet moment. If the new version doesn't come up, it says
-so and shows the log; `--rollback` goes back. `--check` only looks; `--yes` doesn't ask (for a scheduled job).
+for the minute or two of the restart, so pick a quiet moment. If the new version doesn't build, the old one
+keeps running and it says so; running it again carries on from there. If the new version doesn't come up, it
+says so and shows the log; `--rollback` goes back. `--check` only looks; `--yes` doesn't ask (for a scheduled job).
 
 It needs a Git clone of the repository (the `git clone` above). A server set up from a zip: unzip the
 new version over the folder (keeping `deploy/.env`), then run the same `docker compose … up -d --build` command.

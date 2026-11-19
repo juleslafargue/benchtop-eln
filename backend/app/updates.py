@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -155,13 +156,37 @@ def status() -> dict[str, Any]:
     }
 
 
+CONTROLS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def plain(text: str) -> str:
+    """Release notes are other people's text: without control characters, which could make the terminal do things
+    (clear it, retitle it, colour everything) when ./benchtop update shows them (0.36.3). Newlines and tabs stay."""
+    return CONTROLS.sub("", text.replace("\r\n", "\n"))
+
+
+def why_not(e: BaseException) -> str:
+    """What went wrong looking for a newer version, in words that say what to do."""
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            said = str(json.loads(e.read(20000) or b"{}").get("message") or "")
+        except (OSError, ValueError, AttributeError):
+            said = ""
+        if e.code in (403, 429) and ("rate limit" in said.lower() or (e.headers or {}).get("X-RateLimit-Remaining") == "0"):
+            return ("GitHub is limiting how often this computer can ask for new versions (its rate limit). "
+                    "Try again in an hour.")
+        return f"GitHub answered with an error ({e.code} {plain(said or str(e.reason))[:200]}). Try again later."
+    if isinstance(e, ValueError):  # not JSON, or not a list of releases
+        return f"GitHub's list of releases couldn't be read ({plain(str(e))[:200]}). Try again later."
+    return f"Couldn't reach GitHub to look for a newer version ({plain(str(e))[:200]}). Check the internet connection and try again."
+
+
 def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else "check"
     try:
         releases = fetch_releases()
     except Exception as e:  # noqa: BLE001
-        print(f"Couldn't reach GitHub to look for a newer version ({e}). Check the internet connection and try again.",
-              file=sys.stderr)
+        print(why_not(e), file=sys.stderr)
         return 3
     newer = [r for r in releases if is_newer(r["version"])]
     if cmd == "zip":
@@ -177,10 +202,10 @@ def main(argv: list[str]) -> int:
             return 1
         print(f"Benchtop {newer[0]['version']} is available (you have {__version__}).")
         for r in reversed(newer[:10]):  # oldest first, so it reads as a story
-            changes = re.split(r"\n-{3,}\s*\n", "\n" + r["notes"], maxsplit=1)[0].strip()  # without "how to install"
-            print(f"\n== {r['name']} ==\n{changes or '(no notes)'}")
+            changes = re.split(r"\n-{3,}\s*\n", "\n" + plain(r["notes"]), maxsplit=1)[0].strip()  # without "how to install"
+            print(f"\n== {plain(str(r['name']))} ==\n{changes or '(no notes)'}")
         if len(newer) > 10:
-            print(f"\n…and {len(newer) - 10} older releases: {newer[-1]['url'].rsplit('/tag/', 1)[0]}")
+            print(f"\n…and {len(newer) - 10} older releases: {plain(str(newer[-1]['url'])).rsplit('/tag/', 1)[0]}")
         return 0
     print(__doc__, file=sys.stderr)
     return 2

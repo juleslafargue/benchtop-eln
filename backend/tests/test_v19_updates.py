@@ -396,7 +396,8 @@ def test_upgrade_accepts_any_single_top_folder_and_refuses_an_older_zip(zip_lab,
 def test_mirror_replaces_program_files_but_never_data_settings_or_your_files(tmp_path, monkeypatch):
     new, root = tmp_path / "new", tmp_path / "root"
     for p, text in {"benchtop": "new launcher", "backend/app/a.py": "new a", "frontend/dist/index.html": "new ui",
-                    "deploy/x.yml": "new"}.items():
+                    "deploy/x.yml": "new", "backend/app/__init__.py": '__version__ = "2.0"', "backend/app/main.py": "",
+                    "backend/requirements.txt": ""}.items():
         (new / p).parent.mkdir(parents=True, exist_ok=True)
         (new / p).write_text(text)
     for p, text in {"benchtop": "old launcher", "backend/app/a.py": "old a", "backend/app/gone.py": "old",
@@ -413,12 +414,15 @@ def test_mirror_replaces_program_files_but_never_data_settings_or_your_files(tmp
     assert t("benchtop") == "new launcher" and t("backend/app/a.py") == "new a" and t("frontend/dist/index.html") == "new ui"
     assert (root / "benchtop").stat().st_ino != inode  # renamed into place: a running launcher keeps reading the old one
     assert not (root / "backend/app/gone.py").exists() and not (root / "backend/app/old_pkg").exists()
+    # 0.36.3: a copy from before releases listed their files can't tell Benchtop's old files from yours: moved, not deleted
+    kept = Path(r["kept_in"])
+    assert (kept / "backend/app/gone.py").read_text() == "old" and (kept / "backend/app/old_pkg/m.py").read_text() == "old"
     for p, text in {"backend/data/benchtop.db": "DATA", "backend/data/settings.env": "S=1", "backend/.venv/bin/python": "py",
                     "frontend/node_modules/x/i.js": "nm", "deploy/.env": "SECRET=1", "deploy/backups/b.zip": "B",
                     "my-notes.txt": "mine", "elsewhere/backups/z.zip": "Z", ".git/HEAD": "ref",
                     "backend/backups-here/k.zip": "K"}.items():
         assert t(p) == text, p
-    assert r["removed"] == 2
+    assert r["removed"] == 0 and sorted(r["kept"]) == ["backend/app/gone.py", "backend/app/old_pkg"]
     snap = tmp_path / "snap"
     install.snapshot(root, snap)
     assert (snap / "benchtop").exists() and (snap / "backend/app/a.py").exists() and (snap / "my-notes.txt").exists()

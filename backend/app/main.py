@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import sqlite3
+import sys
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -113,15 +116,32 @@ async def _housekeeping_loop() -> None:
         await asyncio.sleep(3600)
 
 
+def _stop(message: str) -> None:
+    """Stop at start-up with a plain message (raising would add a long Python traceback under it)."""
+    print(f"\n{message}\n", file=sys.stderr, flush=True)
+    os._exit(1)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    from . import datalock
     from .db import BackupBeforeUpgradeFailed, MovedFromPostgres
     from .migrations import TooNew
+    try:  # one Benchtop at a time on a data folder (0.36.3)
+        datalock.acquire(settings.data_dir, settings.port)
+    except datalock.InUse as exc:
+        _stop(f"Benchtop can't start. {exc}")
     try:
         init_db()
     except (TooNew, MovedFromPostgres, BackupBeforeUpgradeFailed) as exc:
         log.error("\n\n  Benchtop can't open this data.\n  %s\n", exc)
+        datalock.release(settings.data_dir)
         raise
+    except (SAOperationalError, sqlite3.OperationalError) as exc:
+        if "full" not in str(exc).lower():
+            raise
+        _stop(f"Benchtop can't start: the disk that holds its data ({settings.data_dir}) is full. Your data is as it "
+              "was. Make some room on that disk, then start Benchtop again.")
     ensure_admin()
     try:  # imports and exports cut off when Benchtop last stopped (0.30.1)
         from . import eln_import
@@ -136,6 +156,7 @@ async def lifespan(_: FastAPI):
     task.cancel()
     with suppress(asyncio.CancelledError):
         await task
+    datalock.release(settings.data_dir)
 
 
 app = FastAPI(title="Benchtop ELN", version=__version__, lifespan=lifespan,
