@@ -14,8 +14,9 @@ from ..config import settings
 from .. import passwords
 from ..patching import cleaned
 from ..models import AuthSession, utcnow
-from ..security import (MAX_PER_ACCOUNT, MAX_PER_IP, DB, Admin, CurrentUser, burn_time, check_throttle, clear_failures,
-                        client_ip, end_sessions, hash_password, needs_rehash, record_failure, start_session, verify_password)
+from ..security import (MAX_PER_ACCOUNT, MAX_PER_IP, DB, Admin, CurrentUser, burn_time, clear_failures, client_ip,
+                        end_sessions, hash_password, needs_rehash, release_attempt, reserve_attempt, revoke_tokens,
+                        start_session, verify_password)
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -238,12 +239,12 @@ def change_username(body: UsernameIn, user: CurrentUser, session: DB):
 def _confirm_password(session, user: User, password: str) -> None:
     """Re-check someone's password before a sensitive change; guesses are throttled like sign-ins."""
     key = f"confirm:{user.id}"
-    check_throttle(session, (key, MAX_PER_ACCOUNT))
+    reserved = reserve_attempt((key, MAX_PER_ACCOUNT))  # counted before it's checked (0.36.4)
     if not verify_password(password, user.password_hash):
-        record_failure(session, key)
         audit.record(session, user, "password_check_failed", "user", user.id)
         session.commit()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password is wrong")
+    release_attempt(session, reserved)
     clear_failures(session, key)
 
 
@@ -260,21 +261,25 @@ def _is_local(request: Request) -> bool:
 def login(body: LoginIn, request: Request, session: DB):
     name = body.username.strip().lower()
     acct_key, ip_key = f"login:{name}", f"ip:{client_ip(request)}"
-    check_throttle(session, (acct_key, MAX_PER_ACCOUNT), (ip_key, MAX_PER_IP))
+    # counted as a wrong guess before it's checked, so guesses sent all at once are throttled too (0.36.4)
+    reserved = reserve_attempt((acct_key, MAX_PER_ACCOUNT), (ip_key, MAX_PER_IP))
     user = (session.exec(select(User).where(User.username == body.username)).first()
             or session.exec(select(User).where(User.username == name)).first())
     if user is None:
         burn_time(body.password)  # same delay as a real check, so usernames can't be probed by timing
     ok = bool(user) and user.active and verify_password(body.password, user.password_hash)
+    if ok:
+        release_attempt(session, reserved)
     if ok and user.username == settings.admin_username and _default_admin_untouched(session):
+        session.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Finish setting up Benchtop first: create your own account on the welcome screen")
     if not ok:
-        record_failure(session, acct_key, ip_key)
         audit.record(session, None, "login_failed", "user", user.id if user else None,
                      username=body.username, ip=client_ip(request))
         session.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
     if not settings.password_login and user.role != Role.admin:  # admins keep a password as a way in if SSO breaks
+        session.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This Benchtop uses single sign-on; use the sign-in button instead")
     clear_failures(session, acct_key)
     if needs_rehash(user.password_hash):  # quietly move older hashes to the current strength
@@ -366,8 +371,10 @@ class PasswordIn(BaseModel):
 @router.post("/auth/password")
 def change_password(body: PasswordIn, user: CurrentUser, session: DB):
     """Change your password, or (for an account made by single sign-on) set one: signatures need it.
-    Every other signed-in browser is signed out, in case the old password was the problem."""
+    Every other signed-in browser is signed out, and your API tokens are revoked (0.36.4), in case the old password
+    was the problem: a token made with it would otherwise keep working."""
     from ..security import has_password
+    had = has_password(user.password_hash)
     if has_password(user.password_hash) and not user.must_change_password:
         try:
             _confirm_password(session, user, body.current_password)
@@ -383,9 +390,10 @@ def change_password(body: PasswordIn, user: CurrentUser, session: DB):
     user.password_changed_at = utcnow()
     session.add(user)
     ended = end_sessions(session, user.id, keep=getattr(user, "_sid", None))
-    audit.record(session, user, "password_changed", "user", user.id, other_sessions_ended=ended)
+    revoked = revoke_tokens(session, user.id) if had else 0  # not when someone signed in by SSO first sets one
+    audit.record(session, user, "password_changed", "user", user.id, other_sessions_ended=ended, tokens_revoked=revoked)
     session.commit()
-    return {"ok": True, "other_sessions_ended": ended}
+    return {"ok": True, "other_sessions_ended": ended, "tokens_revoked": revoked}
 
 
 class PasswordCheckIn(BaseModel):
@@ -535,10 +543,11 @@ def update_user(uid: int, body: UserPatch, actor: Admin, session: DB):
         u.must_change_password = True  # a password someone else knows: they pick their own at next sign-in
         changes["password"] = "(reset)"
         ended = end_sessions(session, u.id)
+        changes["tokens_revoked"] = revoke_tokens(session, u.id)
     if changes.get("active") is False:
         ended = end_sessions(session, u.id)
     for k, v in changes.items():
-        if k != "password":
+        if k not in ("password", "tokens_revoked"):
             setattr(u, k, v)
     session.add(u)
     audit.record(session, actor, "update", "user", u.id, changes=changes, sessions_ended=ended)
@@ -555,6 +564,7 @@ def sign_out_user(uid: int, actor: Admin, session: DB):
     if not u:
         raise HTTPException(404, "User not found")
     n = end_sessions(session, u.id, keep=getattr(actor, "_sid", None) if actor.id == u.id else None)
-    audit.record(session, actor, "sessions_ended", "user", u.id, count=n, by_admin=True)
+    revoked = revoke_tokens(session, u.id)  # everywhere means scripts too (0.36.4)
+    audit.record(session, actor, "sessions_ended", "user", u.id, count=n, by_admin=True, tokens_revoked=revoked)
     session.commit()
-    return {"ended": n}
+    return {"ended": n, "tokens_revoked": revoked}

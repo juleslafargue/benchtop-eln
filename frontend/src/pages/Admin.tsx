@@ -129,7 +129,7 @@ function ResetPassword({ u, onClose, onDone }: { u: User; onClose: () => void; o
   return (
     <Modal title={`Reset ${u.username}'s password`} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button>
       <button className="btn primary" disabled={!valid} onClick={save}>Reset password</button></>}>
-      <p style={{ marginTop: 0 }}>Set a temporary password and give it to them privately. They'll be signed out everywhere now and asked to choose their own password the next time they sign in.</p>
+      <p style={{ marginTop: 0 }}>Set a temporary password and give it to them privately. They'll be signed out everywhere now, their API tokens stop working, and they're asked to choose their own password the next time they sign in.</p>
       <PasswordField label="Temporary password" value={pw} onChange={setPw} onValid={setValid} username={u.username} fullName={u.full_name} email={u.email} autoFocus />
       {err && <p className="error">{err}</p>}
     </Modal>
@@ -421,7 +421,10 @@ function Users() {
     load()
   }
   const signOut = async (u: User) => {
-    try { const r = await api.post<{ ended: number }>(`/api/users/${u.id}/sign-out`); toast(`Signed ${u.username} out of ${r.ended} device${r.ended === 1 ? '' : 's'}`) }
+    try {
+      const r = await api.post<{ ended: number; tokens_revoked?: number }>(`/api/users/${u.id}/sign-out`)
+      toast(`Signed ${u.username} out of ${r.ended} device${r.ended === 1 ? '' : 's'}${r.tokens_revoked ? ` and revoked ${r.tokens_revoked} API token${r.tokens_revoked === 1 ? '' : 's'}` : ''}`)
+    }
     catch (e: any) { toast(e.message) }
   }
   return (
@@ -436,7 +439,7 @@ function Users() {
               <td>{u.active ? (u.must_change_password ? 'Active · must set password' : u.has_password === false ? 'Active · single sign-on' : 'Active') : 'Disabled'}</td>
               <td style={{ whiteSpace: 'nowrap' }}><button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
                 <button className="btn ghost sm" onClick={() => setResetting(u)}>Reset password</button>
-                {u.id !== me.id && <button className="btn ghost sm" onClick={() => signOut(u)} title="End all of their sessions, e.g. a lost laptop">Sign out everywhere</button>}
+                {u.id !== me.id && <button className="btn ghost sm" onClick={() => signOut(u)} title="End all of their sessions and revoke their API tokens, e.g. a lost laptop">Sign out everywhere</button>}
                 {u.id !== me.id && <button className="btn ghost sm" onClick={() => toggle(u)}>{u.active ? 'Disable' : 'Enable'}</button>}</td></tr>
           ))}</tbody></table>
       </div>

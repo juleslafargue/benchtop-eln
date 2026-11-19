@@ -83,8 +83,11 @@ What tokens can and can't do:
 
 - A token acts as **you**. It sees what you can see, and everything it does is recorded in the audit trail under your name.
 - **Read only** tokens can only read.
-- Tokens can **never** sign, witness, return, withdraw or void records, or publish them on Zenodo. They also can't manage tokens, passwords, sessions, users, webhooks or plugins. Those actions always need a person signed in.
-- Only a SHA-256 hash of each token is stored. Revoke a token on the same page and it stops working straight away. Disabling an account stops all of its tokens.
+- Tokens work with **records, inventory, the Inbox and documents**, as you would in the app: experiments and their sections, files, comments and sharing; notebooks; materials, lots and their usage; the instrument Inbox; supporting-information documents and the yearly archive; and looking things up (search, scan, compounds, reactions, chemistry, NMR prediction, DOIs). Only those endpoints accept a token (since 0.36.4 Benchtop keeps a list of what tokens may do, rather than of what they may not).
+- Tokens can **never** sign, witness, return, withdraw or void records, or publish them on Zenodo. They can't manage tokens, passwords, sessions, single sign-on or accounts, and they can't do anything an admin does: users, groups and who is in them, instrument folders, plugins (other than listing the section types and file readers in use), webhooks, settings, backups, data checks, NMR data updates or the lab's audit trail. Even an admin's token gets 403 for these. Those actions always need a person signed in.
+- Only a SHA-256 hash of each token is stored. Revoke a token on the same page and it stops working straight away. Disabling an account stops all of its tokens while it's disabled.
+- **Changing your password revokes all your tokens**, and so do an admin's **Sign out everywhere** and an admin resetting your password, in case someone else knew the password: a token they made would otherwise keep working. Make new tokens for your scripts afterwards. (Setting a signing password for the first time, if you sign in with single sign-on, doesn't.)
+- Wrong passwords are limited to 5 per account (and 30 per address) in 15 minutes, counting ones sent at the same moment.
 
 Errors come back as JSON with a `detail`: a message you can show a person (for a 422 from a parameter check, a list
 that names the parameter). On every endpoint:

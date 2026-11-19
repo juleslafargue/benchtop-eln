@@ -140,6 +140,18 @@ def end_sessions(session: Session, user_id: int, keep: str | None = None) -> int
     return n
 
 
+def revoke_tokens(session: Session, user_id: int) -> int:
+    """Revoke every API token of a person. With a new password, or when an admin signs them out everywhere or resets
+    their password (0.36.4: a token made with a stolen password kept working, and never expires unless told to)."""
+    from .models import ApiToken
+    n = 0
+    for t in session.exec(select(ApiToken).where(ApiToken.user_id == user_id, ApiToken.revoked_at == None)):  # noqa: E711
+        t.revoked_at = utcnow()
+        session.add(t)
+        n += 1
+    return n
+
+
 # ------------------------------------------------------------------ throttling password guesses
 
 FAIL_WINDOW = timedelta(minutes=15)
@@ -170,6 +182,32 @@ def record_failure(session: Session, *keys: str) -> None:
     old = session.exec(select(AuthFailure).where(AuthFailure.at < utcnow() - timedelta(days=1))).all()
     for f in old[:500]:
         session.delete(f)
+
+
+def reserve_attempt(*keys_limits: tuple[str, int]) -> list[int]:
+    """Count a password attempt as a wrong one before checking it, as one step with the throttle check, and return
+    what to take back if it turns out right (release_attempt). 0.36.4: the check, the slow password comparison and
+    noting a failure were separate steps, so 25 guesses sent at the same moment were all checked, not 5 and then
+    "too many". Done in its own short transaction, so it counts at once whatever the request does next."""
+    from . import audit
+    from .db import engine
+    with Session(engine) as s:
+        audit._take_write_lock(s)
+        check_throttle(s, *keys_limits)  # 429, and nothing written
+        rows = [AuthFailure(key=k) for k, _ in keys_limits]
+        s.add_all(rows)
+        for f in s.exec(select(AuthFailure).where(AuthFailure.at < utcnow() - timedelta(days=1)).limit(500)).all():
+            s.delete(f)  # keep the table small
+        s.commit()
+        return [r.id for r in rows]
+
+
+def release_attempt(session: Session, ids: list[int]) -> None:
+    """The password was right after all: it isn't a wrong guess."""
+    for i in ids:
+        f = session.get(AuthFailure, i)
+        if f is not None:
+            session.delete(f)
 
 
 def clear_failures(session: Session, key: str) -> None:
@@ -215,10 +253,74 @@ def current_user(
 
 # ---------------------------------------------------------------- personal access tokens
 TOKEN_PREFIX = "bt_"
-# Things a script never does with a token: sign, witness or void records; publish them on Zenodo; change passwords,
-# sessions, tokens or other accounts; administration. Those always need a person signed in.
-_TOKEN_BLOCKED = re.compile(r"^/api/(auth/|users|admin|webhooks|plugins/(?!sections|readers)|setup)|/(sign|witness|reject|withdraw|void)$"
-                            r"|/zenodo(/[a-z]+)?$")  # publishing on Zenodo (0.28) is public and permanent: a person does it
+# What a script may do with a token (0.36.4: a list of what's allowed, not of what isn't; an admin's token could install
+# plugins, change groups and scan instrument folders, because those weren't on the old list). Tokens work with records,
+# inventory, the Inbox and documents, as you would in the app. Never: signing, witnessing, returning, withdrawing or
+# voiding records; publishing on Zenodo; tokens, passwords, sessions, single sign-on or other accounts; anything an
+# admin does (users, groups, instrument folders, plugins, webhooks, settings, backups, the lab's audit trail). Those
+# always need a person signed in. docs/API.md says the same; tests/test_v36_4_tokens.py tries every endpoint.
+_ID = r"[^/]+"
+_TOKEN_ALLOWED: list[tuple[str, re.Pattern[str]]] = [(m, re.compile(p)) for m, p in [
+    ("GET", r"/api/auth/me"),
+    # records
+    ("GET POST", r"/api/experiments"),
+    ("GET PATCH", rf"/api/experiments/{_ID}"),
+    ("POST", rf"/api/experiments/{_ID}/(attachments|clone|comments|entries|follow-up|log|reorder|samples)"),
+    ("GET", rf"/api/experiments/{_ID}/(audit|comments|export|export\.eln|mentioned-in|safety|shares|verify|witness-candidates|writeup)"),
+    ("PUT DELETE", rf"/api/experiments/{_ID}/shares/{_ID}"),
+    ("PUT", rf"/api/experiments/{_ID}/witness-request"),
+    ("POST", rf"/api/experiments/{_ID}/witness-request/remind"),
+    ("PUT DELETE", rf"/api/entries/{_ID}"),
+    ("POST", rf"/api/entries/{_ID}/restore"),
+    ("GET", rf"/api/entries/{_ID}/versions"),
+    ("GET", rf"/api/attachments/{_ID}(/preview)?"),
+    ("POST", rf"/api/attachments/{_ID}/not-mine"),
+    ("PATCH DELETE", rf"/api/comments/{_ID}"),
+    ("GET POST", r"/api/notebooks"),
+    ("PATCH DELETE", rf"/api/notebooks/{_ID}"),
+    ("GET", rf"/api/notebooks/{_ID}/export\.eln"),
+    ("GET", r"/api/export\.eln"),
+    ("POST", r"/api/eln/preview"),
+    ("POST DELETE", rf"/api/eln/import/{_ID}"),
+    ("GET", rf"/api/signatures/{_ID}/timestamp"),
+    ("DELETE", rf"/api/samples/{_ID}"),
+    # inventory
+    ("GET POST", r"/api/materials"),
+    ("POST", r"/api/materials/register-product"),
+    ("GET PATCH", rf"/api/materials/{_ID}"),
+    ("POST", rf"/api/materials/{_ID}/(lots|safety/refresh|safety/acknowledge)"),
+    ("GET", r"/api/lots"),
+    ("PATCH", rf"/api/lots/{_ID}"),
+    ("GET POST", rf"/api/lots/{_ID}/transactions"),
+    ("POST", rf"/api/lots/transactions/{_ID}/reverse"),
+    # the Inbox
+    ("GET", r"/api/inbox(/count|/targets)?"),
+    ("GET", rf"/api/inbox/{_ID}/files/{_ID}"),
+    ("POST", rf"/api/inbox/{_ID}/(assign|follow-up|ignore|unignore)"),
+    # documents: supporting information, the yearly archive
+    ("GET POST", r"/api/si-documents"),
+    ("GET PUT DELETE", rf"/api/si-documents/{_ID}"),
+    ("GET", r"/api/archive/(options|pdfa|preview)"),
+    ("POST", r"/api/archive/jobs"),
+    ("GET DELETE", rf"/api/archive/jobs/{_ID}"),
+    ("POST", rf"/api/archive/jobs/{_ID}/build"),
+    ("GET", rf"/api/archive/jobs/{_ID}/download"),
+    ("PUT", rf"/api/archive/jobs/{_ID}/spectra/{_ID}"),
+    ("POST", rf"/api/archive/jobs/{_ID}/spectra/{_ID}/skip"),
+    # looking things up
+    ("GET", r"/api/(scan|compounds|reactions|search|spectra|frequent-materials|dashboard|doi|lookup|samples/lookup|notifications"
+            r"|safety/status|nmr/predict|nmr/status|plugins/sections|plugins/readers|groups|health|demo)"),
+    ("GET", rf"/api/lookup/{_ID}"),
+    ("POST", r"/api/(reactions/similar|notifications/read)"),
+    ("GET", r"/api/chem/(depict|hrms|structure-check)"),
+    ("POST", r"/api/chem/(properties|reaction/parse|stoichiometry)"),
+]]
+
+
+def token_may(method: str, path: str) -> bool:
+    """May an API token make this request? HEAD and OPTIONS count as GET."""
+    m = "GET" if method in ("HEAD", "OPTIONS") else method
+    return any(m in methods.split() and rx.fullmatch(path) for methods, rx in _TOKEN_ALLOWED)
 
 
 def hash_api_token(raw: str) -> str:
@@ -238,8 +340,8 @@ def _token_user(request: Request, raw: str, session: Session) -> User:
     user = session.get(User, tok.user_id)
     if user is None or not user.active or user.must_change_password:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This API token's account can't be used right now")
-    path, method = request.url.path, request.method.upper()
-    if _TOKEN_BLOCKED.search(path) and not (path == "/api/auth/me" and method == "GET"):
+    path, method = request.scope.get("path") or request.url.path, request.method.upper()
+    if not token_may(method, path):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "API tokens can't do this; sign in to Benchtop to do it yourself")
     if tok.scope != "write" and method not in ("GET", "HEAD", "OPTIONS"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This API token is read-only")

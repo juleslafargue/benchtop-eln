@@ -13,6 +13,11 @@ services:
     environment:
       BENCHTOP_DATABASE_URL: postgresql+psycopg://benchtop:${POSTGRES_PASSWORD}@db:5432/benchtop
       BENCHTOP_PUBLIC_URL: https://${BENCHTOP_DOMAIN}
+      # Caddy passes on each person's own address (X-Forwarded-For). Benchtop believes it only from the private
+      # addresses Docker gives containers: Benchtop has no port of its own here, so only Caddy can reach it. Without
+      # this, everyone seemed to come from Caddy's address, and 30 wrong passwords in 15 minutes from anyone in the
+      # lab locked everyone out for a while (0.36.4).
+      FORWARDED_ALLOW_IPS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fd00::/8"
       BENCHTOP_ADMIN_USER: admin
       BENCHTOP_ADMIN_PASSWORD: ${BENCHTOP_ADMIN_PASSWORD}
       BENCHTOP_SECRET_KEY: ${BENCHTOP_SECRET_KEY}
