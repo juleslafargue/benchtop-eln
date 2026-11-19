@@ -215,6 +215,8 @@ jobs:
       DC: docker compose -f deploy/docker-compose.server.yml --env-file deploy/.env
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the whole history: the update check asks Git whether a release follows this commit
       - name: Build and start the server setup (without the HTTPS proxy)
         run: |
           printf 'BENCHTOP_DOMAIN=eln.example.test\nBENCHTOP_SECRET_KEY=%s\nBENCHTOP_ADMIN_PASSWORD=ci-start-only\n' "$(openssl rand -hex 32)" > deploy/.env
@@ -244,6 +246,10 @@ jobs:
           sed -i -E 's/^__version__ = ".*"/__version__ = "99.0.0"/' backend/app/__init__.py
           git -c user.name=CI -c user.email=ci@example.invalid commit -qam "v99.0.0: pretend release"
           git tag v99.0.0
+          # a stand-in for GitHub where that release is on main, as a real one is (update-server.sh only takes
+          # release tags on GitHub's main), then this copy goes back to before it
+          git clone -q --bare . "$RUNNER_TEMP/origin.git"
+          git remote set-url origin "$RUNNER_TEMP/origin.git"
           git reset -q --hard HEAD~1
           n=$(ls deploy/backups/benchtop-backup-*.zip | wc -l)
           deploy/update-server.sh --yes
