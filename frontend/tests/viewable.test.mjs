@@ -27,3 +27,10 @@ test('very large files are download-only', () => {
   assert.equal(canViewSpectrum({ filename: 'huge.zip', size: 2_000_000_000 }), false)
   assert.equal(canViewSpectrum({ filename: 'report.pdf', size: 10 }), false)
 })
+
+test('a file name with a right-to-left override is shown with it written out (0.36.5: "rtl ‮gpj.exe" showed as "rtl exe.jpg")', () => {
+  const { shownName } = viewable
+  assert.equal(shownName('rtl ‮gpj.exe'), 'rtl [U+202E]gpj.exe')
+  assert.equal(shownName('a⁦b‏c'), 'a[U+2066]b[U+200F]c')
+  assert.equal(shownName('JL-013 ¹H in CDCl₃.zip'), 'JL-013 ¹H in CDCl₃.zip')  // ordinary names as they are
+})

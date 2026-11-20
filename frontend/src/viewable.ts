@@ -18,6 +18,10 @@ export function needsReadCheck(a: { filename: string; size?: number }): boolean 
   return canViewSpectrum(a) && TEXT_DATA.test(a.filename) && (a.size ?? 0) <= CHECK_MAX_BYTES
 }
 
+/** A file name as it is shown: characters that reorder or hide text are written out, so a right-to-left override can't
+ *  make "rtl ‮gpj.exe" look like "rtl exe.jpg" (0.36.4 showed it that way in the Inbox and the record). Display only. */
+export const shownName = (name: string) => (name || '').replace(/[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/g, c => `[U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}]`)
+
 /** How an attached picture is shown (0.36: a TIFF was a broken image). 'img': as it is; 'preview': a PNG the server
  *  makes from it, for viewing only (TIFF, from microscopes, gel imagers and scanners); 'none': no picture, just a line
  *  saying so (a format browsers can't show, such as HEIC or a camera's raw file); null: not a picture. */

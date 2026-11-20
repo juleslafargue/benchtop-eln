@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '../App'
 import { day, ago, api, type FolderPreview, type Instrument } from '../api'
+import { shownName } from '../viewable'
 import Modal from './Modal'
 
 interface ListOut { instruments: Instrument[]; kinds: Record<string, string>; scan_seconds: number; max_mb: number }
@@ -23,7 +24,7 @@ function Preview({ p }: { p: FolderPreview }) {
       {p.latest.length > 0 && <>
         <p className="faint" style={{ margin: '4px 0 0', fontSize: 13 }}>The newest, and what would happen to them if they arrived now:</p>
         <ul className="preview-list">{p.latest.map(x => (
-          <li key={x.path}><span className="grow mono">{x.path}</span>
+          <li key={x.path}><span className="grow mono">{shownName(x.path)}</span>
             <span className={x.action === 'attach' ? 'ok-text' : 'faint'}>{x.action === 'attach' ? `→ ${x.experiment}` : 'Inbox'}</span></li>))}</ul>
       </>}
     </div>
@@ -165,7 +166,7 @@ function OldData({ inst, onClose, onTaken }: { inst: Instrument; onClose: () => 
               <li key={x.path} className={x.gone ? 'gone' : ''}>
                 <label>
                   <input type="checkbox" disabled={x.gone} checked={picked.has(x.path)} onChange={() => toggle(x.path)} />
-                  <span className="old-main"><span className="mono old-path">{x.path}</span>
+                  <span className="old-main"><span className="mono old-path">{shownName(x.path)}</span>
                     <span className="faint old-meta">{x.gone ? 'No longer in the folder' : `${mb(x.size)}${x.modified ? ` · ${day(x.modified)}` : ''}`}</span>
                     {!x.gone && x.action !== 'attach' && x.note && <span className="old-note">{x.note}</span>}</span>
                   {!x.gone && <span className={`old-where ${x.action === 'attach' ? 'ok-text' : 'faint'}`}>
@@ -203,7 +204,7 @@ export default function InstrumentsPanel() {
           <button className="btn sm" onClick={() => setForm('new')}>Add a folder</button></div></div>
       <p className="faint" style={{ margin: 0 }}>Benchtop looks in these folders every {data.scan_seconds === 60 ? 'minute' : data.scan_seconds > 60 ? `${Math.round(data.scan_seconds / 60)} minutes` : `${data.scan_seconds} seconds`}.
         A file or dataset whose name holds an experiment number (like EXP-00042) is attached to that draft's “Instrument data” section; anything
-        else waits in the Inbox. Up to {data.max_mb >= 1024 ? `${data.max_mb / 1024} GB` : `${data.max_mb} MB`} per arrival.</p>
+        else waits in the Inbox. Up to {data.max_mb >= 1000 ? `${(data.max_mb / 1000).toLocaleString("en-GB")} GB` : `${data.max_mb} MB`} per arrival.</p>
       {data.instruments.length === 0 ? <div className="panel panel-pad faint">No folders yet. Add one for each instrument: your NMR's data folder, the HPLC's export folder, a shared drive.</div>
         : <div className="stack" style={{ gap: 8 }}>{data.instruments.map(i => {
           const c = i.counts

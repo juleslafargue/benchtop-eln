@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -83,8 +84,18 @@ def _folder(session: Session, raw: str, skip_id: Optional[int] = None) -> str:
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
     for other in session.exec(select(Instrument).where(Instrument.archived == False)):  # noqa: E712
-        if other.id != skip_id and other.folder == str(p):
+        if other.id == skip_id:
+            continue
+        o = Path(other.folder)
+        if other.folder == str(p):
             raise HTTPException(409, f"“{other.name}” already watches that folder")
+        # one inside the other: every file in the inner one would arrive twice (and wait twice in the Inbox)
+        if o in p.parents:
+            raise HTTPException(409, f"That folder is inside {o}, which “{other.name}” already watches, so its files "
+                                     "would arrive twice. Choose a folder that doesn't overlap, or change that instrument's folder.")
+        if p in o.parents:
+            raise HTTPException(409, f"That folder holds {o}, which “{other.name}” already watches, so the files there "
+                                     "would arrive twice. Choose a folder that doesn't overlap, or change that instrument's folder.")
     return str(p)
 
 

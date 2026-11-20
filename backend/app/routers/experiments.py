@@ -865,6 +865,10 @@ def _clean_filename(name: str | None) -> str:
     """Just the file's own name: no folders, no control characters."""
     base = re.split(r"[\\/]", name or "")[-1]
     base = re.sub(r"[\x00-\x1f\x7f]", "", base).strip().lstrip(".") or "file"
+    # characters that reorder or hide text are written out: a right-to-left override made "rtl \u202egpj.exe" show as
+    # "rtl exe.jpg" (0.36.4)
+    from ..instruments import shown_name
+    base = shown_name(base)
     if len(base) <= 200:
         return base
     stem, _, ext = base.rpartition(".")  # a very long name is shortened in the middle: the extension says what it is

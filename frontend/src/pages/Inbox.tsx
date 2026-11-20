@@ -5,6 +5,7 @@ import { ago, api, displayName, downloadAuthed, type InboxItem } from '../api'
 import CutShort from '../components/CutShort'
 import FollowUpDialog from '../components/FollowUpDialog'
 import { addPage } from '../listNotice'
+import { shownName } from '../viewable'
 
 type Tab = 'inbox' | 'attached' | 'ignored'
 interface Target { id: number; eid: string; title: string; mine: boolean; owner: { full_name: string; username: string } | null }
@@ -57,7 +58,7 @@ function ItemCard({ item, tab, reload }: { item: InboxItem; tab: Tab; reload: ()
     <li className={`panel inbox-item ${item.state}`}>
       <div className="inbox-top">
         <div style={{ minWidth: 0 }}>
-          <div className="inbox-path">{item.path}{item.revision > 1 && <span className="tag" style={{ marginLeft: 6 }}>changed · version {item.revision}</span>}</div>
+          <div className="inbox-path">{shownName(item.path)}{item.revision > 1 && <span className="tag" style={{ marginLeft: 6 }}>changed · version {item.revision}</span>}</div>
           <div className="faint inbox-meta">{item.instrument.name} · {tab === 'attached' && item.handled_at ? `attached ${ago(item.handled_at)}` : `arrived ${ago(item.arrived_at)}`} · {size(item.size)}
             {item.handled_by && tab !== 'inbox' && <> · by {displayName(item.handled_by)}</>}</div>
         </div>
@@ -67,7 +68,7 @@ function ItemCard({ item, tab, reload }: { item: InboxItem; tab: Tab; reload: ()
         ? <p style={{ margin: 0 }}>In <Link to={`/experiments/${item.experiment.id}`}><b>{item.experiment.eid}</b> {item.experiment.title}</Link></p>
         : item.note && <p className="inbox-note">{item.note}</p>}
       {item.files.length > 0 && <ul className="inbox-files">{item.files.map(f => (
-        <li key={f.n}><span className="grow">{f.name} <span className="faint">{size(f.size)}</span></span>
+        <li key={f.n}><span className="grow">{shownName(f.name)} <span className="faint">{size(f.size)}</span></span>
           <button className="btn ghost sm" onClick={() => downloadAuthed(`/api/inbox/${item.id}/files/${f.n}`, f.name).catch(e => toast(e.message))}>Download</button></li>))}</ul>}
       {canWrite && tab !== 'attached' && !assigning && <div className="row inbox-actions">
         {item.follow_up && orig && <button className="btn primary sm" onClick={() => setFollowing(true)}>Attach to a new follow-up of {orig.eid}</button>}

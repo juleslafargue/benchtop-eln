@@ -61,7 +61,9 @@ COMPANIONS = {".wiff": (".scan",), ".wiff2": (".scan",)}  # Sciex keeps the spec
 REPORTS = (".pdf", ".csv")  # inside a vendor folder: also attached on their own, so they open without the vendor software
 SYSTEM_USERNAME = "@instruments"  # can't be a real username (no '@' allowed), so it never clashes
 SECTION_TITLE = "Instrument data"
-EID = re.compile(r"(?<![A-Za-z0-9])EXP-(\d{5,})(?!\d)", re.IGNORECASE)
+# 5 to 18 digits: a longer number (EXP-00042202611171530459999, a date and time run on) can't be an experiment's,
+# so it doesn't match (0.36.4: it overflowed the database's integers and the arrival was stuck for ever)
+EID = re.compile(r"(?<![A-Za-z0-9])EXP-(\d{5,18})(?!\d)", re.IGNORECASE)
 MAX_DEPTH = 10
 # never arrivals: system clutter, partial downloads and files still being written by common tools
 _SKIP_NAMES = {".ds_store", "thumbs.db", "desktop.ini", ".localized", "icon\r"}
@@ -75,12 +77,62 @@ def _skip(name: str) -> bool:
     return name.startswith(".") or name.startswith("~$") or low in _SKIP_NAMES or low.endswith(_SKIP_SUFFIXES)
 
 
-def discover(root: Path, kind: str) -> Iterator[tuple[str, Path]]:
-    """(path inside the folder, full path) for each arrival currently there. Never follows links out."""
+class UnreadableFolder(OSError):
+    """A folder inside the watched folder that couldn't be listed this time (no permission, a share hiccup)."""
+
+
+class OddName(Exception):
+    """A file or folder whose name isn't text this computer can store (not UTF-8): it is left where it is."""
+
+
+def shown_name(name: str) -> str:
+    """A name as it can be shown: bytes that aren't UTF-8 as "�", and characters that reorder or hide text (a
+    right-to-left override makes "rtl ‮gpj.exe" look like "rtl exe.jpg") written out as [U+202E]."""
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        name = name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+    return _BIDI.sub(lambda m: f"[U+{ord(m.group()):04X}]", name)
+
+
+# direction overrides, embeddings, isolates and marks: invisible, and they change how the text around them reads
+_BIDI = re.compile("[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]")
+
+
+def _storable(name: str) -> bool:
+    try:
+        name.encode("utf-8")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def discover(root: Path, kind: str, problems: Optional[list] = None) -> Iterator[tuple[str, Path]]:
+    """(path inside the folder, full path) for each arrival currently there. Never follows links out.
+    A subfolder that can't be listed, or a name that isn't UTF-8 (an old instrument PC's Latin-1 "café"), is left
+    out and noted in `problems` as (path, exception); 0.36.4 skipped the first without a word (so files in it
+    "vanished") and stopped at the second for the whole folder."""
     root_depth = len(root.parts)
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+
+    def unreadable(exc: OSError) -> None:
+        where = Path(exc.filename) if exc.filename else root
+        if where == root:
+            raise exc  # the watched folder itself: a folder problem, said as one
+        if problems is not None:
+            rel = shown_name(where.relative_to(root).as_posix() if root in where.parents else str(where))
+            problems.append((rel, UnreadableFolder(exc.errno, exc.strerror or str(exc), str(where))))
+
+    def storable(here: Path, name: str) -> bool:
+        if _storable(name):
+            return True
+        if problems is not None:
+            problems.append((shown_name((here / name).relative_to(root).as_posix()), OddName(name)))
+        return False
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=unreadable):
         here = Path(dirpath)
-        dirnames[:] = sorted(d for d in dirnames if not _skip(d))
+        dirnames[:] = sorted(d for d in dirnames if not _skip(d) and storable(here, d))
+        filenames = [f for f in filenames if storable(here, f)]
         if len(here.parts) - root_depth >= MAX_DEPTH:
             dirnames[:] = []
         if kind == "bruker_nmr":
@@ -133,10 +185,10 @@ def _files_in(p: Path) -> list[Path]:
         return [] if p.is_symlink() else [p, *_companions(p)]
     out = []
     for dirpath, dirnames, filenames in os.walk(p, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and _storable(d))
         for f in sorted(filenames):
             fp = Path(dirpath) / f
-            if not f.startswith(".") and f.lower() not in _SKIP_NAMES and not fp.is_symlink() and fp.is_file():
+            if not f.startswith(".") and _storable(f) and f.lower() not in _SKIP_NAMES and not fp.is_symlink() and fp.is_file():
                 out.append(fp)
     return out
 
@@ -207,22 +259,36 @@ def _copy(src: Path, name: str) -> dict[str, Any]:
         sha, size = _store(tmp)
     finally:
         tmp.unlink(missing_ok=True)
-    return {"name": name, "sha256": sha, "size": size, "content_type": mimetypes.guess_type(name)[0] or "application/octet-stream"}
+    return {"name": shown_name(name), "sha256": sha, "size": size, "content_type": mimetypes.guess_type(name)[0] or "application/octet-stream"}
 
 
-def _zip(files: list[tuple[Path, str]], name: str, compress: bool) -> dict[str, Any]:
+def _zip(files: list[tuple[Path, str, str]], name: str, compress: bool) -> dict[str, Any]:
+    """Zip (file, name in the zip, name within the dataset) and store it. Its "content" fingerprint covers each file's
+    name within the dataset and its bytes, not the dataset's own folder name or the files' dates (which the zip's
+    own fingerprint does cover): the same data arriving again, renamed or touched, is recognised (0.36.4 attached it
+    again; plain files were already recognised by their bytes)."""
     from . import diskspace
-    diskspace.require_room(sum(f.stat().st_size for f, _ in files))
+    diskspace.require_room(sum(f.stat().st_size for f, _, _ in files))
     tmp = _tmp_name()
+    parts: list[str] = []
     try:
         # raw vendor data is stored as it is: it barely compresses, and gigabytes would take minutes
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED, allowZip64=True) as z:
-            for f, arc in files:
-                z.write(f, arc)
+        method = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
+        with zipfile.ZipFile(tmp, "w", method, allowZip64=True) as z:
+            for f, arc, rel in files:  # read once: into the zip and the fingerprint together
+                info = zipfile.ZipInfo.from_file(f, arc)
+                info.compress_type = method
+                h = hashlib.sha256()
+                with open(f, "rb") as fi, z.open(info, "w", force_zip64=True) as fo:
+                    for chunk in iter(lambda: fi.read(1 << 20), b""):
+                        h.update(chunk)
+                        fo.write(chunk)
+                parts.append(f"{rel}\0{h.hexdigest()}")
         sha, size = _store(tmp)
     finally:
         tmp.unlink(missing_ok=True)
-    return {"name": name, "sha256": sha, "size": size, "content_type": "application/zip"}
+    content = hashlib.sha256("\n".join(sorted(parts)).encode("utf-8", "surrogateescape")).hexdigest()
+    return {"name": shown_name(name), "sha256": sha, "size": size, "content_type": "application/zip", "content": content}
 
 
 def pack(rel: str, p: Path, kind: str) -> list[dict[str, Any]]:
@@ -234,7 +300,7 @@ def pack(rel: str, p: Path, kind: str) -> list[dict[str, Any]]:
         extra = _companions(p)
         if not extra:
             return [_copy(p, p.name)]
-        return [_zip([(f, f.name) for f in [p, *extra]], f"{p.name}.zip", compress=False)]
+        return [_zip([(f, f.name, f.name) for f in [p, *extra]], f"{p.name}.zip", compress=False)]
     if kind == "bruker_nmr":
         parent = Path(rel).parent.name
         top = Path(parent) / p.name if parent else Path(p.name)
@@ -242,7 +308,8 @@ def pack(rel: str, p: Path, kind: str) -> list[dict[str, Any]]:
     else:
         top, name = Path(p.name), f"{p.name}.zip"
     files = _files_in(p)
-    out = [_zip([(f, (top / f.relative_to(p)).as_posix()) for f in files], name, compress=kind != "chromatography")]
+    out = [_zip([(f, (top / f.relative_to(p)).as_posix(), f.relative_to(p).as_posix()) for f in files], name,
+                compress=kind != "chromatography")]
     if kind == "chromatography":
         reports = [f for f in files if f.suffix.lower() in REPORTS and len(f.relative_to(p).parts) <= 3
                    and f.stat().st_size <= 100_000_000][:20]
@@ -374,10 +441,18 @@ def attach(session: Session, row: InstrumentFile, inst: Instrument, exp: Experim
     session.refresh(exp)
     already = {a.sha256: a.id for a in session.exec(select(Attachment).where(
         Attachment.experiment_id == exp.id, Attachment.withdrawn_at == None))}  # noqa: E711
+    # a dataset (a zip made here) is the same data when its files and their bytes are, whatever its folder was called
+    same_data: dict[str, int] = {}
+    live = set(already.values())
+    for other in session.exec(select(InstrumentFile).where(InstrumentFile.experiment_id == exp.id,
+                                                          InstrumentFile.state == "attached")):
+        for f, aid in zip(other.files or [], other.attachment_ids or []):
+            if isinstance(f, dict) and f.get("content") and aid in live:
+                same_data.setdefault(f["content"], aid)
     ids, added = [], []
     for f in row.files:
-        if f["sha256"] in already:
-            ids.append(already[f["sha256"]])
+        if f["sha256"] in already or f.get("content") in same_data:
+            ids.append(already.get(f["sha256"]) or same_data[f["content"]])
             continue
         a = Attachment(experiment_id=exp.id, filename=f["name"], content_type=f["content_type"], size=f["size"],
                        sha256=f["sha256"], uploaded_by=actor.id, instrument_file_id=row.id)
@@ -395,7 +470,7 @@ def attach(session: Session, row: InstrumentFile, inst: Instrument, exp: Experim
         session.add(exp)
     else:
         rule = "duplicate"
-        row.note = f"The same file is already in {exp.eid}, so it wasn't added again."
+        row.note = f"The same {'data is' if any(f.get('content') for f in row.files) else 'file is'} already in {exp.eid}, so it wasn't added again."
     row.state, row.experiment_id, row.attachment_ids, row.rule = "attached", exp.id, ids, rule
     row.handled_at = utcnow()
     session.add(row)
@@ -460,12 +535,15 @@ def _handle(session: Session, row: InstrumentFile, inst: Instrument, p: Path, no
     The copying happens with no database transaction open, so a 2 GB run never holds up anyone's saves; the
     database work afterwards is one short transaction. Unreadable files (a sync still downloading them) raise
     OSError before anything is written. Returns what happened: handled | changed."""
-    max_bytes = settings.instrument_max_mb * 1024 * 1024
+    max_bytes = settings.instrument_max_mb * 1_000_000  # MB as the Finder counts them, as in the message below
     if row.size > max_bytes:
         # matched first, like any other arrival, so only the people it would have gone to see it (0.36.4: it was shown
         # to the folder's whole audience, whatever record its name pointed to, and not to that record's owner)
         d = decide(session, row.path, describe_text(p, inst.kind))
-        too_big = (f"It's {row.size / 1e6:,.0f} MB, more than the {settings.instrument_max_mb:,} MB limit, so it wasn't "
+        limit = settings.instrument_max_mb  # shown with as many decimals as it takes to be over it (0.36.4: "2,147 MB" in MiB)
+        shown = next(t for d in range(7) if (row.size >= (limit + 1) * 1e6 or d) and
+                     (float((t := f"{row.size / 1e6:,.{d}f}").replace(",", "")) > limit or d == 6))
+        too_big = (f"It's {shown} MB, more than the {settings.instrument_max_mb:,} MB limit, so it wasn't "
                    "copied into Benchtop. Raise BENCHTOP_INSTRUMENT_MAX_MB, or keep it on the instrument drive.")
         exp = d.experiment
         row.state, row.files, row.person_id = "inbox", [], d.person_id
@@ -537,8 +615,12 @@ def scan(session: Session, inst: Instrument, now: Optional[datetime] = None) -> 
         latest[r.path] = r
     seen: set[str] = set()
     due: list[tuple[InstrumentFile, Path]] = []
+    looked: list[tuple[str, BaseException]] = []  # subfolders that couldn't be listed, names that can't be stored
     session.autoflush = False  # new rows are written only at each commit, so the write lock is held only then
-    for rel, p in discover(root, kind):
+    # the commits along the way don't make the session forget the rows it has loaded: with expiry on, each of the
+    # 20,000 rows of a big folder was read again, one query each, on every look (0.36.4: an idle look took 9-10 s)
+    session.expire_on_commit = False
+    for rel, p in discover(root, kind, looked):
         seen.add(rel)
         counts["seen"] += 1
         if counts["seen"] % 500 == 0:  # commit as we go: a first look at a big drive mustn't hold the database
@@ -568,6 +650,12 @@ def scan(session: Session, inst: Instrument, now: Optional[datetime] = None) -> 
                 continue
             else:
                 continue
+        elif row.state == "vanished" and row.fingerprint == fp:
+            # back as it was (a share that listed empty for a moment, a drive unmounted and mounted again, a file moved
+            # out and back): an arrival again, after the quiet time. 0.36.4 only brought back one that had changed, so
+            # it was never taken, and nobody was told
+            row.state, row.changed_at = "settling", now
+            continue
         elif row.fingerprint != fp:
             if row.state in ("settling", "vanished"):  # still being written or copied (or back again)
                 row.state, row.fingerprint, row.size, row.changed_at = "settling", fp, size, now
@@ -580,14 +668,22 @@ def scan(session: Session, inst: Instrument, now: Optional[datetime] = None) -> 
             continue
         if row.state == "settling" and now - row.changed_at >= quiet:
             due.append((row, p))
-    for rel, row in latest.items():  # gone before it was taken (deleted, or renamed while being copied)
-        if row.state == "settling" and rel not in seen:
-            row.state = "vanished"
+    # gone before it was taken (deleted, or renamed while being copied). Not when Benchtop couldn't look: inside a
+    # subfolder it couldn't list, or when the whole folder lists as empty (a share or drive not really there)
+    blind = [k for k, exc in looked if isinstance(exc, UnreadableFolder)]
+    missing = [rel for rel, row in latest.items() if row.state == "settling" and rel not in seen]
+    if missing and not seen:
+        counts["problems"].append(("", EmptyLook(len(missing))))
+    else:
+        for rel in missing:
+            if not any(rel == b or rel.startswith(b + "/") for b in blind):
+                latest[rel].state = "vanished"
+    counts["problems"].extend(looked)
     if first:
         inst.baseline_at = now
         session.add(inst)
     session.commit()  # the bookkeeping is done; nothing is held while files are copied
-    session.autoflush = True
+    session.autoflush, session.expire_on_commit = True, True
     for row, p in due:
         rel = row.path
         try:
@@ -606,12 +702,34 @@ def scan(session: Session, inst: Instrument, now: Optional[datetime] = None) -> 
     return counts
 
 
+class EmptyLook(Exception):
+    """The folder listed as empty while arrivals in it were waiting: most likely a share or drive not really there."""
+    def __init__(self, waiting: int):
+        super().__init__(waiting)
+        self.waiting = waiting
+
+
 def arrival_problem(problems: list[tuple[str, BaseException]]) -> str:
     """What the Admin page says when arrivals couldn't be taken (the folder itself is fine)."""
     if not problems:
         return ""
+    # the ones that say most about the folder first: it looked empty, a subfolder couldn't be read, an odd name
+    order = (EmptyLook, UnreadableFolder, OddName)
+    problems = sorted(problems, key=lambda p: next((k for k, t in enumerate(order) if isinstance(p[1], t)), len(order)))
     rel, exc = problems[0]
     more = f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""
+    if isinstance(exc, EmptyLook):
+        n = exc.waiting
+        return (f"The folder looked empty, with {n} arrival{'s' if n != 1 else ''} still waiting to be taken, so Benchtop "
+                "didn't count them as gone. If it's a network share or an external drive, check it's connected "
+                "(an empty folder is left where a drive was unmounted). They're taken when they're back.")
+    if isinstance(exc, UnreadableFolder):
+        return (f"Couldn't read the subfolder “{rel}”{more} ({exc.strerror or 'not allowed'}), so what's in it wasn't looked "
+                "at; anything waiting there stays waiting. Check its permissions on the instrument share.")
+    if isinstance(exc, OddName):
+        return (f"“{rel}”{more} has a name that isn't written the way names are on this computer (not UTF-8: probably "
+                "saved by an older instrument PC), so Benchtop leaves it in the folder and carries on with the rest. "
+                "Rename it there (for example without accents) and it arrives as usual.")
     from .diskspace import DiskFull, reserve_bytes, fmt
     if isinstance(exc, DiskFull):
         return (f"The disk Benchtop keeps its data on is nearly full, so new instrument files aren't copied in: Benchtop "
@@ -748,7 +866,8 @@ def preview(session: Session, folder: str, kind: str, import_since: Optional[dat
     root = validate_folder(folder)
     t0 = time.monotonic()
     items = []
-    for rel, p in discover(root, kind):
+    looked: list[tuple[str, BaseException]] = []
+    for rel, p in discover(root, kind, looked):
         try:
             _, size, newest = fingerprint(p)
         except OSError:
@@ -765,7 +884,7 @@ def preview(session: Session, folder: str, kind: str, import_since: Optional[dat
     latest = [{**outcome(rel, p), "size": size, "modified": _utc(t).isoformat() + "Z"}
               for t, rel, p, size in items[:limit]]
     out: dict[str, Any] = {"folder": str(root), "items": len(items), "scan_seconds": round(seconds, 2), "latest": latest,
-                           "hints": _hints(root, seconds)}
+                           "hints": _hints(root, seconds) + ([arrival_problem(looked)] if looked else [])}
     if import_since:
         old = [(rel, p) for t, rel, p, _ in items if _utc(t) >= import_since]
         res = [outcome(rel, p) for rel, p in old[:5000]]

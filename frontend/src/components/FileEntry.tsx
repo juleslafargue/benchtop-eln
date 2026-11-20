@@ -3,7 +3,7 @@ import { api, downloadAuthed, type Attachment } from '../api'
 import { useApp } from '../App'
 import type { EntryEditorProps } from './EntryCard'
 import { hydrogensInFormula, looksLikeSpectrum } from '../spectra'
-import { canViewSpectrum, formatName, needsReadCheck, pictureKind } from '../viewable'
+import { canViewSpectrum, formatName, needsReadCheck, pictureKind, shownName } from '../viewable'
 import SpectrumViewer, { type SavedAnalysis } from './SpectrumViewer'
 
 /** An attached picture. A TIFF is shown from a PNG the server makes for viewing (0.36: browsers can't show TIFF, so it
@@ -102,7 +102,7 @@ export default function FileEntry({ content, onChange, readOnly, experimentId, a
         <ul className="files">
           {mine.map(a => (
             <li key={a.id} style={{ flexWrap: 'wrap' }}>
-              <span className="grow"><b style={{ fontWeight: 600 }}>{a.filename}</b> <span className="faint">{size(a.size)} · sha256 {a.sha256.slice(0, 12)}…</span></span>
+              <span className="grow"><b style={{ fontWeight: 600 }}>{shownName(a.filename)}</b> <span className="faint">{size(a.size)} · sha256 {a.sha256.slice(0, 12)}…</span></span>
               {offerViewer(a) && <button className={`btn sm${viewing === a.id ? ' primary' : ''}`} onClick={() => setViewing(viewing === a.id ? null : a.id)}>{viewing === a.id ? 'Hide spectrum' : 'View spectrum'}</button>}
               <button className="btn sm" onClick={() => downloadAuthed(`/api/attachments/${a.id}`, a.filename)}>Download</button>
               {!readOnly && a.from_instrument && <button className="btn ghost sm" onClick={() => notMine(a)} title="It isn't this experiment's: send it back to the Inbox">Not mine</button>}

@@ -328,8 +328,8 @@ class Crate:
             for f in it.files:
                 if f.info is None:
                     it.warnings.append(f"{f.name} is listed but isn't in the file; it can't be imported.")
-                elif f.size > settings.instrument_max_mb * 1024 * 1024:
-                    it.warnings.append(f"{f.name} ({f.size / 1e9:.1f} GB) is over the {settings.instrument_max_mb / 1024:g} GB limit "
+                elif f.size > settings.instrument_max_mb * 1_000_000:
+                    it.warnings.append(f"{f.name} ({f.size / 1e9:.1f} GB) is over the {settings.instrument_max_mb / 1000:g} GB limit "
                                        "for one file and will be left out.")
         return items
 
@@ -453,7 +453,7 @@ def _tidy_record(data: dict[str, Any]) -> dict[str, Any]:
 def _brought_in(it: Item, f: CrateFile) -> bool:
     """Is this file imported as an attachment? (Not when missing or too big; nor a Benchtop record's own report,
     record file and chemistry files, which Benchtop draws again from the sections.)"""
-    if f.info is None or f.size > settings.instrument_max_mb * 1024 * 1024:
+    if f.info is None or f.size > settings.instrument_max_mb * 1_000_000:
         return False
     return not (it.record and (f.inner in (RECORD_FILE, "report.html") or f.inner.startswith("chemistry/")))
 
@@ -599,7 +599,7 @@ def _store(crate: Crate, f: CrateFile) -> tuple[str, int]:
     """Copy one file out of the archive into the attachment store, without holding the database. Returns (sha256, size)."""
     diskspace.require_room(f.info.file_size, what=f"“{f.name}”")
     tmp = scratch_dir() / f"import-{os.getpid()}-{secrets.token_hex(6)}.part"
-    limit = settings.instrument_max_mb * 1024 * 1024
+    limit = settings.instrument_max_mb * 1_000_000
     n = 0
     h = hashlib.sha256()
     try:
