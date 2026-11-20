@@ -2,6 +2,12 @@
 
 - A spectrum's saved analysis keeps the spectrometer frequency typed in for a ¹H file that doesn't give it (and says
   so when none was), and whether negative ¹³C lines are listed; an older analysis keeps having neither.
+- Instrument folders: an arrival missing for one look is taken when it's back; an empty-looking folder or an unreadable
+  subfolder is a failed look, said on the Admin page; a name that isn't UTF-8 is left out with a message, not the whole
+  folder; EXP- with 19 or more digits doesn't match; an idle look doesn't read every row again; a renamed or touched
+  dataset isn't attached twice; folders inside each other are refused; the size limit in one unit; a right-to-left
+  override in a name is written out.
+- A small withdrawal from a big lot is recorded as it was; NMR prediction refuses a structure far too big at once.
 """
 from __future__ import annotations
 
@@ -327,3 +333,46 @@ def test_a_right_to_left_override_in_a_name_is_shown_not_obeyed(client, admin, u
     assert r.status_code in (200, 201) and r.json()["filename"] == "photo [U+202E]gpj.exe", r.text
     assert instruments.shown_name("caf\udce9.txt") == "caf�.txt"
 
+
+# ---------------------------------------------------------------- inventory amounts
+
+def test_small_withdrawals_from_a_big_lot_are_recorded_as_they_were(client, users):
+    """0.36.4 rounded a lot's amount to 6 decimals of its own unit: 300 × 0.4 mg from a 1 kg drum each recorded 0 (the
+    drum stayed at 1.000000 kg), and 0.6 mg was recorded as 1 mg. The amount must always match the usage list."""
+    h = users["alice"]
+    m = client.post("/api/materials", headers=h, json={"name": "Kilogram drum 0.36.5"}).json()
+    lot = client.post(f"/api/materials/{m['id']}/lots", headers=h, json={"amount": 1, "unit": "kg"}).json()
+    for _ in range(300):
+        assert client.post(f"/api/lots/{lot['id']}/transactions", headers=h, json={"amount": 0.4, "unit": "mg"}).status_code == 201
+    r = client.post(f"/api/lots/{lot['id']}/transactions", headers=h, json={"amount": 0.6, "unit": "mg"})
+    assert r.status_code == 201
+    tx = client.get(f"/api/lots/{lot['id']}/transactions", headers=h).json()
+    outs = [t["delta"] for t in tx if t["delta"] < 0]
+    assert sorted(set(outs)) == [-6e-7, -4e-7]
+    amount = r.json()["lot"]["amount"]
+    assert abs(amount - (1 - 300 * 4e-7 - 6e-7)) < 1e-12, amount
+    assert abs(amount - sum(t["delta"] for t in tx)) < 1e-12  # the amount is what the usage list adds up to
+    # undoing one puts back exactly that
+    last = next(t for t in tx if t["delta"] == -6e-7)
+    r = client.post(f"/api/lots/transactions/{last['id']}/reverse", headers=h)
+    assert r.status_code == 201 and abs(r.json()["lot"]["amount"] - (1 - 300 * 4e-7)) < 1e-12
+    # and a lot used up exactly is empty, not a speck of float left over
+    small = client.post(f"/api/materials/{m['id']}/lots", headers=h, json={"amount": 0.3, "unit": "g"}).json()
+    for v in (0.1, 0.1, 0.1):
+        r = client.post(f"/api/lots/{small['id']}/transactions", headers=h, json={"amount": v, "unit": "g"})
+    assert r.json()["lot"]["amount"] == 0 and r.json()["lot"]["status"] == "empty"
+
+
+# ---------------------------------------------------------------- NMR prediction
+
+def test_nmr_prediction_refuses_a_structure_far_too_big_at_once(client, users):
+    """0.36.4 had no limit: the time grew with the square of the size (a 10,000-character SMILES took 7 s), and any
+    signed-in person could tie up a worker with one."""
+    import time
+    h = users["alice"]
+    for smiles in ("C" * 10_000, "C" * 250):
+        t = time.monotonic()
+        r = client.get("/api/nmr/predict", headers=h, params={"smiles": smiles, "nucleus": "1H"})
+        assert r.status_code == 422, r.text
+        assert "too large to predict" in r.json()["detail"] and "up to 200 atoms other than hydrogen" in r.json()["detail"]
+        assert time.monotonic() - t < 2

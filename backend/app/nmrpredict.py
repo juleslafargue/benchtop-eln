@@ -394,12 +394,21 @@ def confidence(r: dict[str, Any], nuc: int) -> str:
     return "low"
 
 
+MAX_HEAVY_ATOMS = 200  # far beyond a small molecule; a peptide of about 25 residues
+MAX_SMILES = 2000     # read no further than that could need (with stereo marks and ring numbers)
+
+
 def predict(smiles: str, nucleus: str = "1H", use_lab: bool = True) -> dict[str, Any]:
     """Predicted shifts for each symmetry-distinct group of carbons (13C) or of H-bearing atoms (1H).
     Atom indices refer to the returned SMILES (the main fragment), so the depiction can number them."""
     if nucleus not in NUC:
         raise ValueError("nucleus must be 1H or 13C")
     nuc = NUC[nucleus]
+    # a molecule of the size the shift table describes (0.36.4 had no limit: the time grew with the square of the size, a
+    # 10,000-character SMILES held a worker for 7 s, and any signed-in person could send one)
+    if len(smiles or "") > MAX_SMILES:
+        raise ValueError(f"That structure is too large to predict: Benchtop predicts shifts for molecules of up to "
+                         f"{MAX_HEAVY_ATOMS} atoms other than hydrogen.")
     mol = Chem.MolFromSmiles(smiles or "")
     if mol is None:
         raise ValueError("Couldn't read that structure")
@@ -407,6 +416,9 @@ def predict(smiles: str, nucleus: str = "1H", use_lab: bool = True) -> dict[str,
     if not frags:
         raise ValueError("Couldn't read that structure")
     main = max(frags, key=lambda f: f.GetNumHeavyAtoms())
+    if main.GetNumHeavyAtoms() > MAX_HEAVY_ATOMS:
+        raise ValueError(f"That structure is too large to predict ({main.GetNumHeavyAtoms():,} atoms other than hydrogen): "
+                         f"Benchtop predicts shifts for molecules of up to {MAX_HEAVY_ATOMS} atoms other than hydrogen.")
     smi = Chem.MolToSmiles(main)
     mol = Chem.MolFromSmiles(smi)  # indices now match a fresh parse of `smi`
     p = predictor()

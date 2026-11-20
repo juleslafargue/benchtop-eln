@@ -8,6 +8,7 @@ import { Mol, NumInput, useOneAtATime } from '../components/bits'
 import Modal from '../components/Modal'
 import { MaterialForm } from './Materials'
 import { GhsDetails, type SafetySummary } from '../components/Safety'
+import { amountText } from '../display'
 
 const UNITS = ['mg', 'g', 'kg', 'uL', 'mL', 'L']
 
@@ -63,7 +64,7 @@ export function LotHistory({ lot, onClose }: { lot: Lot; onClose: () => void }) 
   return (
     <Modal title={`Usage of ${lot.barcode}`} onClose={onClose} footer={<button className="btn" onClick={onClose}>Close</button>}>
       <table className="plain"><thead><tr><th>When</th><th>Change</th><th>Balance</th><th>By</th><th>Note</th></tr></thead>
-        <tbody>{tx.map(t => <tr key={t.id}><td>{when(t.created_at)}</td><td className="num">{t.delta > 0 ? '+' : ''}{fmt(t.delta, 4)} {unitLabel(lot.unit)}</td>
+        <tbody>{tx.map(t => <tr key={t.id}><td>{when(t.created_at)}</td><td className="num">{t.delta > 0 ? '+' : ''}{amountText(t.delta, lot.unit)}</td>
           <td className="num">{fmt(t.balance_after, 4)}</td><td>{displayName(t.user)}</td>
           <td>{t.experiment?.id ? <Link to={`/experiments/${t.experiment.id}`}>{t.experiment.eid}</Link>
             : t.experiment ? <span title="A record you can't open">{t.experiment.eid}</span> : null} {t.note}</td></tr>)}</tbody></table>

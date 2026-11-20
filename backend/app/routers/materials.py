@@ -418,6 +418,14 @@ def update_lot(lot_id: int, body: LotPatch, user: Writer, session: DB):
     return lot_out(lot)
 
 
+def _kept(v: float, scale: float) -> float:
+    """An amount as stored: to 12 significant figures, so float sums don't drift (0.1 + 0.2), whatever its size.
+    0.36.4 rounded to 6 decimal places of the lot's own unit, so 0.4 mg taken from a 1 kg lot was recorded as 0
+    (and 0.6 mg as 1 mg): the amount no longer matched the usage list. What's shown is rounded for reading only."""
+    r = float(f"{v:.12g}")
+    return 0.0 if abs(r) <= 1e-12 * max(1.0, abs(scale)) else r
+
+
 class TxIn(BaseModel):
     amount: float  # positive number; sign given by `direction`
     unit: str
@@ -457,10 +465,11 @@ def lot_transaction(lot_id: int, body: TxIn, user: Writer, session: DB):
         raise HTTPException(400, "That would make the amount in this lot too large to record")
     if lot.amount + delta < -1e-9:
         raise HTTPException(409, f"Only {lot.amount:g} {lot.unit} left in {lot.barcode}")
-    lot.amount = round(lot.amount + delta, 6)
-    if lot.amount <= 1e-9:
+    scale = max(abs(lot.amount), abs(delta))
+    lot.amount = _kept(lot.amount + delta, scale)
+    if lot.amount <= 1e-12 * max(1.0, scale):
         lot.status = "empty"
-    tx = LotTransaction(lot_id=lot.id, delta=round(delta, 6), balance_after=lot.amount,
+    tx = LotTransaction(lot_id=lot.id, delta=_kept(delta, scale), balance_after=lot.amount,
                         experiment_id=body.experiment_id, note=body.note, user_id=user.id)
     session.add_all([lot, tx])
     session.flush()
@@ -493,10 +502,11 @@ def reverse_transaction(tx_id: int, user: Writer, session: DB):
         raise HTTPException(400, "That would make the amount in this lot too large to record")
     if lot.amount - tx.delta < -1e-9:
         raise HTTPException(409, f"Only {lot.amount:g} {lot.unit} left in {lot.barcode}")
-    lot.amount = round(lot.amount - tx.delta, 6)
-    if lot.amount > 1e-9 and lot.status == "empty":
+    scale = max(abs(lot.amount), abs(tx.delta))
+    lot.amount = _kept(lot.amount - tx.delta, scale)
+    if lot.amount > 1e-12 * max(1.0, scale) and lot.status == "empty":
         lot.status = "available"
-    rev = LotTransaction(lot_id=lot.id, delta=round(-tx.delta, 6), balance_after=lot.amount,
+    rev = LotTransaction(lot_id=lot.id, delta=_kept(-tx.delta, scale), balance_after=lot.amount,
                          experiment_id=tx.experiment_id, note=f"{marker} ({tx.note})"[:200], user_id=user.id)
     session.add_all([lot, rev])
     session.flush()
