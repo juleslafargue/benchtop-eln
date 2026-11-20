@@ -557,6 +557,8 @@ table.plain td.num { text-align: right; }
 .sp-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; padding: 6px 10px; border-radius: 8px; background: color-mix(in srgb, var(--witnessed) 10%, var(--paper)); border-left: 3px solid var(--witnessed); }
 .sp-note span { flex: 1 1 260px; }
 .sp-note.warn { background: color-mix(in srgb, var(--signed) 12%, var(--paper)); border-left-color: var(--signed); }
+.sp-note .sp-freq-in { width: 76px; min-width: 76px; flex: none; text-align: right; }
+.sp-note form { flex: none; }
 .spectrum.expanded .sp-notes { grid-column: 1 / -1; }
 .drop-overlay { position: fixed; inset: 0; z-index: 80; background: color-mix(in srgb, var(--accent) 12%, rgba(14, 22, 30, .35)); display: grid; place-items: center; pointer-events: none; }
 .drop-overlay div { background: var(--paper); border: 2px dashed var(--accent); border-radius: 14px; padding: 28px 36px; font-size: 17px; text-align: center; max-width: 440px; }

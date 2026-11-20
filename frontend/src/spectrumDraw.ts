@@ -14,6 +14,11 @@ export interface SavedAnalysis {
   overlays?: number[]; overlay_mode?: 'stack' | 'overlay'
   fid?: { ph0: number; ph1: number; lb: number | null }
   assignments?: ConfirmedAssignments
+  /** The spectrometer frequency (MHz) typed in for a ¹H file that doesn't give it (null: not typed). Saved from 0.36.5
+   *  on, only for such files; an older analysis of one has no such key, and was worked out as if at 400 MHz. */
+  frequency?: number | null
+  /** 0.36.5 on: negative lines (DEPT, APT) are listed in a ¹³C peak list. Older analyses keep the list they had. */
+  negatives?: boolean
 }
 export type Impurities = NonNullable<SavedAnalysis['impurities']>
 export interface Region { a: number; b: number }
@@ -57,19 +62,19 @@ export function header(s: Spectrum) {
 }
 
 /** The peaks the viewer labels in the window shown. */
-export function peaksIn(spec: Spectrum, view: [number, number], threshold: number) {
+export function peaksIn(spec: Spectrum, view: [number, number], threshold: number, negatives = false) {
   if (spec.kind === 'nmr' && is13C(spec)) { // carbon: signal-to-noise picking, solvent excluded
     const lo = Math.min(view[0], view[1]), hi = Math.max(view[0], view[1])
-    return autoPeaks13C(spec, threshold >= 1 ? threshold : 6).peaks.filter(p => p.x >= lo && p.x <= hi)
+    return autoPeaks13C(spec, threshold >= 1 ? threshold : 6, { negative: negatives }).peaks.filter(p => p.x >= lo && p.x <= hi)
   }
   return pickPeaks(spec, view[0], view[1], threshold, 50)
 }
 
 /** One label per integrated 1H signal: "7.42 t, 2H", drawn above the multiplet. */
-export function signalTagsFor(spec: Spectrum, withArea: (Region & { area: number })[], labels: Label[], refIdx: number, refH: number): SignalTag[] {
+export function signalTagsFor(spec: Spectrum, withArea: (Region & { area: number })[], labels: Label[], refIdx: number, refH: number, mults?: Multiplet[]): SignalTag[] {
   const ref = withArea[refIdx]?.area
   return withArea.map((r, i) => {
-    const m = applyLabel(analyzeMultiplet(spec, r.a, r.b), labels[i])
+    const m = applyLabel(mults?.[i] ?? analyzeMultiplet(spec, r.a, r.b), labels[i])
     const h = ref ? r.area / ref * refH : 0
     const shift = m.mult === 'm' ? `${m.hi.toFixed(2)}–${m.lo.toFixed(2)}` : m.shift.toFixed(2)
     return { a: r.a, b: r.b, text: `${shift} ${m.mult}${h ? `, ${h < 0.95 ? h.toFixed(1) : Math.round(h)}H` : ''}` }
@@ -98,6 +103,64 @@ export interface DrawState {
   hover: number | null
 }
 
+/** Minimum and maximum of each block of 16, 64, 256… points of a trace, made once per spectrum: a spectrum with far more
+ *  points than the plot has pixels is drawn from these (0.36.4 went through all 8 million points of a big file on each
+ *  move of the mouse, and the tab froze). */
+const envelopes = new WeakMap<ArrayLike<number>, { size: number; mn: Float64Array; mx: Float64Array }[]>()
+function envelope(y: ArrayLike<number>) {
+  let levels = envelopes.get(y)
+  if (levels) return levels
+  levels = []
+  let size = 16, src: { mn: ArrayLike<number>; mx: ArrayLike<number> } = { mn: y, mx: y }, step = 16
+  while (y.length / size >= 2048) {
+    const n = Math.ceil(y.length / size), mn = new Float64Array(n), mx = new Float64Array(n)
+    const len = src.mn.length
+    for (let b = 0; b < n; b++) {
+      let lo = Infinity, hi = -Infinity
+      for (let i = b * step, e = Math.min(len, i + step); i < e; i++) { if (src.mn[i] < lo) lo = src.mn[i]; if (src.mx[i] > hi) hi = src.mx[i] }
+      mn[b] = lo; mx[b] = hi
+    }
+    levels.push({ size, mn, mx })
+    src = { mn, mx }; size *= 4; step = 4
+  }
+  envelopes.set(y, levels)
+  return levels
+}
+
+/** Lowest and highest of points i0..i1, from the summary blocks where they cover whole blocks. */
+function rangeOf(y: ArrayLike<number>, i0: number, i1: number): [number, number] {
+  let lo = Infinity, hi = -Infinity
+  const lv = i1 - i0 > 1 << 16 ? envelope(y)[0] : undefined
+  if (!lv) { for (let i = i0; i <= i1; i++) { if (y[i] < lo) lo = y[i]; if (y[i] > hi) hi = y[i] } return [lo, hi] }
+  const b0 = Math.ceil(i0 / lv.size), b1 = Math.floor((i1 + 1) / lv.size)  // whole blocks b0..b1-1
+  for (let i = i0; i < Math.min(i1 + 1, b0 * lv.size); i++) { if (y[i] < lo) lo = y[i]; if (y[i] > hi) hi = y[i] }
+  for (let b = b0; b < b1; b++) { if (lv.mn[b] < lo) lo = lv.mn[b]; if (lv.mx[b] > hi) hi = lv.mx[b] }
+  for (let i = Math.max(i0, b1 * lv.size); i <= i1; i++) { if (y[i] < lo) lo = y[i]; if (y[i] > hi) hi = y[i] }
+  return [lo, hi]
+}
+
+/** Points i0..i1 of a trace as a line, one vertical stroke per pixel from its lowest to its highest value. */
+function trace(g: CanvasRenderingContext2D, xs: Float64Array, ys: ArrayLike<number>, i0: number, i1: number,
+  toPx: (x: number) => number, toPy: (y: number) => number, w: number) {
+  const perPx = (i1 - i0) / Math.max(1, w - M.l - M.r)
+  const level = perPx >= 64 ? [...envelope(ys)].reverse().find(l => l.size * 4 <= perPx) : undefined
+  let last = -1, mn = 0, mx = 0, first = true
+  const add = (px: number, lo: number, hi: number, y0: number) => {
+    if (px !== last) {
+      if (last >= 0) { g.lineTo(last, toPy(mn)); g.lineTo(last, toPy(mx)) }
+      last = px; mn = lo; mx = hi
+      if (first) { g.moveTo(px, toPy(y0)); first = false }
+    } else { if (lo < mn) mn = lo; if (hi > mx) mx = hi }
+  }
+  if (level) {
+    const b0 = Math.floor(i0 / level.size), b1 = Math.min(level.mn.length - 1, Math.floor(i1 / level.size))
+    for (let b = b0; b <= b1; b++) add(Math.round(toPx(xs[Math.min(xs.length - 1, b * level.size)])), level.mn[b], level.mx[b], ys[b * level.size])
+  } else {
+    for (let i = i0; i <= i1; i++) add(Math.round(toPx(xs[i])), ys[i], ys[i], ys[i])
+  }
+  if (last >= 0) { g.lineTo(last, toPy(mn)); g.lineTo(last, toPy(mx)) }
+}
+
 export function drawSpectrum(g: CanvasRenderingContext2D, w: number, h: number, pal: Palette, st: DrawState, forExport = false) {
   const { spec, view, yScale, withArea, refIdx, refH, peaks, showPeaks, markers, impurities, overlays, overlayMode, signalTags, pred, showPred, drag, hover } = st
   const { toPx } = geometry(spec, view, w)
@@ -105,8 +168,7 @@ export function drawSpectrum(g: CanvasRenderingContext2D, w: number, h: number, 
   if (forExport) { g.fillStyle = pal.paper; g.fillRect(0, 0, w, h) }
   const [x0, x1] = view
   const i0 = Math.max(0, lowerBound(spec.x, x0) - 1), i1 = Math.min(spec.x.length - 1, lowerBound(spec.x, x1) + 1)
-  let lo = Infinity, hi = -Infinity
-  for (let i = i0; i <= i1; i++) { if (spec.y[i] < lo) lo = spec.y[i]; if (spec.y[i] > hi) hi = spec.y[i] }
+  let [lo, hi] = rangeOf(spec.y, i0, i1)
   if (spec.isStick) lo = Math.min(0, lo)
   const top = spec.dips ? hi : lo + (hi - lo) / yScale
   const bottom = spec.dips ? hi - (hi - lo) / yScale : lo
@@ -142,18 +204,7 @@ export function drawSpectrum(g: CanvasRenderingContext2D, w: number, h: number, 
   g.strokeStyle = pal.ink; g.lineWidth = forExport ? 1.2 : 1; g.beginPath()
   if (spec.isStick) {
     for (let i = i0; i <= i1; i++) { const px = toPx(spec.x[i]); g.moveTo(px, toPy(Math.max(0, bottom))); g.lineTo(px, toPy(spec.y[i])) }
-  } else {
-    let last = -1, mn = 0, mx = 0, first = true
-    for (let i = i0; i <= i1; i++) {
-      const px = Math.round(toPx(spec.x[i]))
-      if (px !== last) {
-        if (last >= 0) { g.lineTo(last, toPy(mn)); g.lineTo(last, toPy(mx)) }
-        last = px; mn = mx = spec.y[i]
-        if (first) { g.moveTo(px, toPy(spec.y[i])); first = false }
-      } else { if (spec.y[i] < mn) mn = spec.y[i]; if (spec.y[i] > mx) mx = spec.y[i] }
-    }
-    if (last >= 0) { g.lineTo(last, toPy(mn)); g.lineTo(last, toPy(mx)) }
-  }
+  } else trace(g, spec.x, spec.y, i0, i1, toPx, toPy, w)
   g.stroke()
   g.restore()
 
@@ -162,23 +213,13 @@ export function drawSpectrum(g: CanvasRenderingContext2D, w: number, h: number, 
     const os = o.spec
     const j0 = Math.max(0, lowerBound(os.x, Math.min(x0, x1)) - 1), j1 = Math.min(os.x.length - 1, lowerBound(os.x, Math.max(x0, x1)) + 1)
     if (j1 <= j0) return
-    let olo = Infinity, ohi = -Infinity
-    for (let i = j0; i <= j1; i++) { if (os.y[i] < olo) olo = os.y[i]; if (os.y[i] > ohi) ohi = os.y[i] }
+    const [olo, ohi] = rangeOf(os.y, j0, j1)
     const bandH = (plotBottom - fullTop) / bands
     const b0 = stacked ? plotBottom - (k + 1) * bandH : plotBottom, hgt = stacked ? bandH * 0.92 : plotH
     const oy = (y: number) => b0 - ((y - olo) / ((ohi - olo) || 1)) * hgt * yScale
     g.save(); g.beginPath(); g.rect(M.l, (stacked ? b0 - bandH : fullTop) - 2, w - M.l - M.r, (stacked ? bandH : plotBottom - fullTop) + 4); g.clip()
     g.strokeStyle = OVERLAY_COLORS[k % OVERLAY_COLORS.length]; g.lineWidth = 1; g.globalAlpha = stacked ? 1 : 0.85; g.beginPath()
-    let last = -1, mn = 0, mx = 0, first = true
-    for (let i = j0; i <= j1; i++) {
-      const px = Math.round(toPx(os.x[i]))
-      if (px !== last) {
-        if (last >= 0) { g.lineTo(last, oy(mn)); g.lineTo(last, oy(mx)) }
-        last = px; mn = mx = os.y[i]
-        if (first) { g.moveTo(px, oy(os.y[i])); first = false }
-      } else { if (os.y[i] < mn) mn = os.y[i]; if (os.y[i] > mx) mx = os.y[i] }
-    }
-    if (last >= 0) { g.lineTo(last, oy(mn)); g.lineTo(last, oy(mx)) }
+    trace(g, os.x, os.y, j0, j1, toPx, oy, w)
     g.stroke(); g.restore()
     g.font = font(11, 600); g.fillStyle = OVERLAY_COLORS[k % OVERLAY_COLORS.length]; g.textAlign = 'left'
     g.fillText(o.label, M.l + 4, stacked ? b0 - bandH + 14 : fullTop + 14 + k * 14)
@@ -197,16 +238,20 @@ export function drawSpectrum(g: CanvasRenderingContext2D, w: number, h: number, 
     const j0 = lowerBound(spec.x, lo2), j1 = Math.min(lowerBound(spec.x, hi2), spec.x.length - 1)
     const base = plotBottom - plotH * 0.08, height = plotH * 0.42 * (r.area / maxArea)
     // accumulate in drawing direction (left to right on screen)
-    const idx: number[] = []
-    for (let j = j0; j <= j1; j++) idx.push(j)
-    if (spec.reversed) idx.reverse()
-    let acc = 0
+    // about two points of the curve a pixel: a region of a big spectrum can hold millions of points (the sum still
+    // goes through every one, in a tight loop)
+    const len = j1 - j0 + 1
+    const every = Math.max(1, Math.floor(len / (2 * Math.max(1, Math.abs(toPx(spec.x[j1]) - toPx(spec.x[j0]))))))
+    let acc = 0, prev = spec.reversed ? j1 : j0
     g.beginPath()
-    idx.forEach((j, n) => {
-      if (n > 0) { const p = idx[n - 1]; acc += Math.abs(spec.x[j] - spec.x[p]) * (spec.y[j] + spec.y[p]) / 2 }
+    for (let n = 0; n < len; n = n + every >= len && n < len - 1 ? len - 1 : n + every) {
+      const j = spec.reversed ? j1 - n : j0 + n
+      if (spec.reversed) for (let k = prev - 1; k >= j; k--) acc += Math.abs(spec.x[k + 1] - spec.x[k]) * (spec.y[k] + spec.y[k + 1]) / 2
+      else for (let k = prev + 1; k <= j; k++) acc += Math.abs(spec.x[k] - spec.x[k - 1]) * (spec.y[k] + spec.y[k - 1]) / 2
+      prev = j
       const px = toPx(spec.x[j]), py = base - (r.area ? acc / r.area : 0) * height
       if (n === 0) g.moveTo(px, py); else g.lineTo(px, py)
-    })
+    }
     g.stroke()
   }
   g.restore()
@@ -273,8 +318,8 @@ export function drawSpectrum(g: CanvasRenderingContext2D, w: number, h: number, 
     g.font = font(11, 600); g.textAlign = 'center'
     const tags = signalTags.map(t => {
       const lo2 = Math.min(t.a, t.b), hi2 = Math.max(t.a, t.b)
-      let top = -Infinity
-      for (let j = lowerBound(spec.x, lo2); j < spec.x.length && spec.x[j] <= hi2; j++) if (spec.y[j] > top) top = spec.y[j]
+      const j0 = lowerBound(spec.x, lo2), j1 = Math.min(spec.x.length, lowerBound(spec.x, hi2 + 1e-12)) - 1
+      const top = j1 >= j0 ? rangeOf(spec.y, j0, j1)[1] : -Infinity
       const px = toPx((t.a + t.b) / 2)
       return { ...t, px, lx: px, peakY: Math.max(plotTop, toPy(top)), w: g.measureText(t.text).width + 10 }
     }).filter(t => t.px >= M.l && t.px <= w - M.r).sort((p, q) => p.px - q.px)
@@ -386,7 +431,29 @@ export function restoreAnalysis(s: Spectrum, saved: SavedAnalysis | null | undef
     if (res && Math.abs(res.found - res.expected) > 0.005) { residual = res; solventShift = res.found - res.expected }
   }
   const auto = !saved?.integrals?.length && s.kind === 'nmr' && !(is13C(s) && saved?.threshold)
-  return { offset, view, saved: kept, threshold: saved?.threshold || 0, residual, solventShift, auto }
+  // a ¹H file that doesn't say its frequency: the one typed in for it; or, for an analysis saved before 0.36.5 (no
+  // frequency key), the 400 MHz its J values were worked out with, so it shows what it showed (and says so)
+  const noFreq = isProton(s) && !s.frequency
+  const frequency = noFreq && typeof saved?.frequency === 'number' && saved.frequency > 0 ? saved.frequency : null
+  const legacy400 = noFreq && !!saved && !('frequency' in saved) && !!saved.integrals?.length
+  const negatives = is13C(s) && (auto || !!saved?.negatives)
+  return { offset, view, saved: kept, threshold: saved?.threshold || 0, residual, solventShift, auto, frequency, legacy400, negatives }
+}
+
+/** The spectrum as analysed: with the frequency typed in for it, or the 400 MHz an older analysis assumed. */
+export function withFrequency(s: Spectrum, frequency: number | null, legacy400: boolean): Spectrum {
+  if (s.frequency) return s
+  if (frequency) return { ...s, frequency }
+  return legacy400 ? { ...s, assumedFrequency: 400 } : s
+}
+
+/** A frequency named in a file's name or title ("60MHz", "400 MHz"), offered for the person to confirm. */
+export function frequencyHint(s: Spectrum, filename: string): number | null {
+  for (const t of [filename, s.title]) {
+    const m = /(?:^|[^\d.])(\d{2,4}(?:\.\d+)?)\s*-?\s*MHz/i.exec(t || '')
+    if (m && Number(m[1]) >= 20 && Number(m[1]) <= 1300) return Number(m[1])
+  }
+  return null
 }
 
 /** The product's predicted 1H shifts (confident, non-exchangeable groups), so auto-analysis doesn't call them solvent. */
@@ -401,8 +468,9 @@ export async function predictedShifts(productSmiles: string | null | undefined):
 export async function prepareSpectrum(buf: ArrayBuffer, filename: string, saved: SavedAnalysis | null | undefined, opts: {
   expectedH?: number | null; productMW?: number | null; productSmiles?: string | null
 } = {}): Promise<Prepared> {
-  const s = await parseSpectrumBuffer(buf, filename, fidOptions(saved))
-  const r = restoreAnalysis(s, saved)
+  const parsed = await parseSpectrumBuffer(buf, filename, fidOptions(saved))
+  const r = restoreAnalysis(parsed, saved)
+  const s = withFrequency(parsed, r.frequency, r.legacy400)
   const spec = shifted(s, r.offset)
   const view = r.view
   let regions: Region[] = r.saved?.regions || [], labels: Label[] = r.saved?.labels || []
@@ -411,6 +479,7 @@ export async function prepareSpectrum(buf: ArrayBuffer, filename: string, saved:
   const automatic = r.auto
   if (r.auto) {  // as the viewer's runAuto does when it opens a file with nothing saved
     if (spec.kind === 'nmr' && !is13C(spec)) {
+      // with no frequency known this finds nothing (and says why): no J, and no signals grouped by a guess
       const a = autoAnalyse1H(spec, opts.expectedH ?? null, r.solventShift, opts.productMW ?? null, await predictedShifts(opts.productSmiles))
       impurities = a.impurities.map(i => ({ short: i.short, name: i.name, molPct: i.molPct, wtPct: i.wtPct, signals: i.signals.map(p => +p.toFixed(4)) }))
       regions = a.regions; labels = a.regions.map(() => ({ mult: '', j: '' }))
@@ -419,7 +488,7 @@ export async function prepareSpectrum(buf: ArrayBuffer, filename: string, saved:
   }
   const withArea = regions.map(r => ({ ...r, area: integrate(spec, r.a, r.b) }))
   const state: DrawState = {
-    spec, view, yScale: 1, withArea, refIdx, refH, peaks: peaksIn(spec, view, threshold), showPeaks: true,
+    spec, view, yScale: 1, withArea, refIdx, refH, peaks: peaksIn(spec, view, threshold, r.negatives), showPeaks: true,
     markers: solventMarkers(spec), impurities, overlays: [], overlayMode: saved?.overlay_mode || 'stack',
     signalTags: isProton(spec) ? signalTagsFor(spec, withArea, labels, refIdx, refH) : [],
     pred: null, showPred: false, drag: null, hover: null,

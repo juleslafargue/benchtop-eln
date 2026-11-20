@@ -18,6 +18,13 @@ export interface Spectrum {
   technique?: string  // set by a plugin file reader (e.g. "HPLC")
   conditions?: string
   reader?: string     // which reader opened it
+  /** Things the person should know before trusting the numbers (a raw FID shorter than recorded, which columns of a
+   *  table were drawn): the viewer shows them above the plot. */
+  warnings?: string[]
+  /** Only for analyses saved before 0.36.5 on a file that doesn't give the spectrometer frequency: they were worked
+   *  out as if it were 400 MHz, and keep showing what they showed (with a note saying so) until re-analysed. Never
+   *  shown as the spectrum's frequency. */
+  assumedFrequency?: number
 }
 
 // ---------------------------------------------------------------- plugin file readers
@@ -51,7 +58,7 @@ export function matchReader(readers: FileReader[], filename: string, head: strin
 }
 
 export function parseWithReader(raw: string, filename: string, r: FileReader): Spectrum {
-  let lines = raw.replace(/^\uFEFF/, '').split(/\r?\n/)
+  let lines = normaliseText(raw).split('\n')
   if (r.data_after) {
     const re = rx(r.data_after)
     const i = re ? lines.findIndex(l => re.test(l)) : -1
@@ -92,6 +99,22 @@ const SQZ: Record<string, number> = { '@': 0, A: 1, B: 2, C: 3, D: 4, E: 5, F: 6
 const DIF: Record<string, number> = { '%': 0, J: 1, K: 2, L: 3, M: 4, N: 5, O: 6, P: 7, Q: 8, R: 9, j: -1, k: -2, l: -3, m: -4, n: -5, o: -6, p: -7, q: -8, r: -9 }
 const DUP: Record<string, number> = { S: 1, T: 2, U: 3, V: 4, W: 5, X: 6, Y: 7, Z: 8, s: 9 }
 
+// ---------------------------------------------------------------- limits and plain messages
+
+/** The most points Benchtop opens in the browser (2^23: a 1D spectrum is rarely over a million). Bigger files, and a
+ *  small file that says it unpacks to billions of points (a DUP count of 99999999), get a plain message instead of
+ *  freezing the page and then failing with "Invalid array length". */
+export const MAX_POINTS = 8_388_608
+const n0 = (n: number) => Math.round(n).toLocaleString('en-GB')
+const tooMany = (n?: number) => new Error(`This file has ${n ? `${n0(n)} points` : `more than ${n0(MAX_POINTS)} points`}: Benchtop opens spectra of up to ${n0(MAX_POINTS)} points. Download it to open it in the instrument's software.`)
+const damaged = (what: string) => new Error(`This file looks damaged: ${what} Copy or export it from the instrument again.`)
+/** What a word in the data looks like, for a message: odd characters shown as code points, and kept short. */
+const shown = (w: string) => {
+  const t = w.length > 20 ? `${w.slice(0, 20)}…` : w
+  return t.replace(/[^\x21-\x7e]/g, c => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`)
+}
+const notANumber = (w: string) => damaged(`its data has “${shown(w)}”, which isn't a number.`)
+
 type Tok = { kind: 'abs' | 'dif' | 'dup'; text: string }
 
 function tokenize(line: string): Tok[] {
@@ -112,41 +135,89 @@ function tokenize(line: string): Tok[] {
     } else if (ch in DUP) {
       push(); cur = { kind: 'dup', text: String(DUP[ch]) }
     } else if (ch === '?') {
-      push(); toks.push({ kind: 'abs', text: 'NaN' })
+      push(); toks.push({ kind: 'abs', text: '?' })
     }
   }
   push()
   return toks
 }
 
-/** Returns [x, ys, endsInDif] for one XYDATA line. */
-function parseLine(line: string): [number, number[], boolean] {
-  if (/^[\s\d.,+\-eE]+$/.test(line)) { // plain AFFN, possibly with exponents
-    const nums = line.trim().split(/[\s,]+/).filter(Boolean).map(Number)
-    return [nums[0], nums.slice(1), false]
+/** Decimal places a number was written with ("12.250" → 3, "4000" → 0, "1.5E+03" → -2): how far an X check
+ *  written that way can be from the exact value. */
+function decimalsOf(t: string) {
+  const m = /^[+-]?\d*(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(t)
+  if (!m) return 0
+  return (m[1]?.length || 0) - Number(m[2] || 0)
+}
+
+const AFFN = /^[\s\d.,;+\-eE]+$/
+// characters that can be in a JCAMP-DX data line: digits, signs, separators, the SQZ/DIF/DUP letters, "?" (missing)
+const NOT_ASDF = /[^\s\d.,;+\-@%?A-Za-s]/
+
+/** A plain AFFN line ("8191 12 15 -3"), read straight into `ys` with its X check: false (nothing read) if it isn't
+ *  one, or has a word that isn't a plain number, which `parseLine` then reads or reports. */
+function affnLine(line: string, ys: number[], checks: XCheck[]): boolean {
+  if (!AFFN.test(line)) return false
+  const start = ys.length
+  let x = NaN, xDec = 0, k = 0
+  for (let i = 0, n = line.length; i < n;) {
+    let c = line.charCodeAt(i)
+    if (c === 32 || c === 9 || c === 44 || c === 59) { i++; continue }  // space, tab, comma, semicolon
+    const a = i
+    while (i < n && (c = line.charCodeAt(i)) !== 32 && c !== 9 && c !== 44 && c !== 59) i++
+    const t = line.slice(a, i), v = Number(t)
+    if (!Number.isFinite(v)) { ys.length = start; return false }
+    if (k++ === 0) { x = v; xDec = decimalsOf(t) } else ys.push(v)
+    if (ys.length > MAX_POINTS) throw tooMany()
   }
+  checks.push({ at: start, x, dec: xDec })
+  return true
+}
+
+/** One XYDATA line: its X value (and how many decimals it was written with), its Y values, and whether it ends in DIF
+ *  form (then the next line starts with a check value). `room`: how many more points may be read. */
+function parseLine(line: string, room: number): { x: number; xDec: number; ys: number[]; endsDif: boolean } {
+  if (AFFN.test(line)) { // plain AFFN, possibly with exponents
+    const parts: string[] = [], re = /[^\s,;]+/g
+    for (let m: RegExpExecArray | null; (m = re.exec(line));) { parts.push(m[0]); if (parts.length > room + 1) throw tooMany() }
+    const nums = parts.map(Number)
+    for (let k = 0; k < nums.length; k++) if (!Number.isFinite(nums[k])) throw notANumber(parts[k])
+    return { x: nums[0], xDec: decimalsOf(parts[0]), ys: nums.slice(1), endsDif: false }
+  }
+  // words that would otherwise be read as SQZ/DIF letters ("NaN" is DIF 5, SQZ -1, DIF 5)
+  for (const w of line.split(/[\s,;]+/)) if (/^[+-]?(nan|inf|infinity)$/i.test(w)) throw notANumber(w)
+  const odd = NOT_ASDF.exec(line)
+  if (odd) throw damaged(`its data has a character that doesn't belong in JCAMP-DX data (“${shown(odd[0])}”).`)
   const toks = tokenize(line)
-  if (!toks.length) return [NaN, [], false]
-  const x = Number(toks[0].text)
+  if (!toks.length) return { x: NaN, xDec: 0, ys: [], endsDif: false }
+  const num = (t: Tok) => {
+    if (t.text === '?') return NaN
+    const v = Number(t.text)
+    if (!Number.isFinite(v) || t.text === '' || t.text === '-') throw notANumber(t.text || line)
+    return v
+  }
+  const x = num(toks[0])
   const ys: number[] = []
   let last: Tok | null = null
   let endsDif = false
   for (const t of toks.slice(1)) {
-    if (t.kind === 'abs') { ys.push(Number(t.text)); last = t; endsDif = false }
-    else if (t.kind === 'dif') { ys.push((ys.length ? ys[ys.length - 1] : 0) + Number(t.text)); last = t; endsDif = true }
+    if (t.kind === 'abs') { ys.push(num(t)); last = t; endsDif = false }
+    else if (t.kind === 'dif') { ys.push((ys.length ? ys[ys.length - 1] : 0) + num(t)); last = t; endsDif = true }
     else if (t.kind === 'dup' && last) {
-      for (let k = 1; k < Number(t.text); k++) {
-        if (last.kind === 'dif') ys.push(ys[ys.length - 1] + Number(last.text))
-        else ys.push(Number(last.text))
+      const count = num(t)
+      if (count - 1 > room - ys.length) throw tooMany()
+      for (let k = 1; k < count; k++) {
+        if (last.kind === 'dif') ys.push(ys[ys.length - 1] + num(last))
+        else ys.push(num(last))
       }
     }
   }
-  return [x, ys, endsDif]
+  return { x, xDec: decimalsOf(toks[0].text), ys, endsDif }
 }
 
 function labels(raw: string): Map<string, string> {
   const m = new Map<string, string>()
-  const re = /^##([^=]+)=(.*)$/gm
+  const re = /^##([^=\n]+)=(.*)$/gm
   let r: RegExpExecArray | null
   while ((r = re.exec(raw))) {
     const key = r[1].replace(/[\s\-/_]/g, '').toUpperCase()
@@ -155,30 +226,89 @@ function labels(raw: string): Map<string, string> {
   return m
 }
 
+/** Where a line of the table starts: the index of its first Y value, and the X value written there (the "X check"). */
+interface XCheck { at: number; x: number; dec: number }
+
 /** The Y values of one XYDATA (or NTUPLES page) table, from the line after its header up to the next ##label,
- * and the X value each line starts with. */
-function readXY(lines: string[], from: number): { ys: number[]; xFirsts: number[] } {
-  const ys: number[] = [], xFirsts: number[] = []
-  let prevDif = false
+ * and the X value each line starts with. A line in DIF form is followed by a line starting with the same Y value
+ * again (the "Y check"): if they differ, a line is missing or changed, and the file is refused. */
+function readXY(lines: string[], from: number): { ys: number[]; checks: XCheck[] } {
+  const ys: number[] = [], checks: XCheck[] = []
+  let prevDif = false, row = 0
   for (let i = from; i < lines.length && !lines[i].startsWith('##'); i++) {
     const line = lines[i].trim()
     if (!line) continue
-    const [x, vals, endsDif] = parseLine(line)
-    const v = prevDif ? vals.slice(1) : vals // DIF check value repeats the previous line's last Y
-    xFirsts.push(x)
-    for (const y of v) ys.push(Number.isFinite(y) ? y : (ys.length ? ys[ys.length - 1] : NaN)) // unreadable token: hold the last value
-    prevDif = endsDif
+    row++
+    if (!prevDif && affnLine(line, ys, checks)) continue  // the usual plain line, read straight into ys (big files)
+    const r = parseLine(line, MAX_POINTS - ys.length)
+    let v = r.ys, at = ys.length
+    if (prevDif && v.length && ys.length) {
+      const check = v[0], last = ys[ys.length - 1]
+      if (Number.isFinite(check) && Number.isFinite(last) && check !== last)
+        throw damaged(`line ${n0(row)} of its data doesn't start where the line before ended (JCAMP-DX's own check), so a line is missing or has been changed.`)
+      v = v.slice(1); at = ys.length - 1
+    }
+    checks.push({ at, x: r.x, dec: r.xDec })
+    for (const y of v) ys.push(Number.isFinite(y) ? y : (ys.length ? ys[ys.length - 1] : NaN)) // "?": hold the last value
+    if (ys.length > MAX_POINTS) throw tooMany()
+    prevDif = r.endsDif
   }
-  return { ys, xFirsts }
+  return { ys, checks }
+}
+
+/** The number of points a file says it has, when it says (a positive whole number). */
+const declaredCount = (v: string | undefined) => {
+  const n = Number((v || '').replace(/[^\d.eE+-]/g, ''))
+  return v !== undefined && Number.isInteger(n) && n > 0 ? n : undefined
+}
+/** Whether a file holds the number of points it says. One more or less is allowed: some write one point too many in
+ *  NPOINTS (Varian's 16,385 for 16,384), and one point is at most a point's width on the axis. */
+const countOK = (declared: number | undefined, n: number) => !declared || Math.abs(n - declared) <= 1
+const countMismatch = (declared: number, n: number) => n < declared
+  ? new Error(`This file looks cut off: it says it has ${n0(declared)} points but only ${n0(n)} are there, so its ppm scale can't be trusted. Copy or export it from the instrument again.`)
+  : new Error(`This file says it has ${n0(declared)} points but holds ${n0(n)}, so its scale can't be trusted. Export it from the instrument again.`)
+
+/** Each line's X check against the axis the header gives (FIRSTX, LASTX and the number of points): a line missing in
+ *  the middle, or a header that doesn't belong to the data, shows up as X values that don't fit. Each is allowed to be
+ *  off by its rounding (the decimals it was written with) and a point and a half. Some instruments write the X checks
+ *  another way (Varian and Bruker as point numbers, Oxford Instruments without dividing by the factor): then they are
+ *  only checked to go up (or down) evenly with the points, which still shows a line missing. */
+function checkX(checks: XCheck[], firstX: number, step: number, factor: number) {
+  const pts = checks.filter(c => Number.isFinite(c.x))
+  if (pts.length < 2) return
+  // how far off a check may be, in points: writers differ by a point or two over a whole spectrum (Oxford Instruments'
+  // header ends two points after their last X), but a missing line is a whole line of points (5 to 80)
+  const slack = 3
+  const round = (c: XCheck, f: number) => 0.5 * 10 ** -c.dec * Math.abs(f)
+  const off = (c: XCheck, f: number) => Math.abs(c.x * f - (firstX + c.at * step))
+  const tol = (c: XCheck, f: number) => Math.max(slack * Math.abs(step), round(c, f)) * 1.001 + 1e-9 * Math.abs(c.x * f)
+  const factors = factor === 1 ? [1] : [factor, 1]
+  if (factors.some(f => pts.every(c => off(c, f) <= tol(c, f)))) return
+  const a = pts[0], b = pts[pts.length - 1]
+  const missing = 'its data skip or repeat some points (the X value at the start of each line doesn\'t follow on from the line before), so a line may be missing and the scale can\'t be trusted.'
+  // written in the header's units (they start where the header does and go up at about its rate), but they don't fit
+  for (const f of factors) {
+    const rate = b.at === a.at ? 1 : (b.x - a.x) * f / (b.at - a.at) / step
+    const bad = pts.find(c => off(c, f) > tol(c, f))
+    if (bad && off(a, f) <= tol(a, f) && rate > 0.5 && rate < 2) {
+      throw damaged(`the X values written in its data (${+(bad.x * f).toPrecision(6)} where the header puts ${+(firstX + bad.at * step).toPrecision(6)}) don't fit the axis its header gives, so a line may be missing and the scale can't be trusted.`)
+    }
+  }
+  if (b.at === a.at) return
+  const slope = (b.x - a.x) / (b.at - a.at)
+  for (const c of pts) {
+    const d = Math.abs(c.x - (a.x + slope * (c.at - a.at)))
+    if (d > (slack * Math.abs(slope) + round(c, 1)) * 1.001 + 1e-9 * Math.abs(c.x)) throw damaged(missing)
+  }
 }
 
 /** The data pages of an NTUPLES block, by symbol (R, I…), already multiplied by their factors (for tests and checks). */
 export function ntuplesPages(raw: string): Record<string, number[]> {
-  const block = spectrumBlock(raw.replace(/\$\$.*$/gm, ''))
+  const block = spectrumBlock(normaliseText(raw).replace(/\$\$.*$/gm, ''))
   const L = labels(block)
   const syms = listOf(L.get('SYMBOL')).map(s => s.toUpperCase())
   const factor = listOf(L.get('FACTOR')).map(Number)
-  const lines = block.split(/\r?\n/)
+  const lines = block.split('\n')
   const out: Record<string, number[]> = {}
   lines.forEach((l, at) => {
     const m = l.match(/^##DATA\s*TABLE\s*=\s*\(\s*X\+\+\(\s*(\w+)\.\./i)
@@ -202,7 +332,10 @@ function hzToPpm(xs: number[], L: Map<string, string>, freq: number): number[] {
 
 /** A JCAMP-DX file can hold several blocks (MestReNova: structure, peak list, spectrum): use the spectrum's. */
 function spectrumBlock(text: string): string {
-  const blocks = text.split(/(?=^##TITLE\s*=)/m).filter(b => /^##/m.test(b))
+  const starts = [0]
+  for (let i = text.indexOf('\n##TITLE'); i >= 0; i = text.indexOf('\n##TITLE', i + 1)) if (/^\s*=/.test(text.slice(i + 8, i + 40))) starts.push(i + 1)
+  if (starts.length === 1) return text
+  const blocks = starts.map((a, k) => text.slice(a, starts[k + 1] ?? text.length)).filter(b => /^##/m.test(b))
   const has = (b: string, re: RegExp) => re.test(b)
   const type = (b: string) => ((b.match(/^##DATA\s*TYPE\s*=\s*(.*)$/mi) || [])[1] || '').toUpperCase()
   const rank = (b: string) => {
@@ -223,22 +356,28 @@ const listOf = (v: string | undefined) => (v || '').split(',').map(s => s.trim()
 function parseNtuples(block: string, L: Map<string, string>, fidOpts: FidOptions): Spectrum {
   const syms = listOf(L.get('SYMBOL')).map(s => s.toUpperCase())
   const units = listOf(L.get('UNITS')).map(s => s.toUpperCase())
-  const nums = (k: string) => listOf(L.get(k)).map(s => Number(s.replace(/[^\d.eE+-]/g, '')))
+  const nums = (k: string) => listOf(L.get(k)).map(s => (s ? Number(s.replace(/[^\d.eE+-]/g, '')) : NaN))
   const first = nums('FIRST'), last = nums('LAST'), factor = nums('FACTOR')
   const xi = syms.indexOf('X'), ri = syms.indexOf('R'), ii = syms.indexOf('I')
   // 2D (COSY, HSQC…) and series (pseudo-2D T1): two axes, F1/F2 or T1/T2, or an "nD" data type
   if (syms.some(v => /^(F|T)\d$/.test(v)) || /\bn\s*D\b|NDNMR/i.test(`${L.get('NTUPLES') || ''} ${L.get('DATA TYPE') || ''}`)) throw new Error(TWO_D)
   if (xi < 0 || ri < 0) throw new Error('This JCAMP-DX file holds data Benchtop doesn\'t read (NTUPLES without a real spectrum or FID).')
-  const lines = block.split(/\r?\n/)
+  const dims = listOf(L.get('VARDIM')).map(declaredCount)
+  for (const d of dims) if (d && d > MAX_POINTS) throw tooMany(d)
+  const lines = block.split('\n')
   const page = (sym: string) => {
     const at = lines.findIndex(l => new RegExp(`^##DATA\\s*TABLE\\s*=\\s*\\(\\s*X\\+\\+\\(\\s*${sym}\\.\\.${sym}\\s*\\)\\s*\\)`, 'i').test(l))
     if (at < 0) return null
     const f = Number.isFinite(factor[syms.indexOf(sym)]) ? factor[syms.indexOf(sym)] : 1
-    return readXY(lines, at + 1).ys.map(v => v * f)
+    const t = readXY(lines, at + 1)
+    const want = dims[syms.indexOf(sym)]
+    if (want && !countOK(want, t.ys.length)) throw countMismatch(want, t.ys.length)
+    return { ys: t.ys.map(v => v * f), checks: t.checks }
   }
   if (lines.filter(l => /^##PAGE\s*=/i.test(l)).length > 2) throw new Error('This is a 2D experiment (or a series). Benchtop shows 1D spectra; this one is kept with the record as a file.')
-  const re = page('R')
-  if (!re || !re.length) throw new Error('This JCAMP-DX file has no real data page that Benchtop can read.')
+  const rp = page('R')
+  if (!rp || !rp.ys.length) throw new Error('This JCAMP-DX file has no real data page that Benchtop can read.')
+  const re = rp.ys
   const freq = Number((L.get('.OBSERVEFREQUENCY') || '').replace(/[^\d.eE+-]/g, '')) || undefined
   const nucleus = L.get('.OBSERVENUCLEUS')?.replace(/[\^\s]/g, '')
   const solvent = L.get('.SOLVENTNAME')
@@ -247,9 +386,11 @@ function parseNtuples(block: string, L: Map<string, string>, fidOpts: FidOptions
   const x0 = first[xi], x1 = last[xi]
   const isFid = /FID/.test((L.get('DATATYPE') || '').toUpperCase()) || /SECOND|TIME/.test(units[xi] || '')
   if (isFid) {
-    const im = ii >= 0 ? page('I') : null
+    const ip = ii >= 0 ? page('I') : null
+    const im = ip?.ys
     if (!im || im.length < n) throw new Error('This JCAMP-DX FID has no imaginary page, so it can\'t be processed.')
     if (!(Number.isFinite(x0) && Number.isFinite(x1) && x1 > x0)) throw new Error('This JCAMP-DX FID doesn\'t say how long it was acquired for, so it can\'t be processed.')
+    checkX(rp.checks, x0, (x1 - x0) / (n - 1), Number.isFinite(factor[xi]) ? factor[xi] : 1)
     const sw = (n - 1) / (x1 - x0)
     const num = (k: string) => Number((L.get(k) || '').replace(/[^\d.eE+-]/g, ''))
     const sf = num('$SF') || freq
@@ -271,56 +412,102 @@ function parseNtuples(block: string, L: Map<string, string>, fidOpts: FidOptions
     const groupDelay = fidOpts.groupDelay ?? (bruker ? brukerGroupDelay(Object.fromEntries(L))
       : L.has('$TDOFF') && Number.isFinite(num('$TDOFF')) ? num('$TDOFF') / 2 : 0)
     const f = processComplexFid(re, im, { sw, sf, centre, nucleus: nucleus || '1H', reverse, groupDelay }, fidOpts)
-    return { title, xLabel: 'δ (ppm)', yLabel: 'Intensity', kind: 'nmr', reversed: true, dips: false, nucleus, frequency: sf, solvent,
-      isStick: false, x: f.x, y: f.y, fid: f }
+    return checked({ title, xLabel: 'δ (ppm)', yLabel: 'Intensity', kind: 'nmr', reversed: true, dips: false, nucleus, frequency: sf, solvent,
+      isStick: false, x: f.x, y: f.y, fid: f })
   }
-  let xs = Array.from({ length: n }, (_, i) => x0 + (n > 1 ? i * (x1 - x0) / (n - 1) : 0))
+  if (!Number.isFinite(x0) || !Number.isFinite(x1)) throw new Error('This JCAMP-DX file doesn\'t give its x range (##FIRST and ##LAST) as numbers, so its scale is unknown.')
+  if (n > 1 && x0 === x1) throw new Error('This JCAMP-DX file gives the same value for the start and end of its x axis, so its scale is unknown.')
+  const step = n > 1 ? (x1 - x0) / (n - 1) : 0
+  checkX(rp.checks, x0, step, Number.isFinite(factor[xi]) ? factor[xi] : 1)
+  let xs = Array.from({ length: n }, (_, i) => x0 + (n > 1 ? i * (x1 - x0) / (n - 1) : 0))  // as 0.36.4 worked it out, to the last digit
   if (units[xi] === 'HZ' && freq) xs = hzToPpm(xs, L, freq)
   return finish({ title, xLabel: 'δ (ppm)', yLabel: 'Intensity', kind: 'nmr', reversed: true, dips: false, nucleus, frequency: freq, solvent,
     isStick: false }, xs, re)
 }
 
+/** Text as one kind of line end: old Mac files end lines with CR alone (0.36.4: "No ##XYDATA"). */
+const normaliseText = (raw: string) => raw.replace(/^﻿/, '').replace(/\r\n?/g, '\n')
+
+/** (X, Y) pairs (or triples, for a peak table with widths) from the lines of an XYPOINTS, PEAK TABLE or
+ * XYDATA=(XY..XY) block. */
+function readPairs(lines: string[], from: number, group: number): { xs: number[]; ys: number[] } {
+  const xs: number[] = [], ys: number[] = []
+  const nums: number[] = []
+  for (let i = from; i < lines.length && !lines[i].startsWith('##'); i++) {
+    for (const t of lines[i].split(/[\s,;]+/)) {
+      if (!t) continue
+      const v = t === '?' ? NaN : Number(t)
+      if (t !== '?' && !Number.isFinite(v)) throw notANumber(t)
+      nums.push(v)
+    }
+    if (nums.length > group * MAX_POINTS) throw tooMany()
+  }
+  for (let i = 0; i + 1 < nums.length; i += group) {
+    if (Number.isFinite(nums[i]) && Number.isFinite(nums[i + 1])) { xs.push(nums[i]); ys.push(nums[i + 1]) }
+  }
+  return { xs, ys }
+}
+
 export function parseJcamp(raw: string, fidOpts: FidOptions = {}): Spectrum {
-  const text = spectrumBlock(raw.replace(/\$\$.*$/gm, '')) // strip comments
+  const text = spectrumBlock(normaliseText(raw).replace(/\$\$.*$/gm, '')) // strip comments
   const L = labels(text)
   if (L.has('NTUPLES')) return parseNtuples(text, L, fidOpts)
-  const num = (k: string) => (L.has(k) ? Number(L.get(k)!.replace(/[^\d.eE+-]/g, '')) : undefined)
-  const xFactor = num('XFACTOR') ?? 1
+  const num = (k: string) => { if (!L.has(k)) return undefined; const t = L.get(k)!.replace(/[^\d.eE+-]/g, ''); return t ? Number(t) : NaN }
+  const factorOf = (k: string) => { const v = num(k); return v === undefined || !Number.isFinite(v) || v === 0 ? undefined : v }
+  const xFactor = factorOf('XFACTOR') ?? 1
   const yFactor = num('YFACTOR') ?? 1
+  if (!Number.isFinite(yFactor)) throw new Error('This JCAMP-DX file\'s ##YFACTOR isn\'t a number, so its intensities can\'t be worked out.')
   const xUnits = (L.get('XUNITS') || '').toUpperCase()
   const yUnits = (L.get('YUNITS') || '').toUpperCase()
   const dataType = (L.get('DATATYPE') || '').toUpperCase()
   const freq = num('.OBSERVEFREQUENCY')
-  const lines = text.split(/\r?\n/)
+  const lines = text.split('\n')
 
-  let xs: number[] = []
-  let ys: number[] = []
+  let xs: ArrayLike<number> = []
+  let ys: ArrayLike<number> = []
   let isStick = false
   const xyIdx = lines.findIndex(l => /^##XYDATA\s*=/i.test(l))
   const ptIdx = lines.findIndex(l => /^##(XYPOINTS|PEAK\s*TABLE)\s*=/i.test(l))
-  if (xyIdx >= 0) {
+  const declared = declaredCount(L.get('NPOINTS'))
+  if (declared && declared > MAX_POINTS) throw tooMany(declared)
+  const pairForm = xyIdx >= 0 && /\(\s*XYW?\s*\.\.\s*XYW?\s*\)/i.test(lines[xyIdx])
+  if (xyIdx >= 0 && !pairForm) {
     const t = readXY(lines, xyIdx + 1)
-    const xFirsts = t.xFirsts
-    ys = t.ys.map(v => (Number.isFinite(v) ? v * yFactor : 0))
-    const firstX = num('FIRSTX') ?? xFirsts[0] * xFactor
-    const lastX = num('LASTX') ?? (xFirsts[xFirsts.length - 1] * xFactor)
-    const n = ys.length
+    const n = t.ys.length
+    if (!n) throw new Error('This JCAMP-DX file has no data points in its ##XYDATA block.')
+    if (declared && !countOK(declared, n)) throw countMismatch(declared, n)
+    const yv = new Float64Array(n)
+    for (let i = 0; i < n; i++) yv[i] = t.ys[i] * yFactor
+    // the axis from the header (FIRSTX, LASTX, the number of points), checked against the X value each line starts
+    // with; without FIRSTX/LASTX, from those X values themselves (0.36.4: the last line's X was taken for the last point's)
+    let firstX = num('FIRSTX'), lastX = num('LASTX')
+    if (firstX === undefined || lastX === undefined) {
+      const c = t.checks.filter(k => Number.isFinite(k.x)), a = c[0], b = c[c.length - 1]
+      if (!a || !b || b.at === a.at) throw new Error('This JCAMP-DX file doesn\'t give its x range (##FIRSTX and ##LASTX), so its scale is unknown.')
+      const step = (b.x - a.x) * xFactor / (b.at - a.at)
+      firstX = firstX ?? a.x * xFactor - a.at * step
+      lastX = lastX ?? firstX + (n - 1) * step
+    }
+    if (!Number.isFinite(firstX) || !Number.isFinite(lastX)) throw new Error('This JCAMP-DX file doesn\'t give its x range (##FIRSTX and ##LASTX) as numbers, so its scale is unknown.')
+    if (n > 1 && firstX === lastX) throw new Error('This JCAMP-DX file gives the same value for ##FIRSTX and ##LASTX, so its scale is unknown.')
     const step = n > 1 ? (lastX - firstX) / (n - 1) : 0
-    xs = Array.from({ length: n }, (_, i) => firstX + i * step)
-  } else if (ptIdx >= 0) {
-    isStick = /PEAK/i.test(lines[ptIdx]) || dataType.includes('MASS')
-    const nums: number[] = []
-    for (let i = ptIdx + 1; i < lines.length && !lines[i].startsWith('##'); i++) {
-      for (const t of lines[i].split(/[\s,;]+/)) if (t) nums.push(Number(t))
-    }
-    for (let i = 0; i + 1 < nums.length; i += 2) {
-      if (Number.isFinite(nums[i]) && Number.isFinite(nums[i + 1])) { xs.push(nums[i] * xFactor); ys.push(nums[i + 1] * yFactor) }
-    }
+    checkX(t.checks, firstX, step, xFactor)
+    const xv = new Float64Array(n)
+    for (let i = 0; i < n; i++) xv[i] = firstX + i * step
+    xs = xv; ys = yv
+  } else if (xyIdx >= 0 || ptIdx >= 0) {
+    const at = xyIdx >= 0 ? xyIdx : ptIdx
+    isStick = xyIdx < 0 && (/PEAK/i.test(lines[ptIdx]) || dataType.includes('MASS'))
+    const p = readPairs(lines, at + 1, /XYW/i.test(lines[at]) ? 3 : 2)
+    xs = p.xs.map(v => v * xFactor); ys = p.ys.map(v => v * yFactor)
+    const px = xs
+    if (!xs.length) throw new Error('This JCAMP-DX file has no data points that are numbers.')
+    if (declared && !countOK(declared, xs.length) && !isStick) throw countMismatch(declared, xs.length)
     // a "peak table" of thousands of evenly spaced points is a continuous spectrum (simulators write them this way)
     if (isStick && !dataType.includes('MASS') && xs.length > 2000) {
-      const d = xs[1] - xs[0]
+      const d = px[1] - px[0]
       let even = d !== 0
-      for (let i = 1; even && i < xs.length; i++) if (Math.abs(xs[i] - xs[i - 1] - d) > 0.01 * Math.abs(d)) even = false
+      for (let i = 1; even && i < px.length; i++) if (Math.abs(px[i] - px[i - 1] - d) > 0.01 * Math.abs(d)) even = false
       if (even) isStick = false
     }
   } else {
@@ -328,7 +515,7 @@ export function parseJcamp(raw: string, fidOpts: FidOptions = {}): Spectrum {
   }
 
   let xLabel = xUnits || 'x'
-  if (xUnits === 'HZ' && freq) { xs = hzToPpm(xs, L, freq); xLabel = 'PPM' }
+  if (xUnits === 'HZ' && freq) { xs = hzToPpm(Array.from(xs), L, freq); xLabel = 'PPM' }
   const kind: Spectrum['kind'] = dataType.includes('NMR') || xLabel === 'PPM' ? 'nmr'
     : dataType.includes('INFRARED') || xUnits.includes('1/CM') ? 'ir'
     : dataType.includes('MASS') ? 'ms' : dataType.includes('UV') ? 'uv' : 'other'
@@ -336,43 +523,220 @@ export function parseJcamp(raw: string, fidOpts: FidOptions = {}): Spectrum {
   return finish({
     title: L.get('TITLE') || 'Spectrum', xLabel: kind === 'nmr' ? 'δ (ppm)' : kind === 'ir' ? 'Wavenumber (cm⁻¹)' : xLabel,
     yLabel: yUnits || 'Intensity', kind, reversed: kind === 'nmr' || kind === 'ir', dips: yUnits.includes('TRANSMITTANCE'),
-    nucleus: L.get('.OBSERVENUCLEUS')?.replace(/\^/g, ''), frequency: freq, solvent: L.get('.SOLVENTNAME'), isStick,
+    nucleus: L.get('.OBSERVENUCLEUS')?.replace(/\^/g, ''), frequency: freq && Number.isFinite(freq) && freq > 0 ? freq : undefined,
+    solvent: L.get('.SOLVENTNAME'), isStick,
   }, xs, ys)
 }
 
-export function parseDelimited(raw: string, name: string): Spectrum {
-  const xs: number[] = []
-  const ys: number[] = []
-  for (const line of raw.split(/\r?\n/)) {
-    const parts = line.trim().split(/[\s,;]+/)
-    if (parts.length < 2) continue
-    const a = Number(parts[0]), b = Number(parts[1])
-    if (Number.isFinite(a) && Number.isFinite(b)) { xs.push(a); ys.push(b) }
+// ---------------------------------------------------------------- text tables (CSV, TSV, two columns)
+
+const NOT_SPECTRUM = "this isn't a spectrum Benchtop can show: it needs two columns of numbers (x and y), or JCAMP-DX. Download it to open it in another program."
+/** Names a header may give the x and the y column. */
+const X_NAMES = /^(x|ppm|δ|delta|shift|chemical shift|δ \(ppm\)|wavenumbers?|cm-1|cm⁻¹|1\/cm|wavelength|nm|lambda|λ|m\/z|mz|mass|time|min|minutes|retention time|rt|t|hz|frequency|2θ|2theta|2-theta|angle|potential|voltage|e|v|energy|ev|temperature|t \(°c\)|°c)\b/i
+const Y_NAMES = /^(y|intensity|int|absorbance|abs|a|transmittance|%t|t%|reflectance|counts|cps|signal|abundance|response|real|amplitude|au|a\.u\.|current|i|heat flow|mass %|weight %|weight)\b/i
+
+/** A cell as a number: plain or with a decimal comma (when the file uses them), quotes removed; null if it isn't one
+ *  (text, dates, "NaN", "inf", hexadecimal). Written for speed: a table can have millions of rows. */
+function cellNumber(c: string, decimalComma: boolean): number | null {
+  let t = c.trim()
+  if (t === '') return null
+  if (t.charCodeAt(0) === 34 /* " */) {
+    if (t.length < 2 || t.charCodeAt(t.length - 1) !== 34) return null
+    t = t.slice(1, -1).trim()
+    if (!decimalComma && /^[+-]?\d{1,3}(,\d{3})+\.\d+$/.test(t)) t = t.replace(/,/g, '') // "1,234.5": thousands, with a decimal point
   }
-  if (xs.length < 2) throw new Error("this isn't a spectrum Benchtop can show: it needs two columns of numbers (x and y), or JCAMP-DX. Download it to open it in another program.")
+  if (decimalComma) { if (t.includes('.')) return null; t = t.replace(',', '.') }
+  const v = Number(t)
+  if (!Number.isFinite(v) || t === '') return null
+  const k = t.charCodeAt(0) === 43 || t.charCodeAt(0) === 45 ? 1 : 0  // after a sign: no 0x, 0b, 0o
+  if (t.charCodeAt(k) === 48 && t.length > k + 1 && /[xXbBoO]/.test(t[k + 1])) return null
+  return v
+}
+
+/** Split a line on the file's separator, keeping a quoted cell's commas. */
+function cells(line: string, sep: string): string[] {
+  if (sep === 'ws') return line.trim().split(/\s+/)
+  if (!line.includes('"')) return line.split(sep)
+  const out: string[] = []
+  let cur = '', q = false
+  for (const ch of line) {
+    if (ch === '"') { q = !q; cur += ch } else if (ch === sep && !q) { out.push(cur); cur = '' } else cur += ch
+  }
+  out.push(cur)
+  return out
+}
+
+/** A line's numbers, or null if any of its cells isn't one (or it has fewer than two). */
+function rowNumbers(line: string, sep: string, decimalComma: boolean): number[] | null {
+  if (line.length > 100_000) return null  // not a row of a table
+  const cs = cells(line, sep)
+  let len = cs.length
+  while (len && cs[len - 1].trim() === '') len--  // a trailing separator
+  if (len < 2) return null
+  const out = new Array<number>(len)
+  for (let k = 0; k < len; k++) { const v = cellNumber(cs[k], decimalComma); if (v === null) return null; out[k] = v }
+  return out
+}
+
+/** The separator and decimal mark a table uses, from its first lines: tab, semicolon, comma or spaces; and whether
+ *  numbers have a decimal comma (7,26 in French or German Excel). 0.36.4 split on commas, semicolons and spaces at
+ *  once, so "7,26;1234,5" became x = 7, y = 26. */
+export function tableFormat(sample: string[]): { sep: string; decimalComma: boolean } {
+  const has = (re: RegExp) => sample.some(l => re.test(l))
+  const commaNumber = /^[+-]?\d+,\d+([eE][+-]?\d+)?$/
+  if (has(/\t/)) return { sep: '\t', decimalComma: has(/\d,\d/) && !has(/\d\.\d/) }
+  if (has(/;/)) return { sep: ';', decimalComma: has(/\d,\d/) && !has(/\d\.\d/) }
+  if (has(/,/)) {
+    // "1,5 10,25": decimal commas between spaces; "1.5,10", "1,10" or "1, 10": a comma between columns
+    const spaced = sample.filter(l => l.trim()).every(l => { const w = l.trim().split(/\s+/); return w.length >= 2 && w.every(c => !c.includes(',') || commaNumber.test(c)) })
+    if (spaced && has(/\d,\d/) && !has(/\d\.\d/)) return { sep: 'ws', decimalComma: true }
+    return { sep: ',', decimalComma: false }
+  }
+  return { sep: 'ws', decimalComma: false }
+}
+
+export function parseDelimited(raw: string, name: string): Spectrum {
+  const text = normaliseText(raw)
+  // binary files renamed .csv (a PDF, a picture): not a table at all
+  const head = text.slice(0, 65536)
+  if (/^%PDF|^\x89PNG|^GIF8|^\xff\xd8/.test(text) || /\0/.test(head) || (head.match(/[\x01-\x08\x0e-\x1f\ufffd]/g) || []).length > head.length / 100) throw new Error(NOT_SPECTRUM)
+  const lines = text.split('\n')
+  const sample: string[] = []
+  for (let k = 0; k < lines.length && sample.length < 200; k++) if (lines[k].trim()) sample.push(lines[k])
+  if (!sample.length) throw new Error(NOT_SPECTRUM)
+  const { sep, decimalComma } = tableFormat(sample)
+  // where the numbers start (the line before is the header, if any), and how many columns most rows have
+  let firstData = -1
+  const widths: number[] = []
+  for (let k = 0; k < lines.length && widths.length < 200; k++) {
+    if (!lines[k].trim()) continue
+    const r = rowNumbers(lines[k], sep, decimalComma)
+    if (r) { if (firstData < 0) firstData = k; widths.push(r.length) }
+    else if (firstData < 0 && k > 100000) break
+  }
+  if (firstData < 0) throw new Error(NOT_SPECTRUM)
+  let hk = firstData - 1
+  while (hk >= 0 && !lines[hk].trim()) hk--
+  const header = hk >= 0 ? cells(lines[hk], sep).map(c => c.trim().replace(/^"(.*)"$/, '$1')) : null
+  const width = mode(widths)
+  const cols: number[][] = Array.from({ length: width }, () => [])
+  let other = 0, otherWidth = 0, partial = 0, n = 0
+  for (let k = firstData; k < lines.length; k++) {
+    const line = lines[k]
+    if (!line.trim()) continue
+    const r = rowNumbers(line, sep, decimalComma)
+    if (!r) {
+      // a row of the table with a cell that isn't a number ("NaN", "inf", 1e999), or a line of text
+      const cs = line.length > 100_000 ? [] : cells(line, sep)
+      if (cs.length >= 2 && cs.some(c => cellNumber(c, decimalComma) !== null)) partial++; else other++
+      continue
+    }
+    if (r.length !== width) { otherWidth++; continue }
+    for (let c = 0; c < width; c++) cols[c].push(r[c])
+    if (++n > MAX_POINTS) throw tooMany()
+  }
+  if (n < 2) throw new Error(NOT_SPECTRUM)
+  if (other > n) throw new Error(NOT_SPECTRUM)  // mostly not numbers: a document with a few numbers in it
+  const warnings: string[] = []
+  let xi = 0, yi = 1
+  if (width > 2) {
+    const h = header && header.length === width ? header.map(c => c.toLowerCase()) : null
+    // x by its name: a chemical shift, wavenumber, wavelength or m/z before a time or an index
+    const xRank = (c: string) => (!X_NAMES.test(c) ? 0 : /^(ppm|δ|delta|shift|chemical shift|wavenumbers?|cm|1\/cm|wavelength|nm|λ|lambda|m\/z|mz|mass|hz|frequency|2θ|2theta|2-theta|potential)/.test(c) ? 2 : 1)
+    const ranks = h ? h.map(xRank) : []
+    const best = Math.max(0, ...ranks)
+    const xs = h && best ? ranks.map((r, k) => (r === best ? k : -1)).filter(k => k >= 0) : []
+    const ysN = h ? h.map((c, k) => (Y_NAMES.test(c) && !xs.includes(k) ? k : -1)).filter(k => k >= 0) : []
+    let isIndex = Number.isInteger(cols[0][0])
+    for (let k = 1; isIndex && k < n; k++) if (cols[0][k] !== cols[0][0] + k) isIndex = false
+    if (xs.length === 1 && ysN.length === 1) { xi = xs[0]; yi = ysN[0] }
+    else if (width === 3 && isIndex && (!h || (!xs.includes(0) && xs.length <= 1))) { xi = 1; yi = 2 }
+    else {
+      const named = h ? ` (${header!.map(c => `“${shown(c)}”`).join(', ')})` : ''
+      throw new Error(`This table has ${width} columns of numbers${named}, and Benchtop can't tell which are x and y. Save it with two columns (x, then y), or give the columns names such as “ppm” and “intensity” in a header row.`)
+    }
+    const label = (k: number) => (h && header![k] ? `“${shown(header![k])}”` : `column ${k + 1}`)
+    warnings.push(`This table has ${width} columns: Benchtop drew ${label(yi)} against ${label(xi)}${isIndex && xi === 1 ? ' (the first column looks like row numbers)' : ''}.`)
+  }
+  if (partial) warnings.push(`${n0(partial)} row${partial === 1 ? ' has' : 's have'} a value that isn't a number (such as “NaN”), so ${partial === 1 ? 'it was' : 'they were'} left out.`)
+  if (otherWidth) warnings.push(`${n0(otherWidth)} row${otherWidth === 1 ? '' : 's'} with a different number of columns ${otherWidth === 1 ? 'was' : 'were'} left out.`)
+  const xs = cols[xi], ys = cols[yi]
   const [xmin, xmax] = extent(xs) // no spread: a million-point file would overflow the call stack
   const ppmLike = xmin > -2 && xmax < 250 && /nmr|1h|13c|ppm/i.test(name)
   const irLike = xmin >= 350 && xmax <= 4500 && /ir|ftir/i.test(name)
   return finish({
     title: name, xLabel: ppmLike ? 'δ (ppm)' : irLike ? 'Wavenumber (cm⁻¹)' : 'x', yLabel: 'Intensity',
     kind: ppmLike ? 'nmr' : irLike ? 'ir' : 'other', reversed: ppmLike || irLike, dips: false, isStick: false,
+    ...(warnings.length ? { warnings } : {}),
   }, xs, ys)
 }
 
-function finish(meta: Omit<Spectrum, 'x' | 'y'>, xs: number[], ys: number[]): Spectrum {
-  // store ascending in x for simpler maths; drawing handles reversal
-  const idx = xs.map((_, i) => i)
-  if (xs.length > 1 && xs[0] > xs[xs.length - 1]) idx.reverse()
-  return { ...meta, x: Float64Array.from(idx.map(i => xs[i])), y: Float64Array.from(idx.map(i => ys[i])) }
+function mode(a: number[]): number {
+  const c = new Map<number, number>()
+  for (const v of a) c.set(v, (c.get(v) || 0) + 1)
+  let best = a[0], k = 0
+  for (const [v, m] of c) if (m > k) { best = v; k = m }
+  return best
+}
+
+/** A spectrum checked and stored ascending in x (drawing handles reversal). Refused with a plain message when it
+ *  couldn't be drawn or measured truthfully: no points, an x or y that isn't a number, x that doesn't change, or x
+ *  that goes up and down (0.36.4 integrated rows out of order: 35 instead of 120). Peak lists are sorted. */
+function finish(meta: Omit<Spectrum, 'x' | 'y'>, xs: ArrayLike<number>, ys: ArrayLike<number>): Spectrum {
+  const n = Math.min(xs.length, ys.length)
+  if (n === 0) throw new Error('This file has no data points in it.')
+  if (n === 1 && !meta.isStick) throw new Error('This file has only one data point, so there is no spectrum to draw.')
+  if (n > MAX_POINTS) throw tooMany(n)
+  for (let i = 0; i < n; i++) {
+    if (!Number.isFinite(xs[i])) throw new Error('This file\'s x axis can\'t be worked out: a value it needs (such as the first and last x, the spectrometer frequency or the offset) is missing or isn\'t a number.')
+    if (!Number.isFinite(ys[i])) throw new Error('This file has intensities that aren\'t numbers (or are too large to hold), so it can\'t be drawn. The file may be damaged, or its settings (data type, byte order) may be wrong.')
+  }
+  if (meta.isStick) {
+    const x = new Float64Array(n), y = new Float64Array(n)
+    const idx = Array.from({ length: n }, (_, i) => i).sort((a, b) => xs[a] - xs[b])
+    idx.forEach((k, i) => { x[i] = xs[k]; y[i] = ys[k] })
+    return { ...meta, x, y }
+  }
+  let up = false, down = false
+  for (let i = 1; i < n; i++) { if (xs[i] > xs[i - 1]) up = true; else if (xs[i] < xs[i - 1]) down = true }
+  if (!up && !down) throw new Error('Every x value in this file is the same, so there is no axis to draw it on.')
+  const x = new Float64Array(n), y = new Float64Array(n)
+  if (up && down) throw new Error('The x values in this file go up and down (rows out of order, or a scan that goes back, such as a cyclic voltammogram), so Benchtop can\'t draw it as a spectrum or measure areas. Sort the rows by x, or open it in another program.')
+  if (!down && xs instanceof Float64Array && ys instanceof Float64Array && xs.length === n && ys.length === n) return { ...meta, x: xs, y: ys }
+  for (let i = 0; i < n; i++) { const k = down ? n - 1 - i : i; x[i] = xs[k]; y[i] = ys[k] }
+  return { ...meta, x, y }
+}
+
+/** A spectrum made elsewhere (a processed FID): the same checks as `finish`. */
+function checked(s: Spectrum): Spectrum {
+  const { x, y, ...meta } = s
+  const f = finish(meta, x, y)
+  return { ...s, x: f.x, y: f.y }
 }
 
 export { SPECTRUM_EXT, canViewSpectrum } from './viewable'
 import { solventKey } from './solvents'
 import { brukerGroupDelay, processComplexFid, processFid } from './fid'
 
+/** Where a JCAMP-DX file starts when something else comes first (an e-mail header, $$ comments, a note): its first
+ *  ##label line, if a ##TITLE or ##JCAMP-DX label comes early. 0.36.4 read such a file as a table of numbers. */
+function jcampStart(text: string): number {
+  const lead = /^(?:[ \t]*(?:\$\$[^\n]*)?\n)*[ \t]*##/.exec(text)  // only blank lines and $$ comments before it
+  if (lead) return lead[0].length - 2
+  const head = text.slice(0, 1 << 20)
+  if (!/^##(TITLE|JCAMP)/im.test(head)) return -1
+  const m = /^##/m.exec(head)
+  return m ? m.index : -1
+}
+
 export function parseSpectrumFile(raw: string, filename: string, fidOpts: FidOptions = {}): Spectrum {
-  if (/^\s*##/.test(raw)) return parseJcamp(raw, fidOpts)
-  return parseDelimited(raw, filename)
+  const text = normaliseText(raw)
+  const at = jcampStart(text)
+  if (at < 0) return parseDelimited(text, filename)
+  const before = text.slice(0, at)
+  const s = parseJcamp(text.slice(at), fidOpts)
+  if (before.replace(/^\s*\$\$.*$/gm, '').trim()) s.warnings = [...(s.warnings || []), 'Text before the JCAMP-DX header was left out.']
+  return s
 }
 
 // ---------------------------------------------------------------- analysis
@@ -428,11 +792,21 @@ export function pickPeaks(s: Spectrum, x0: number, x1: number, frac: number, lim
 
 // ---------------------------------------------------------------- multiplets (first-order)
 
+/** The spectrometer frequency (MHz) for J and for windows given in Hz: the file's, one the person typed, or, for an
+ *  analysis saved before 0.36.5, the 400 MHz it was worked out with. Undefined when unknown: then there is no J
+ *  (0.36.4 used 400 MHz for any file that didn't say, so a 7.1 Hz quartet at 60 MHz came out as J = 47.3 Hz). */
+export const frequencyOf = (s: Pick<Spectrum, 'frequency' | 'assumedFrequency'>) => s.frequency || s.assumedFrequency || undefined
+/** Only for telling lines apart when the frequency isn't known; never used for a number that is shown. */
+const NOMINAL_MHZ = 400
+/** What the analysis says when the frequency isn't known. */
+export const NO_FREQUENCY = 'The file doesn\'t say the spectrometer frequency, so Benchtop can\'t work out J or group the lines into signals. Type the frequency to analyse it.'
+
 export interface Multiplet {
   shift: number          // ppm (centre)
   lo: number; hi: number // ppm range of the signal
   mult: string           // s, d, t, q, p, dd, dt, td, m
   j: number[]            // Hz, largest first
+  noJ?: boolean          // J not worked out: the spectrometer frequency isn't known
 }
 
 const near = (a: number, b: number, tolHz: number) => Math.abs(a - b) <= Math.max(tolHz, 0.12 * Math.max(a, b))
@@ -472,13 +846,14 @@ function binomialPattern(s: Spectrum, lo: number, hi: number, freq: number) {
 /** Classify the lines inside [a, b] (ppm) as a first-order multiplet. */
 export function analyzeMultiplet(s: Spectrum, a: number, b: number): Multiplet {
   const lo = Math.min(a, b), hi = Math.max(a, b)
-  const freq = s.frequency || 400
-  const m = classify(s, lo, hi, freq)
+  const known = frequencyOf(s)
+  const freq = known || NOMINAL_MHZ  // the pattern of lines (how many, their heights) doesn't need the frequency; J does
+  let m = classify(s, lo, hi, freq)
   if (!s.isStick && ['q', 'p', 'dd', 'm'].includes(m.mult)) {
     const wide = binomialPattern(s, lo, hi, freq)
-    if (wide) return { shift: (wide.lo + wide.hi) / 2, lo: wide.lo, hi: wide.hi, mult: wide.mult, j: wide.mult === 'm' ? [] : [Math.round(wide.j * 10) / 10] }
+    if (wide) m = { shift: (wide.lo + wide.hi) / 2, lo: wide.lo, hi: wide.hi, mult: wide.mult, j: wide.mult === 'm' ? [] : [Math.round(wide.j * 10) / 10] }
   }
-  return m
+  return known ? m : { ...m, j: [], noJ: true }
 }
 
 function classify(s: Spectrum, lo: number, hi: number, freq: number): Multiplet {
@@ -611,84 +986,158 @@ export const MULTIPLICITIES = ['s', 'br s', 'd', 't', 'q', 'p', 'sext', 'hept', 
 
 function brukerParams(text: string): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const m of text.matchAll(/^##\$?([A-Za-z0-9_]+)=\s*(.*)$/gm)) out[m[1].toUpperCase()] = m[2].trim().replace(/^<(.*)>$/, '$1')
+  for (const m of normaliseText(text).matchAll(/^##\$?([A-Za-z0-9_]+)=\s*(.*)$/gm)) out[m[1].toUpperCase()] = m[2].trim().replace(/^<(.*)>$/, '$1')
   return out
 }
 
 /** Read pdata/N/1r + procs (+ acqus for nucleus/solvent) from a zipped Bruker experiment. */
 const TWO_D = 'This is a 2D experiment (or a series, such as T1 or diffusion). Benchtop shows 1D spectra; this one is kept with the record as a file.'
 
+/** The most a zip entry may unpack to: a spectrum's data (1r, fid) up to MAX_POINTS values of 8 bytes; a parameter
+ *  file a few MB; a JCAMP-DX file what the viewer opens. Checked from the zip's own listing before anything is
+ *  unpacked, and each entry is unpacked into a buffer of the size the listing gives (0.36.4 unpacked every entry,
+ *  so a 1 MB zip holding 1 GB of zeros ran the page out of memory). */
+const ZIP_DATA_MAX = MAX_POINTS * 8, ZIP_TEXT_MAX = 4_000_000, ZIP_JCAMP_MAX = 100_000_000
+const mb = (n: number) => `${(n / 1e6).toLocaleString('en-GB', { maximumFractionDigits: n < 1e7 ? 1 : 0 })} MB`
+
+/** A zip's entries, by path with forward slashes (zips made on Windows use back-slashes), found whatever their case
+ *  (FID, ACQUS), unpacking only the ones asked for. */
+function zipReader(buf: Uint8Array, unzipSync: typeof import('fflate').unzipSync) {
+  const list: { name: string; key: string; size: number }[] = []
+  try {
+    unzipSync(buf, { filter: f => { list.push({ name: f.name, key: f.name.replace(/\\/g, '/').replace(/^\/+/, ''), size: f.originalSize }); return false } })
+  } catch { throw new Error('This zip file is damaged (it may have been cut off while copying), so Benchtop can\'t open it. Download it to check, or zip the folder again.') }
+  const keys = list.filter(e => !/(^|\/)__MACOSX\//.test(e.key) && !/(^|\/)\._/.test(e.key) && !e.key.endsWith('/'))  // macOS zip junk, folders
+  const byLower = new Map<string, (typeof list)[number]>()
+  for (const e of keys) if (!byLower.has(e.key.toLowerCase())) byLower.set(e.key.toLowerCase(), e)
+  const names = keys.map(e => e.key)
+  const entry = (path: string) => byLower.get(path.toLowerCase())
+  const has = (path: string) => !!entry(path)
+  const read = (path: string, max: number, what = path.split('/').pop() || path): Uint8Array | undefined => {
+    const e = entry(path)
+    if (!e) return undefined
+    if (e.size > max) throw new Error(`The ${what} file in this zip unpacks to ${mb(e.size)}, more than Benchtop opens in the browser (${mb(max)}). Download the zip to open it in the instrument's software.`)
+    let out: Uint8Array | undefined
+    try { out = unzipSync(buf, { filter: f => f.name === e.name })[e.name] } catch { throw new Error(`The ${what} file in this zip is damaged, so Benchtop can't unpack it. Zip the folder again.`) }
+    return out
+  }
+  return { names, has, read, text: (path: string) => { const b = read(path, ZIP_TEXT_MAX); return b ? strFromBytes(b) : undefined } }
+}
+const strFromBytes = (b: Uint8Array) => new TextDecoder('latin1').decode(b)
+const byDepth = (a: string, b: string) => a.split('/').length - b.split('/').length || a.localeCompare(b, undefined, { numeric: true })
+
 export async function parseBrukerZip(buf: ArrayBuffer, filename: string, fidOpts: FidOptions = {}): Promise<Spectrum> {
-  const { unzipSync, strFromU8 } = await import('fflate')
-  const files = unzipSync(new Uint8Array(buf))
-  const names = Object.keys(files).filter(n => !/(^|\/)__MACOSX\//.test(n) && !/(^|\/)\._/.test(n)) // macOS zip junk
-  const real = names.filter(n => /(^|\/)pdata\/\d+\/1r$/.test(n)).sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b, undefined, { numeric: true }))
+  const { unzipSync } = await import('fflate')
+  const z = zipReader(new Uint8Array(buf), unzipSync)
+  const names = z.names
+  const real = names.filter(n => /(^|\/)pdata\/\d+\/1r$/i.test(n)).sort(byDepth)
   if (!real.length) {
-    const fids = names.filter(n => /(^|\/)fid$/.test(n)).sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b, undefined, { numeric: true }))
+    const fids = names.filter(n => /(^|\/)fid$/i.test(n)).sort(byDepth)
     if (fids.length) {
       const dir = fids[0].slice(0, -3)
-      if (!files[dir + 'acqus']) throw new Error('Found a raw FID but not its acqus file, so it can\'t be processed. Zip the whole experiment folder.')
-      const acqus = brukerParams(strFromU8(files[dir + 'acqus']))
-      if (Number(acqus.PARMODE || 0) > 0 || names.some(n => n === dir + 'ser')) throw new Error(TWO_D)
+      const acqusText = z.text(dir + 'acqus')
+      if (acqusText === undefined) throw new Error('Found a raw FID but not its acqus file, so it can\'t be processed. Zip the whole experiment folder.')
+      const acqus = brukerParams(acqusText)
+      if (Number(acqus.PARMODE || 0) > 0 || z.has(dir + 'ser')) throw new Error(TWO_D)
       // referenced in TopSpin (SR)? Its procs SF says so; keep that referencing
-      const procs = files[dir + 'pdata/1/procs'] ? brukerParams(strFromU8(files[dir + 'pdata/1/procs'])) : null
-      const f = processFid(files[fids[0]], acqus, { ...fidOpts, sf: Number(procs?.SF) || undefined })
+      const procsText = z.text(dir + 'pdata/1/procs')
+      const procs = procsText !== undefined ? brukerParams(procsText) : null
+      const raw = z.read(fids[0], ZIP_DATA_MAX / 2, 'fid')!
+      const width = acqus.DTYPA === '2' ? 8 : 4
+      const td = Number(acqus.TD), have = Math.floor(raw.byteLength / width)
+      let zf = 1; while (zf < Math.min(td > 0 ? td : Infinity, have) / 2) zf <<= 1
+      if (2 * zf > MAX_POINTS) throw tooMany(2 * zf)  // zero-filled to twice the next power of two
+      const f = processFid(raw, acqus, { ...fidOpts, sf: Number(procs?.SF) || undefined })
       const nucleus = acqus.NUC1 || '1H'
-      return {
+      const warnings = td > 0 && have < td * 0.99
+        ? [`The fid file holds ${n0(have)} of the ${n0(td)} points its acqus file says were recorded, so it may have been cut off while copying: lines come out broader and small signals may be missing. Copy the experiment folder again if you can.`]
+        : []
+      return checked({
         title: `${filename.replace(/\.zip$/i, '')} (${dir.replace(/\/$/, '') || 'experiment'})`, xLabel: 'δ (ppm)', yLabel: 'Intensity',
         kind: 'nmr', reversed: true, dips: false, nucleus, frequency: Number(acqus.SFO1) || Number(acqus.BF1), solvent: acqus.SOLVENT || '',
-        isStick: false, x: f.x, y: f.y, fid: f,
-      }
+        isStick: false, x: f.x, y: f.y, fid: f, ...(warnings.length ? { warnings } : {}),
+      })
     }
     // a JCAMP-DX spectrum zipped on its own; not a JCAMP inside a Bruker experiment (TopSpin writes fit curves there)
-    const jdx = names.find(n => /\.(jdx|dx|jcamp)$/i.test(n) && !names.some(m => m.endsWith('acqus') && n.startsWith(m.slice(0, -5))))
-    if (jdx) return parseJcamp(strFromU8(files[jdx]), fidOpts)
-    if (names.some(n => /(^|\/)(ser|pdata\/\d+\/2rr)$/.test(n))) throw new Error(TWO_D)
+    const jdx = names.find(n => /\.(jdx|dx|jcamp)$/i.test(n) && !names.some(m => /acqus$/i.test(m) && n.toLowerCase().startsWith(m.slice(0, -5).toLowerCase())))
+    if (jdx) return parseSpectrumFile(new TextDecoder().decode(z.read(jdx, ZIP_JCAMP_MAX, 'JCAMP-DX')!), jdx, fidOpts)
+    if (names.some(n => /(^|\/)(ser|pdata\/\d+\/2rr)$/i.test(n))) throw new Error(TWO_D)
     throw new Error('No processed Bruker spectrum (pdata/…/1r) or JCAMP-DX file found in this zip.')
   }
   const path = real[0]
   const dir = path.slice(0, -2)
-  const procs = files[dir + 'procs'] ? brukerParams(strFromU8(files[dir + 'procs'])) : null
-  if (!procs) throw new Error('Found 1r but not its procs file, so the ppm scale is unknown.')
-  const expRoot = dir.replace(/pdata\/\d+\/$/, '')
-  const acqus = files[expRoot + 'acqus'] ? brukerParams(strFromU8(files[expRoot + 'acqus'])) : {}
+  const procsText = z.text(dir + 'procs')
+  if (procsText === undefined) throw new Error('Found 1r but not its procs file, so the ppm scale is unknown.')
+  const procs = brukerParams(procsText)
+  const expRoot = dir.replace(/pdata\/\d+\/$/i, '')
+  const acqusText = z.text(expRoot + 'acqus')
+  const acqus = acqusText !== undefined ? brukerParams(acqusText) : {}
   const si = Number(procs.SI), sf = Number(procs.SF), offset = Number(procs.OFFSET), swp = Number(procs.SW_P)
   const nc = Number(procs.NC_PROC || 0), big = procs.BYTORDP === '1', dtype = Number(procs.DTYPP || 0)
-  const raw = files[path]
+  if (!(sf > 0) || !(swp > 0) || !Number.isFinite(offset)) throw new Error('The procs file doesn\'t give the spectrometer frequency, spectral width and offset (SF, SW_p, OFFSET) as numbers, so the ppm scale is unknown.')
+  if (si > MAX_POINTS) throw tooMany(si)
+  const raw = z.read(path, ZIP_DATA_MAX, '1r')!
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength)
   const width = dtype === 2 ? 8 : 4
-  const n = Math.min(si || Infinity, Math.floor(raw.byteLength / width))
-  if (si && n < si * 0.99) throw new Error(`The 1r file holds ${n.toLocaleString()} of the ${si.toLocaleString()} points its procs file promises, so it looks incomplete. Re-export or re-copy the experiment folder.`)
+  const have = Math.floor(raw.byteLength / width)
+  const n = Math.min(si || Infinity, have)
+  if (si && n < si * 0.99) throw new Error(`The 1r file holds ${n.toLocaleString('en-GB')} of the ${si.toLocaleString('en-GB')} points its procs file promises, so it looks incomplete. Re-export or re-copy the experiment folder.`)
+  if (si && have > si * 1.01) throw new Error(`The 1r file holds ${n0(have)} points but its procs file says ${n0(si)}, so they don't belong together and the ppm scale can't be trusted. Re-export or re-copy the experiment folder.`)
   const scale = 2 ** nc
-  const ys: number[] = new Array(n)
+  const ys = new Float64Array(n)
   for (let i = 0; i < n; i++) ys[i] = (dtype === 2 ? view.getFloat64(i * 8, !big) : view.getInt32(i * 4, !big)) * scale
   const step = swp / sf / n
-  const xs = ys.map((_, i) => offset - i * step)
+  const xs = new Float64Array(n)
+  for (let i = 0; i < n; i++) xs[i] = offset - i * step
   const nucleus = (acqus.NUC1 || procs.AXNUC || '1H').replace(/^off$/i, '1H')
   const solvent = acqus.SOLVENT || ''
   const title = `${filename.replace(/\.zip$/i, '')} (${expRoot.replace(/\/$/, '') || 'experiment'})`
-  return finishPublic({
+  return finish({
     title, xLabel: 'δ (ppm)', yLabel: 'Intensity', kind: 'nmr', reversed: true, dips: false,
     nucleus, frequency: sf, solvent, isStick: false,
   }, xs, ys)
 }
 
-function finishPublic(meta: Omit<Spectrum, 'x' | 'y'>, xs: number[], ys: number[]): Spectrum {
-  const idx = xs.map((_, i) => i)
-  if (xs.length > 1 && xs[0] > xs[xs.length - 1]) idx.reverse()
-  return { ...meta, x: Float64Array.from(idx.map(i => xs[i])), y: Float64Array.from(idx.map(i => ys[i])) }
+/** A message for a person: our own plain messages as they are; anything else (a RangeError from a damaged file, a
+ *  zip library's "invalid zip data") in words. 0.36.4 showed "Invalid array length". */
+function plainError(e: unknown): Error {
+  if (e instanceof Error && e.constructor === Error && !('code' in e)) return e
+  return new Error('Benchtop couldn\'t read this file: it may be damaged, or in a format Benchtop doesn\'t know. Download it to open it in another program.')
+}
+
+/** Text from bytes: UTF-16 when the file starts with its byte-order mark (Excel's "Unicode text"), otherwise UTF-8. */
+function decodeText(buf: ArrayBuffer): string {
+  const h = new Uint8Array(buf, 0, Math.min(2, buf.byteLength))
+  if (h[0] === 0xff && h[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf)
+  if (h[0] === 0xfe && h[1] === 0xff) return new TextDecoder('utf-16be').decode(buf)
+  return new TextDecoder().decode(buf)
 }
 
 /** Any supported file, from raw bytes. */
 export async function parseSpectrumBuffer(buf: ArrayBuffer, filename: string, fidOpts: FidOptions = {}): Promise<Spectrum> {
-  const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength))
-  if (head[0] === 0x50 && head[1] === 0x4b) return parseBrukerZip(buf, filename, fidOpts) // "PK" = zip
-  const text = new TextDecoder().decode(buf)
-  if (!/^\s*##/.test(text)) { // not JCAMP: a plugin reader may know this instrument's export
-    const r = matchReader(await fileReaders(), filename, text.slice(0, 4096))
-    if (r) return parseWithReader(text, filename, r)
-  }
-  return parseSpectrumFile(text, filename, fidOpts)
+  try {
+    const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength))
+    if (head[0] === 0x50 && head[1] === 0x4b) return await parseBrukerZip(buf, filename, fidOpts) // "PK" = zip
+    const text = decodeText(buf)
+    if (jcampStart(normaliseText(text.slice(0, 1 << 20))) < 0) { // not JCAMP: a plugin reader may know this instrument's export
+      const r = matchReader(await fileReaders(), filename, text.slice(0, 4096))
+      if (r) return parseWithReader(text, filename, r)
+    }
+    return parseSpectrumFile(text, filename, fidOpts)
+  } catch (e) { throw plainError(e) }
+}
+
+/** Whether a text file is worth offering "View spectrum" for, from its first few KB only: the record page asks this of
+ *  every .txt/.csv/.tsv it shows, and 0.36.4 read each whole file there (a 361-byte file that unpacks to millions of
+ *  points froze the page on opening). The full reading happens when the person clicks View. */
+export async function looksLikeSpectrum(buf: ArrayBuffer, filename: string): Promise<boolean> {
+  const part = buf.byteLength > 16384 ? buf.slice(0, 16384) : buf
+  const text = normaliseText(decodeText(part))
+  if (jcampStart(text) >= 0) return /^##(XYDATA|NTUPLES|XYPOINTS|PEAK\s*TABLE)\s*=/im.test(text) || buf.byteLength > 16384
+  if (matchReader(await fileReaders(), filename, text.slice(0, 4096))) return true
+  const lines = text.split('\n')
+  if (buf.byteLength > 16384) lines.pop()  // cut part-way through a line
+  try { parseDelimited(lines.join('\n'), filename); return true } catch { return false }
 }
 
 /** Characterisation label for a spectrum: technique + conditions. */
@@ -730,6 +1179,7 @@ export interface ImpurityResult {
 export interface AutoResult {
   regions: { a: number; b: number }[]; refIdx: number; refValue: number; note: string
   impurities: ImpurityResult[]
+  needsFrequency?: boolean  // nothing done: the spectrometer frequency isn't known
 }
 
 function baseline(s: Spectrum) {
@@ -746,7 +1196,7 @@ function segment(s: Spectrum, cuts: { lo: number; hi: number }[]) {
   let max = 0  // the tallest line that isn't cut out: a huge solvent peak mustn't make the compound's look like noise
   for (let i = 0; i < s.y.length; i++) if (s.y[i] > max && !cuts.some(c => s.x[i] >= c.lo && s.x[i] <= c.hi)) max = s.y[i]
   const on = base + Math.max(8 * noise, 0.006 * (max - base))
-  const freq = s.frequency || 400
+  const freq = frequencyOf(s) || NOMINAL_MHZ
   const gap = 12 / freq // merge lines closer than ~12 Hz into one signal
   const pad = 4 / freq
   const cut = (x: number) => cuts.some(c => x >= c.lo && x <= c.hi)
@@ -805,8 +1255,8 @@ const MULTIPLET_RESIDUALS = new Set(['DMSO-d₅', 'CHD₂OD', 'acetone-d₅', 'C
 
 /** The nearest line to `at` (within `search` ppm) that stands out from what's around it: a noise wiggle on a big
  * peak's tail doesn't count. For a multiplet residual, the multiplet's centre (its tallest line, within 5 Hz). */
-function nearestLine(s: Spectrum, at: number, search: number, label = ''): number {
-  const freq = s.frequency || 400, noise = noiseLevel(s), base = baseline(s)
+function nearestLine(s: Spectrum, at: number, search: number, label = '', lone = false): number {
+  const freq = frequencyOf(s) || NOMINAL_MHZ, noise = noiseLevel(s), base = baseline(s)
   const i0 = Math.max(1, lowerBound(s.x, at - search)), i1 = Math.min(lowerBound(s.x, at + search), s.x.length - 2)
   const step = Math.abs(s.x[1] - s.x[0]) || 1e-9
   const k = Math.max(2, Math.round(3 / freq / step))  // look 3 Hz either side for the valleys
@@ -834,8 +1284,11 @@ function nearestLine(s: Spectrum, at: number, search: number, label = ''): numbe
   const nearest = (c: number[]) => c.reduce((b, i) => (b < 0 || dist(i) < dist(b) ? i : b), -1)
   let best = nearest(inside)
   if (best >= 0 && !MULTIPLET_RESIDUALS.has(label) && within12(best, 0.5, 2)) {
-    const lone = nearest(inside.filter(i => !within12(i, 0.3, Infinity) && dist(i) < 0.05))
-    if (lone >= 0) best = lone
+    const alone = nearest(inside.filter(i => !within12(i, 0.3, Infinity) && (lone || dist(i) < 0.05)))
+    // water must be a line of its own: one line of the compound's doublet is never taken for it (0.36.4 cut half of
+    // ibuprofen's CH₃ doublet as water when the real water line was lost in the noise)
+    if (alone >= 0) best = alone
+    else if (lone) return -1
   }
   if (best >= 0 && MULTIPLET_RESIDUALS.has(label)) {
     const span = 5 / freq
@@ -851,7 +1304,7 @@ function nearestLine(s: Spectrum, at: number, search: number, label = ''): numbe
  * until it has fallen back to the baseline, or starts rising into a neighbouring signal. A residual's multiplet
  * (CHD₂OD and DMSO-d₅ are quintets) is always covered whole. Capped, so it can't swallow the compound's own signals. */
 export function solventCuts(s: Spectrum, solventShift = 0, productShifts: number[] = []): { lo: number; hi: number }[] {
-  const freq = s.frequency || 400
+  const freq = frequencyOf(s) || NOMINAL_MHZ
   const noise = noiseLevel(s), base = baseline(s)
   const out: { lo: number; hi: number }[] = []
   for (const m of solventMarkers(s)) {
@@ -860,7 +1313,7 @@ export function solventCuts(s: Spectrum, solventShift = 0, productShifts: number
     const search = water ? 0.08 : 0.03
     // always cut a multiplet residual whole (a quintet spans about ±4 Hz); a single line only needs its top
     const core = (MULTIPLET_RESIDUALS.has(m.label) ? 6 : 2) / freq, cap = water ? Math.max(0.04, 30 / freq) : 25 / freq
-    const top = nearestLine(s, at, search, m.label)
+    const top = nearestLine(s, at, search, m.label, water)
     const ours = top >= 0 && water && productShifts.some(p => Math.abs(p + solventShift - s.x[top]) < 0.05)  // the product's own signal
     if (top < 0 || ours || s.y[top] - base < 20 * noise) { out.push({ lo: at - 3.5 / freq, hi: at + 3.5 / freq }); continue }  // as before
     const c = s.x[top], floor = base + Math.max(4 * noise, 0.01 * (s.y[top] - base))
@@ -899,7 +1352,8 @@ export function protonUnit(areas: number[]): number {
 }
 
 export function autoAnalyse1H(s: Spectrum, expectedH: number | null, solventShift = 0, productMW: number | null = null, productShifts: number[] = []): AutoResult {
-  const freq = s.frequency || 400
+  const freq = frequencyOf(s)
+  if (!freq) return { regions: [], refIdx: 0, refValue: 1, note: NO_FREQUENCY, impurities: [], needsFrequency: true }
   const point = (p: number) => ({ lo: p - 3.5 / freq, hi: p + 3.5 / freq })
   const fixed = [...solventCuts(s, solventShift, productShifts), point(solventShift)]  // the solvent's lines, and TMS
   const explained = (w: { lo: number; hi: number }) => productShifts.some(p => p + solventShift > w.lo - 0.12 && p + solventShift < w.hi + 0.12)
@@ -958,14 +1412,15 @@ export function autoAnalyse1H(s: Spectrum, expectedH: number | null, solventShif
   return { regions: regions.sort((p, q) => q.a - p.a), refIdx: regions.length - 1 - refIdx, refValue, note, impurities }
 }
 
-/** 13C (and other non-1H) peak list above the noise, solvent signals removed. */
-export function autoPeaks13C(s: Spectrum, snr = 6) {
+/** 13C (and other non-1H) peak list above the noise, solvent signals removed. With `negative`, lines pointing down
+ *  (DEPT-135: CH₂; APT: CH and CH₃) are listed too, with their negative height (0.36.4 left them out). */
+export function autoPeaks13C(s: Spectrum, snr = 6, opts: { negative?: boolean } = {}) {
   const noise = noiseLevel(s), base = baseline(s)
   let max = -Infinity, min = Infinity
   for (let i = 0; i < s.y.length; i++) { if (s.y[i] > max) max = s.y[i]; if (s.y[i] < min) min = s.y[i] }
   const cutY = base + snr * noise
   const solv = solventMarkers(s).map(m => m.ppm)
-  const out: { x: number; y: number }[] = []
+  const out: { x: number; y: number; neg?: boolean }[] = []
   const step = Math.abs(s.x[1] - s.x[0]) || 1e-3
   const w = Math.max(3, Math.round(0.05 / step)) // ±0.05 ppm neighbourhood for prominence
   for (let i = 2; i < s.y.length - 2; i++) {
@@ -977,6 +1432,23 @@ export function autoPeaks13C(s: Spectrum, snr = 6) {
       if (v - Math.max(lowL, lowR) < snr * noise) continue // a shoulder on a bigger peak, not a peak
       if (!out.some(q => Math.abs(q.x - s.x[i]) < 0.05)) out.push({ x: s.x[i], y: v })
     }
+  }
+  if (opts.negative) {
+    const top = out.reduce((m, p) => Math.max(m, p.y - base), 0)
+    const down: { x: number; y: number; neg: boolean }[] = []
+    for (let i = 2; i < s.y.length - 2; i++) {
+      const v = s.y[i]
+      if (!(v < base - snr * noise && v <= s.y[i - 1] && v < s.y[i + 1] && v <= s.y[i - 2] && v < s.y[i + 2]) || solv.some(c => Math.abs(s.x[i] - c) < 0.6)) continue
+      let highL = v, highR = v
+      for (let k = Math.max(0, i - w); k < i; k++) highL = Math.max(highL, s.y[k])
+      for (let k = i + 1; k <= Math.min(s.y.length - 1, i + w); k++) highR = Math.max(highR, s.y[k])
+      if (Math.min(highL, highR) - v < snr * noise) continue  // a shoulder, not a line
+      // a real line, not the dip beside a big one (a phase error) nor a baseline roll: at least 5% of the tallest, and
+      // not within 0.1 ppm of an upward line more than twice as tall
+      if (base - v < 0.05 * top || out.some(p => Math.abs(p.x - s.x[i]) < 0.1 && p.y - base > 2 * (base - v))) continue
+      if (!down.some(q => Math.abs(q.x - s.x[i]) < 0.05)) down.push({ x: s.x[i], y: v, neg: true })
+    }
+    out.push(...down)
   }
   // the viewer's threshold is a fraction of the visible range; express the same cut that way
   return { peaks: out, threshold: Math.min(0.5, Math.max(0.002, (cutY - min) / ((max - min) || 1))) }
@@ -1091,7 +1563,7 @@ export interface FoundImpurity {
 export function findImpurityCandidates(s: Spectrum, shift = 0): FoundImpurity[] {
   const table = impurityTable(s)
   if (!table.length) return []
-  const freq = s.frequency || 400
+  const freq = frequencyOf(s) || NOMINAL_MHZ
   const noise = noiseLevel(s), base = baseline(s)
   const out: FoundImpurity[] = []
   for (const def of table) {
@@ -1107,6 +1579,9 @@ export function findImpurityCandidates(s: Spectrum, shift = 0): FoundImpurity[] 
       // must be a real peak top, not a point on the flank of a bigger neighbour
       const near = (hz: number) => { const j0 = lowerBound(s.x, s.x[best] - hz / freq), j1 = Math.min(lowerBound(s.x, s.x[best] + hz / freq), s.x.length - 1); let m = -Infinity; for (let j = j0; j <= j1; j++) m = Math.max(m, s.y[j]); return m }
       if (near(4) > s.y[best] * 1.001) continue
+      // nor the outer line of a bigger multiplet that is mostly outside the window: a line much taller than it within
+      // 12 Hz is that multiplet's (0.36.4 took ibuprofen's CH quartet edge at 3.75 and its CH at 1.87 for THF)
+      if (near(12) > 1.5 * (s.y[best] - base) + base) continue
       // nor a ¹³C satellite: about 0.5% of a big line 50–90 Hz away (half of ¹J(CH), 100–180 Hz)
       const parent = Math.max(...[-1, 1].map(d => { const a = s.x[best] + d * 50 / freq, b = s.x[best] + d * 90 / freq; let m = -Infinity; for (let j = lowerBound(s.x, Math.min(a, b)); j <= Math.min(lowerBound(s.x, Math.max(a, b)), s.x.length - 1); j++) m = Math.max(m, s.y[j]); return m }))
       if (parent - base > 40 * (s.y[best] - base)) continue
@@ -1127,6 +1602,15 @@ export function findImpurityCandidates(s: Spectrum, shift = 0): FoundImpurity[] 
       }
       windows.push({ lo, hi, nH: sig.nH, mult: sig.mult })
     }
+    // a solvent known only by multiplets (THF): each must be a signal of its own, back at the baseline just outside its
+    // window; a multiplet of the compound's that runs on past it (ibuprofen's CH quartet and CH₂/CH band at 60 MHz)
+    // isn't THF
+    if (def.signals.every(g => g.mult === 'm') && !windows.every(w => {
+      const j0 = lowerBound(s.x, w.lo), j1 = Math.min(lowerBound(s.x, w.hi), s.x.length - 1)
+      let top = -Infinity; for (let j = j0; j <= j1; j++) top = Math.max(top, s.y[j])
+      const quiet = (from: number, to: number) => { let m = -Infinity; for (let j = lowerBound(s.x, from); j <= Math.min(lowerBound(s.x, to), s.x.length - 1); j++) m = Math.max(m, s.y[j]); return m < base + 0.2 * (top - base) + 6 * noise }
+      return quiet(w.lo - 0.03, w.lo) && quiet(w.hi, w.hi + 0.03)
+    })) continue
     const need = def.signals.length === 1 ? 1 : 2
     if (windows.length >= need) out.push({ def, windows, matched: windows.length, confident: def.signals.length > 1 })
   }

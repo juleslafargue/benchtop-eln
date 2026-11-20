@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, downloadAuthed, type Attachment } from '../api'
 import { useApp } from '../App'
 import type { EntryEditorProps } from './EntryCard'
-import { hydrogensInFormula, parseSpectrumBuffer } from '../spectra'
+import { hydrogensInFormula, looksLikeSpectrum } from '../spectra'
 import { canViewSpectrum, formatName, needsReadCheck, pictureKind } from '../viewable'
 import SpectrumViewer, { type SavedAnalysis } from './SpectrumViewer'
 
@@ -54,8 +54,10 @@ export default function FileEntry({ content, onChange, readOnly, experimentId, a
   }
   const ids: number[] = content.attachment_ids || []
   const mine = ids.map(id => attachments.find(a => a.id === id)).filter(Boolean) as Attachment[]
-  // a .txt/.csv/.tsv is read first: "View spectrum" only for one the viewer can show (0.28 offered it for any .txt,
-  // which then failed with "Expected two numeric columns"). Unknown (couldn't fetch it): offered, as before.
+  // a .txt/.csv/.tsv is looked at first: "View spectrum" only for one the viewer can show (0.28 offered it for any .txt,
+  // which then failed with "Expected two numeric columns"). Only its first few KB are read here (0.36.4 read each whole
+  // file on opening the record, and a small file that unpacks to millions of points froze the page); the viewer reads
+  // it in full, and says plainly if it can't. Unknown (couldn't fetch it): offered, as before.
   const [readable, setReadable] = useState<Record<number, boolean>>({})
   const toCheck = mine.filter(a => needsReadCheck(a) && !(a.id in readable)).map(a => a.id).join(',')
   useEffect(() => {
@@ -63,7 +65,7 @@ export default function FileEntry({ content, onChange, readOnly, experimentId, a
     let alive = true
     for (const a of mine.filter(x => toCheck.split(',').includes(String(x.id)))) {
       api.raw(`/api/attachments/${a.id}?inline=true`).then(r => r.arrayBuffer())
-        .then(buf => parseSpectrumBuffer(buf, a.filename).then(() => true, () => false), () => true)
+        .then(buf => looksLikeSpectrum(buf, a.filename).catch(() => false), () => true)
         .then(ok => { if (alive) setReadable(m => ({ ...m, [a.id]: ok })) })
     }
     return () => { alive = false }

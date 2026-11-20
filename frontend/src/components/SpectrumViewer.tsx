@@ -7,11 +7,11 @@ import { day, api } from '../api'
 import {
   analyzeMultiplet, autoAnalyse1H, autoPeaks13C, formatSignal, integrate, MULTIPLICITIES,
   parseSpectrumBuffer,
-  referenceChoices, shifted, snapToPeak, solventMarkers, type Spectrum,
+  referenceChoices, shifted, snapToPeak, solventMarkers, type Multiplet, type Spectrum,
 } from '../spectra'
 import {
-  applyLabel, drawSpectrum, EXPORT, fidOptions, fmtX, geometry, header, is13C, isProton, LIGHT, OVERLAY_COLORS, peaksIn, predictedShifts,
-  PRED_COLOR, restoreAnalysis, signalTagsFor,
+  applyLabel, drawSpectrum, EXPORT, fidOptions, fmtX, frequencyHint, geometry, header, is13C, isProton, LIGHT, OVERLAY_COLORS, peaksIn, predictedShifts,
+  PRED_COLOR, restoreAnalysis, signalTagsFor, withFrequency,
   type Impurities, type Label, type Overlay, type Palette, type Region, type SavedAnalysis,
 } from '../spectrumDraw'
 
@@ -22,12 +22,12 @@ type Tool = 'zoom' | 'integrate' | 'reference'
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim()
 
-export function summarise(s: Spectrum, regions: (Region & { area: number })[], labels: Label[], refIdx: number, refH: number, peaks: { x: number }[]) {
+export function summarise(s: Spectrum, regions: (Region & { area: number })[], labels: Label[], refIdx: number, refH: number, peaks: { x: number; neg?: boolean }[], mults?: Multiplet[]) {
   const head = header(s)
   if (regions.length && isProton(s)) {
     const ref = regions[refIdx]?.area || regions[0].area
     const parts = regions.map((r, i) => ({ r, i })).sort((p, q) => (q.r.a + q.r.b) - (p.r.a + p.r.b))
-      .map(({ r, i }) => formatSignal(applyLabel(analyzeMultiplet(s, r.a, r.b), labels[i]), r.area / ref * refH))
+      .map(({ r, i }) => formatSignal(applyLabel(mults?.[i] ?? analyzeMultiplet(s, r.a, r.b), labels[i]), r.area / ref * refH))
     return `${head} δ ${parts.join(', ')}`
   }
   if (regions.length) {
@@ -38,9 +38,9 @@ export function summarise(s: Spectrum, regions: (Region & { area: number })[], l
   }
   // for 13C and other nuclei, leave out solvent signals and near-duplicates
   const solv = s.kind === 'nmr' ? solventMarkers(s).map(m => m.ppm) : []
-  const kept: { x: number }[] = []
+  const kept: { x: number; neg?: boolean }[] = []
   for (const p of peaks) if (!solv.some(c => Math.abs(p.x - c) < 0.6) && !kept.some(q => Math.abs(q.x - p.x) < 0.05)) kept.push(p)
-  const xs = kept.sort((p, q) => (s.reversed ? q.x - p.x : p.x - q.x)).map(p => fmtX(s, p.x))
+  const xs = kept.sort((p, q) => (s.reversed ? q.x - p.x : p.x - q.x)).map(p => `${fmtX(s, p.x)}${p.neg ? ' (negative)' : ''}`)
   return s.kind === 'nmr' ? `${head} δ ${xs.join(', ')}` : `${head}: ${xs.join(', ')}`
 }
 
@@ -83,6 +83,12 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
   const [overrides, setOverrides] = useState<Record<number, number | null>>({})
   const [confirmed, setConfirmed] = useState<ConfirmedAssignments | null>(saved?.assignments || null)
   const bufRef = useRef<ArrayBuffer | null>(null)
+  // a ¹H file that doesn't say its spectrometer frequency: the one typed in (saved with the analysis), or for an older
+  // analysis the 400 MHz it was worked out with; and whether negative ¹³C lines are listed (analyses from 0.36.5 on)
+  const [typedFreq, setTypedFreq] = useState<number | null>(null)
+  const [legacy400, setLegacy400] = useState(false)
+  const [negatives, setNegatives] = useState(false)
+  const [freqText, setFreqText] = useState('')
   const addOverlay = async (id: number, label: string) => {
     if (overlays.some(o => o.id === id) || overlays.length >= 4) return
     try {
@@ -105,14 +111,16 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
   const runAuto = async (s: Spectrum, announce = true, solventShift = 0) => {
     if (s.kind === 'nmr' && !is13C(s)) {
       const r = autoAnalyse1H(s, expectedH ?? null, solventShift, productMW ?? null, await productShifts())
+      if (r.needsFrequency) { if (announce) setNote(null); return }  // the frequency line above the plot says why, and takes it
       // impurity positions are found in the unreferenced spectrum; store them on the current axis
       setImpurities(r.impurities.map(i => ({ short: i.short, name: i.name, molPct: i.molPct, wtPct: i.wtPct, signals: i.signals.map(p => +p.toFixed(4)) })))
       setRegions(r.regions); setLabels(r.regions.map(() => ({ mult: '', j: '' })))
       setRefIdx(r.refIdx); setRefH(r.refValue); setShowPeaks(true); setThreshold(0.05)
       if (announce) setNote(`Auto-analysed: ${r.regions.length} signals. ${r.note} Check the integrals and multiplicities before using the text.`)
     } else {
-      const r = autoPeaks13C(s, 6)
+      const r = autoPeaks13C(s, 6, { negative: is13C(s) })
       setThreshold(6); setShowPeaks(true)
+      if (is13C(s)) setNegatives(true)
       if (announce) setNote(`Auto-picked ${r.peaks.length} peaks with signal-to-noise above 6${s.kind === 'nmr' ? '; solvent signals are left out of the list' : ''}.`)
     }
   }
@@ -128,20 +136,21 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
         if (!alive) return
         const r = restoreAnalysis(s, saved)  // shared with the Supporting Information builder (spectrumDraw.ts)
         setRaw(s); setOffset(r.offset)
+        setTypedFreq(r.frequency); setLegacy400(r.legacy400); setNegatives(r.negatives); setFreqText(r.frequency ? String(r.frequency) : '')
         setView(r.view)
         if (r.saved) {
           setRegions(r.saved.regions); setLabels(r.saved.labels); setRefIdx(r.saved.refIdx); setRefH(r.saved.refH)
         }
         if (r.threshold) setThreshold(r.threshold)
         if (r.residual) setResidual(r.residual)
-        if (r.auto) runAuto(shifted(s, r.offset), true, r.solventShift)
+        if (r.auto) runAuto(withFrequency(shifted(s, r.offset), r.frequency, r.legacy400), true, r.solventShift)
         setTimeout(() => { restored.current = true }, 0)
       } catch (e: any) { setErr(e.message) }
     }).catch(e => setErr(e.message))
     return () => { alive = false }
   }, [attachmentId, filename]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const spec = useMemo(() => (raw ? shifted(raw, offset) : null), [raw, offset])
+  const spec = useMemo(() => (raw ? withFrequency(shifted(raw, offset), typedFreq, legacy400) : null), [raw, offset, typedFreq, legacy400])
   useEffect(() => {
     if (!raw || !saved?.overlays?.length) return
     api.get<SpectrumListing[]>(`/api/spectra?near=${attachmentId}&limit=200`).then(list => {
@@ -149,20 +158,23 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
     }).catch(() => {})
   }, [raw]) // eslint-disable-line react-hooks/exhaustive-deps
   const withArea = useMemo(() => (spec ? regions.map(r => ({ ...r, area: integrate(spec, r.a, r.b) })) : []), [spec, regions])
-  const peaks = useMemo(() => (!spec || !view || !showPeaks ? [] : peaksIn(spec, view, threshold)), [spec, view, showPeaks, threshold])
+  // each signal's multiplet, worked out once (the table, the labels and the text all use it; 0.36.4 worked them out
+  // again on every move of the mouse, which on a big file held the page each time)
+  const mults: Multiplet[] = useMemo(() => (spec && isProton(spec) ? regions.map(r => analyzeMultiplet(spec, r.a, r.b)) : []), [spec, regions])
+  const peaks = useMemo(() => (!spec || !view || !showPeaks ? [] : peaksIn(spec, view, threshold, negatives)), [spec, view, showPeaks, threshold, negatives])
   const markers = useMemo(() => (spec ? solventMarkers(spec) : []), [spec])
   const observed: ObservedSignal[] = useMemo(() => {
     if (!spec || spec.kind !== 'nmr') return []
     if (is13C(spec)) return peaks.map(p => ({ lo: p.x, hi: p.x, center: p.x, h: null }))
     const ref = withArea[refIdx]?.area
-    return withArea.map(r => {
-      const m = isProton(spec) ? analyzeMultiplet(spec, r.a, r.b) : null
+    return withArea.map((r, i) => {
+      const m = isProton(spec) ? mults[i] : null
       return { lo: Math.min(r.a, r.b), hi: Math.max(r.a, r.b), center: m ? m.shift : (r.a + r.b) / 2, h: ref ? r.area / ref * refH : null }
     })
-  }, [spec, withArea, peaks, refIdx, refH])
+  }, [spec, withArea, mults, peaks, refIdx, refH])
   // one label per integrated 1H signal: "7.42 t, 2H", drawn above the multiplet
-  const signalTags = useMemo(() => (!spec || !isProton(spec) || !showSignals ? [] : signalTagsFor(spec, withArea, labels, refIdx, refH)),
-    [spec, withArea, labels, refIdx, refH, showSignals])
+  const signalTags = useMemo(() => (!spec || !isProton(spec) || !showSignals ? [] : signalTagsFor(spec, withArea, labels, refIdx, refH, mults)),
+    [spec, withArea, mults, labels, refIdx, refH, showSignals])
 
   useEffect(() => {
     if (!restored.current || !onSave) return
@@ -172,8 +184,11 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
       ...(overlays.length ? { overlays: overlays.map(o => o.id), overlay_mode: overlayMode } : {}),
       ...(raw?.fid ? { fid: { ph0: +raw.fid.ph0.toFixed(2), ph1: +raw.fid.ph1.toFixed(2), lb: raw.fid.lb } } : {}),
       ...(confirmed ? { assignments: confirmed } : {}),
+      // only for a ¹H file without a frequency, and not for an older analysis left as it was (it keeps its 400 MHz)
+      ...(raw && isProton(raw) && !raw.frequency && !legacy400 ? { frequency: typedFreq } : {}),
+      ...(negatives && raw && is13C(raw) ? { negatives: true } : {}),
     })
-  }, [regions, labels, refIdx, refH, threshold, offset, impurities, overlays, overlayMode, raw?.fid?.ph0, raw?.fid?.ph1, raw?.fid?.lb, confirmed]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [regions, labels, refIdx, refH, threshold, offset, impurities, overlays, overlayMode, raw?.fid?.ph0, raw?.fid?.ph1, raw?.fid?.lb, confirmed, typedFreq, legacy400, negatives]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- raw FID: phase and line broadening
   const setPhase = (ph0: number, ph1: number) => setRaw(r => (r?.fid ? { ...r, y: baselineCorrect(phased(r.fid, ph0, ph1)), fid: { ...r.fid, ph0, ph1 } } : r))
@@ -181,6 +196,13 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
     if (!raw?.fid || !bufRef.current) return
     const s = await parseSpectrumBuffer(bufRef.current, filename, { lb, ph0: raw.fid.ph0, ph1: raw.fid.ph1 })
     setRaw(s)
+  }
+
+  /** The spectrometer frequency typed in for a file that doesn't give it: J values and the automatic analysis follow. */
+  const applyFrequency = (v: number) => {
+    if (!(v >= 20 && v <= 1300) || !raw) return
+    setTypedFreq(v); setLegacy400(false); setFreqText(String(v))
+    if (!regions.length) runAuto(withFrequency(shifted(raw, offset), v, false), true, residual ? residual.found - residual.expected : 0)
   }
 
   // ---------------------------------------------------------------- prediction (NMRShiftDB2) and assignment
@@ -344,8 +366,10 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
   }
 
   const ref = withArea[refIdx]?.area
-  const summary = summarise(spec, withArea, labels, refIdx, refH, peaks)
+  const summary = summarise(spec, withArea, labels, refIdx, refH, peaks, mults)
   const freq = spec.frequency
+  const needsFreq = !!raw && isProton(raw) && !raw.frequency
+  const hint = needsFreq && !typedFreq ? frequencyHint(raw!, filename) : null
   const order = withArea.map((r, i) => ({ r, i })).sort((p, q) => (spec.reversed ? (q.r.a + q.r.b) - (p.r.a + p.r.b) : (p.r.a + p.r.b) - (q.r.a + q.r.b)))
   const fid = raw?.fid
   const hints: Record<Tool, string> = {
@@ -441,8 +465,20 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
             {overlayErr && <span className="error">{overlayErr}</span>}
           </div>
         )}
-        {(residual || note) && (
+        {(residual || note || needsFreq || raw?.warnings?.length) && (
           <div className="sp-notes">
+            {raw?.warnings?.map(w => <div key={w} className="sp-note warn" role="status"><span>{w}</span></div>)}
+            {needsFreq && <div className="sp-note warn sp-freq" role="status">
+              <span>{typedFreq ? <>Spectrometer frequency <b>{typedFreq} MHz</b>, as typed in: the file doesn't say it.</>
+                : legacy400 ? <>These J values were worked out as if this were a 400 MHz spectrum: the file doesn't say its frequency, and Benchtop before 0.36.5 assumed 400 MHz. They are only right if it was. {onSave ? 'Type the frequency to work them out again.' : 'Type the frequency to see them worked out again (the signed record isn\'t changed).'}</>
+                : <>The file doesn't say the spectrometer frequency, so there are no J values and no automatic analysis. Type it to get them.</>}</span>
+              <form className="row" style={{ gap: 6, flexWrap: 'nowrap' }} onSubmit={e => { e.preventDefault(); applyFrequency(Number(freqText.replace(',', '.'))) }}>
+                <input className="input sp-freq-in" inputMode="decimal" value={freqText} onChange={e => setFreqText(e.target.value)} aria-label="Spectrometer frequency in MHz" />
+                <span className="faint">MHz</span>
+                <button className="btn sm primary" disabled={!(Number(freqText.replace(',', '.')) >= 20 && Number(freqText.replace(',', '.')) <= 1300)}>Use</button>
+              </form>
+              {hint && <button className="btn sm" onClick={() => applyFrequency(hint)}>{hint} MHz (from the file name)</button>}
+            </div>}
             {residual && <div className="sp-note warn" role="status">
               <span>The {residual.label} residual is at <b>{residual.found.toFixed(3)}</b> ppm; it's usually {residual.expected.toFixed(2)}.</span>
               <button className="btn sm primary" onClick={() => {
@@ -488,7 +524,7 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
               </tr></thead>
               <tbody>
                 {order.map(({ r, i }) => {
-                  const auto = isProton(spec) ? analyzeMultiplet(spec, r.a, r.b) : null
+                  const auto = isProton(spec) ? mults[i] ?? null : null
                   const shown = auto ? applyLabel(auto, labels[i]) : null
                   const val = ref ? r.area / ref * refH : 0
                   return (
@@ -498,6 +534,7 @@ export default function SpectrumViewer({ attachmentId, filename, onInsert, saved
                         <td><select className="select" value={labels[i]?.mult || ''} onChange={e => setLabel(i, { mult: e.target.value })} aria-label="Multiplicity">
                           <option value="">{auto.mult} (auto)</option>{MULTIPLICITIES.map(m => <option key={m} value={m}>{m}</option>)}</select></td>
                         <td><input className="input sp-j" placeholder={auto.j.map(j => j.toFixed(1)).join(', ') || '—'} value={labels[i]?.j || ''}
+                          title={auto.noJ ? 'No J: the spectrometer frequency isn\'t known. Type it above the plot.' : undefined}
                           onChange={e => setLabel(i, { j: e.target.value })} aria-label="Coupling constants in Hz" /></td>
                       </>}
                       <td><RefInput value={val} onCommit={v => { setRefIdx(i); setRefH(v) }} /></td>

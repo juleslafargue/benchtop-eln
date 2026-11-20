@@ -249,8 +249,8 @@ test('broken files give a plain message, never a crash or a wrong spectrum', asy
   await assert.rejects(sp.parseSpectrumBuffer(zip({ '1/acqus': e.acqus, '1/pdata/1/procs': procs, '1/pdata/1/1r': new Uint8Array(4000) }), 't.zip'), /incomplete/)
   assert.throws(() => sp.parseJcamp('##TITLE=x\n##JCAMP-DX=5\n##END='), /No ##XYDATA/)
   assert.throws(() => sp.parseJcamp('##TITLE=x\n##JCAMP-DX=6\n##DATA TYPE=NMR SPECTRUM\n##NTUPLES=NMR SPECTRUM\n##SYMBOL=X,R,I\n##PAGE=N=1\n##END NTUPLES=\n'), /no real data page/)
-  // a file cut off half-way still reads what's there, with numbers only
+  // a file cut off half-way is refused with a plain message: 0.36.4 read what was there and stretched it over the whole
+  // axis, every peak at the wrong ppm (see spectra-numbers.test.mjs)
   const half = data('varian_1h.jdx.gz').toString('latin1')
-  const s = sp.parseJcamp(half.slice(0, Math.floor(half.length / 2)))
-  assert.ok(s.y.length > 1000 && Array.from(s.y).every(Number.isFinite))
+  assert.throws(() => sp.parseJcamp(half.slice(0, Math.floor(half.length / 2))), /looks cut off: it says it has 16,385 points but only 8,213 are there/)
 })

@@ -382,6 +382,11 @@ def _clean_analysis(a) -> dict | None:
     if overlays:
         out["overlays"] = overlays
         out["overlay_mode"] = "overlay" if a.get("overlay_mode") == "overlay" else "stack"
+    if "frequency" in a:  # 0.36.5: the spectrometer frequency typed in for a ¹H file that doesn't give it (None: not typed).
+        f = _num(a.get("frequency"))  # Its absence marks an older analysis, worked out as if at 400 MHz: kept as it was
+        out["frequency"] = round(f, 4) if f is not None and 20 <= f <= 1300 else None
+    if a.get("negatives") is True:  # 0.36.5: negative ¹³C lines (DEPT, APT) listed
+        out["negatives"] = True
     return out
 
 
