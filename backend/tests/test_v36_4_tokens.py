@@ -246,7 +246,7 @@ def test_a_right_password_still_works_and_isnt_counted(client, admin, fresh_fail
     for _ in range(4):  # the right one cleared the account's count
         assert client.post("/api/auth/login", json={"username": "tok_ok", "password": "wrong"}).status_code == 401
     codes = _all_at_once(6, lambda: client.post("/api/auth/login", json={"username": "tok_ok", "password": PW}).status_code)
-    assert codes.count(200) >= 1 and set(codes) <= {200, 429}, codes
+    assert codes == [200] * 6, codes  # right passwords at once are never counted as wrong ones
 
 
 # ------------------------------------------------------------------ the lab server (Docker, behind Caddy)

@@ -15,7 +15,7 @@ from .. import passwords
 from ..patching import cleaned
 from ..models import AuthSession, utcnow
 from ..security import (MAX_PER_ACCOUNT, MAX_PER_IP, DB, Admin, CurrentUser, burn_time, clear_failures, client_ip,
-                        end_sessions, hash_password, needs_rehash, release_attempt, reserve_attempt, revoke_tokens,
+                        end_sessions, hash_password, needs_rehash, password_attempt, record_failure, revoke_tokens,
                         start_session, verify_password)
 
 router = APIRouter(prefix="/api", tags=["auth"])
@@ -239,13 +239,13 @@ def change_username(body: UsernameIn, user: CurrentUser, session: DB):
 def _confirm_password(session, user: User, password: str) -> None:
     """Re-check someone's password before a sensitive change; guesses are throttled like sign-ins."""
     key = f"confirm:{user.id}"
-    reserved = reserve_attempt((key, MAX_PER_ACCOUNT))  # counted before it's checked (0.36.4)
-    if not verify_password(password, user.password_hash):
-        audit.record(session, user, "password_check_failed", "user", user.id)
-        session.commit()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password is wrong")
-    release_attempt(session, reserved)
-    clear_failures(session, key)
+    with password_attempt(session, (key, MAX_PER_ACCOUNT)):  # one at a time (0.36.4)
+        if not verify_password(password, user.password_hash):
+            record_failure(session, key)
+            audit.record(session, user, "password_check_failed", "user", user.id)
+            session.commit()
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password is wrong")
+        clear_failures(session, key)
 
 
 def _default_admin_untouched(session) -> bool:
@@ -261,25 +261,22 @@ def _is_local(request: Request) -> bool:
 def login(body: LoginIn, request: Request, session: DB):
     name = body.username.strip().lower()
     acct_key, ip_key = f"login:{name}", f"ip:{client_ip(request)}"
-    # counted as a wrong guess before it's checked, so guesses sent all at once are throttled too (0.36.4)
-    reserved = reserve_attempt((acct_key, MAX_PER_ACCOUNT), (ip_key, MAX_PER_IP))
-    user = (session.exec(select(User).where(User.username == body.username)).first()
-            or session.exec(select(User).where(User.username == name)).first())
-    if user is None:
-        burn_time(body.password)  # same delay as a real check, so usernames can't be probed by timing
-    ok = bool(user) and user.active and verify_password(body.password, user.password_hash)
-    if ok:
-        release_attempt(session, reserved)
-    if ok and user.username == settings.admin_username and _default_admin_untouched(session):
-        session.commit()
+    # one check at a time per account and address, so guesses sent all at once are throttled too (0.36.4)
+    with password_attempt(session, (acct_key, MAX_PER_ACCOUNT), (ip_key, MAX_PER_IP)):
+        user = (session.exec(select(User).where(User.username == body.username)).first()
+                or session.exec(select(User).where(User.username == name)).first())
+        if user is None:
+            burn_time(body.password)  # same delay as a real check, so usernames can't be probed by timing
+        ok = bool(user) and user.active and verify_password(body.password, user.password_hash)
+        if not ok:
+            record_failure(session, acct_key, ip_key)
+            audit.record(session, None, "login_failed", "user", user.id if user else None,
+                         username=body.username, ip=client_ip(request))
+            session.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
+    if user.username == settings.admin_username and _default_admin_untouched(session):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Finish setting up Benchtop first: create your own account on the welcome screen")
-    if not ok:
-        audit.record(session, None, "login_failed", "user", user.id if user else None,
-                     username=body.username, ip=client_ip(request))
-        session.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
     if not settings.password_login and user.role != Role.admin:  # admins keep a password as a way in if SSO breaks
-        session.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This Benchtop uses single sign-on; use the sign-in button instead")
     clear_failures(session, acct_key)
     if needs_rehash(user.password_hash):  # quietly move older hashes to the current strength

@@ -10,9 +10,11 @@ import hmac
 import json
 import re
 import secrets
+import threading
 import time
+from contextlib import contextmanager
 from datetime import timedelta
-from typing import Annotated
+from typing import Annotated, Iterator
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -184,30 +186,31 @@ def record_failure(session: Session, *keys: str) -> None:
         session.delete(f)
 
 
-def reserve_attempt(*keys_limits: tuple[str, int]) -> list[int]:
-    """Count a password attempt as a wrong one before checking it, as one step with the throttle check, and return
-    what to take back if it turns out right (release_attempt). 0.36.4: the check, the slow password comparison and
-    noting a failure were separate steps, so 25 guesses sent at the same moment were all checked, not 5 and then
-    "too many". Done in its own short transaction, so it counts at once whatever the request does next."""
-    from . import audit
-    from .db import engine
-    with Session(engine) as s:
-        audit._take_write_lock(s)
-        check_throttle(s, *keys_limits)  # 429, and nothing written
-        rows = [AuthFailure(key=k) for k, _ in keys_limits]
-        s.add_all(rows)
-        for f in s.exec(select(AuthFailure).where(AuthFailure.at < utcnow() - timedelta(days=1)).limit(500)).all():
-            s.delete(f)  # keep the table small
-        s.commit()
-        return [r.id for r in rows]
+_attempt_locks: dict[str, threading.Lock] = {}
+_attempt_guard = threading.Lock()
 
 
-def release_attempt(session: Session, ids: list[int]) -> None:
-    """The password was right after all: it isn't a wrong guess."""
-    for i in ids:
-        f = session.get(AuthFailure, i)
-        if f is not None:
-            session.delete(f)
+@contextmanager
+def password_attempt(session: Session, *keys_limits: tuple[str, int]) -> Iterator[None]:
+    """One password check at a time for each key (an account, a signature, an address): the throttle check, the
+    password comparison and noting a wrong one happen as one step, so guesses sent all at once are throttled like
+    guesses sent one after the other (0.36.4: 25 at once were all checked, not 5 and then "too many"). A right
+    password is never counted as a wrong one. Inside the block the caller checks the password and, if it's wrong,
+    records the failure and commits before leaving it. Benchtop runs as one process, so a lock in memory is enough."""
+    keys = sorted({k for k, _ in keys_limits})
+    with _attempt_guard:
+        if len(_attempt_locks) > 5000:  # forget keys nobody is using (many different usernames tried)
+            for k in [k for k, lk in _attempt_locks.items() if not lk.locked()]:
+                del _attempt_locks[k]
+        locks = [_attempt_locks.setdefault(k, threading.Lock()) for k in keys]
+    for lk in locks:
+        lk.acquire()
+    try:
+        check_throttle(session, *keys_limits)
+        yield
+    finally:
+        for lk in reversed(locks):
+            lk.release()
 
 
 def clear_failures(session: Session, key: str) -> None:
