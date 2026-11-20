@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useApp } from '../App'
 import type { EntryEditorProps } from './EntryCard'
 import { NumInput as AmountInput } from './bits'
@@ -47,12 +48,16 @@ const AMOUNT_UNIT: Record<string, 'mg' | 'mL' | 'mmol' | 'h' | 'M' | 'C'> = { mg
  *  value back, and a whole-number field took 0.5). Text that can't be read stays in the box, with why, and the value
  *  is kept; "1 000" is 1000 and "0,5" is 0.5; Escape puts back what was there. Saved after a pause in typing. */
 function NumInput({ f, v, set, compact, label, disabled }: { f: CField; v: any; set: (v: any) => void; compact?: boolean; label: string; disabled: boolean }) {
-  return (
+  const [problem, setProblem] = useState('')  // said under the box, which keeps its width
+  return (<>
     <span className="cf-num">
       <AmountInput className="input" label={label} value={typeof v === 'number' ? v : null} onCommit={set} live={600} disabled={disabled}
-        unit={f.unit ? AMOUNT_UNIT[f.unit] : undefined} whole={f.decimals === 0} nd={f.decimals ?? 6} placeholder={f.placeholder} required={f.required} />
+        unit={f.unit ? AMOUNT_UNIT[f.unit] : undefined} whole={f.decimals === 0} nd={f.decimals ?? 6} placeholder={f.placeholder} required={f.required}
+        onProblem={(_, p) => setProblem(p)} />
       {f.unit && !compact && <span className="cf-unit">{f.unit}</span>}
-    </span>)
+    </span>
+    {problem && <span className="num-problem" role="alert">{problem}</span>}
+  </>)
 }
 
 export default function CustomEntry({ content, onChange, readOnly }: EntryEditorProps) {

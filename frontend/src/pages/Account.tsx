@@ -57,7 +57,7 @@ function SsoLink({ name, hasPassword }: { name: string; hasPassword: boolean }) 
   return (
     <div className="section">
       <div className="spread" style={{ alignItems: 'center' }}>
-        <div><div className="faint">Single sign-on ({name})</div>{linked === null ? '…' : linked.length
+        <div><div className="faint">Single sign-on{name.toLowerCase() === 'single sign-on' ? '' : ` (${name})`}</div>{linked === null ? '…' : linked.length
           ? <span>Linked{linked[0].email ? ` (${linked[0].email})` : ''}</span> : <span>Not linked</span>}</div>
         {hasPassword && linked !== null && !linked.length && <button className="btn" onClick={() => { setAsking(true); setErr('') }}>Link {name}</button>}
       </div>

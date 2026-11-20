@@ -226,6 +226,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += beyond_chemistry(browser, tok["hweiss"])
         problems += zoomed(browser, tok["slaurent"])
         problems += reaction_headings(browser, tok["slaurent"])
+        problems += data_and_security(browser, tok["hweiss"], tok["slaurent"])
         browser.close()
     return problems
 
@@ -2653,6 +2654,223 @@ def reaction_headings(browser, token: str) -> list[tuple[str, str, str, str]]:
     except Exception as ex:  # noqa: BLE001
         found.append(("reaction headings", path, "error", str(ex).splitlines()[0][:160]))
     ctx.close()
+    return found
+
+
+def data_and_security(browser, admin_token: str, token: str) -> list[tuple[str, str, str, str]]:
+    """0.36.4 (found by the 0.36.2 stress test), on a slow network (each change takes 0.8 s):
+    - a double click on Record change, Add lot, Add anyway, Register, Create group or New document sends it once;
+    - Deduct amounts from inventory: the "used" mark stays after the section saves and after a reload, so nothing is
+      deducted twice; a double click in its confirmation deducts once; a note typed while it runs stays;
+    - plugin sections keep a space or a new line typed before a pause, and their number boxes refuse what they can't
+      read ("1,000", "0.5" in a whole-number box) with a message, keeping the value, as the reaction table's do."""
+    print("Inventory, double clicks, deducting, and plugin sections (typing and number boxes)…", flush=True)
+    found: list[tuple[str, str, str, str]] = []
+    H, HA = {"Authorization": "Bearer " + token}, {"Authorization": "Bearer " + admin_token}
+
+    def bad(kind: str, what: str) -> None:
+        found.append(("data and security", "", kind, what))
+
+    def get(path: str, h=None):
+        return httpx.get(B + path, headers=h or H).json()
+
+    def page(t: str = token):
+        ctx = browser.new_context(viewport={"width": 1300, "height": 900})
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{t}')")
+        pg = ctx.new_page()
+        pg.on("pageerror", lambda e: bad("page error", str(e)[:150]))
+        pg.on("response", lambda r: "/api/" in r.url and r.status >= 500 and bad(f"HTTP {r.status}", r.url.replace(B, "")))
+        return ctx, pg
+
+    stamp = str(int(time.time()))
+    nb = httpx.post(B + "/api/notebooks", headers=H, json={"name": f"Data and security check {stamp}"}).json()
+    mat = httpx.post(B + "/api/materials", headers=H, json={"name": f"Benzoic acid (smoke {stamp})", "mw": 122.12}).json()
+    lot = httpx.post(f"{B}/api/materials/{mat['id']}/lots", headers=H, json={"amount": 25, "unit": "g", "barcode": f"SMOKE-{stamp}"}).json()
+
+    def ledger() -> list[dict]:
+        return get(f"/api/lots/{lot['id']}/transactions")
+
+    # 1. Record change (Inventory › Scan › Record use or correction), double-clicked
+    ctx, pg = page()
+    slow = Slow(pg, "**/api/lots/*/transactions", 0.8, method="POST")
+    try:
+        n0 = len(ledger())
+        pg.goto(B + "/inventory")
+        pg.get_by_role("button", name="Scan").first.click()
+        pg.locator("#scan-typed").fill(lot["barcode"])
+        pg.keyboard.press("Enter")
+        pg.get_by_role("button", name="Record use or correction").click()
+        d = pg.locator("dialog[open]").last
+        d.get_by_label("Amount").fill("0.5")
+        pg.wait_for_timeout(200)
+        d.get_by_role("button", name="Record change").dblclick()
+        slow.pump(3)
+        if len(ledger()) - n0 != 1:
+            bad("double click", f"a double click on Record change recorded {len(ledger()) - n0} withdrawals")
+    finally:
+        slow.release()
+        ctx.close()
+
+    # 2. Add lot with a new barcode, and Add anyway, double-clicked
+    ctx, pg = page()
+    slow = Slow(pg, "**/api/materials/*/lots", 0.8, method="POST")
+    try:
+        for case in ("add lot", "add anyway"):
+            n0 = len(get(f"/api/materials/{mat['id']}")["lots"])
+            pg.goto(f"{B}/materials/{mat['id']}")
+            pg.get_by_role("button", name="Receive lot").click()
+            d = pg.locator("dialog[open]")
+            d.get_by_label("Amount").fill("5")
+            d.get_by_label("Barcode", exact=True).fill(f"DBL-{stamp}" if case == "add lot" else lot["barcode"])
+            pg.wait_for_timeout(300)
+            d.get_by_role("button", name="Add lot").dblclick()
+            slow.pump(2.5)
+            if case == "add anyway":
+                d.get_by_role("button", name="Add anyway").dblclick()
+                slow.pump(2.5)
+            made = len(get(f"/api/materials/{mat['id']}")["lots"]) - n0
+            if made != 1:
+                bad("double click", f"a double click on {case.title()} added {made} lots")
+    finally:
+        slow.release()
+        ctx.close()
+
+    # 3. Create group (an admin) and New document (Supporting information), double-clicked
+    ctx, pg = page(admin_token)
+    slow = Slow(pg, "**/api/groups", 0.8, method="POST")
+    try:
+        g0 = len(get("/api/groups", HA))
+        pg.goto(B + "/groups")
+        pg.get_by_role("button", name="New group").click()
+        d = pg.locator("dialog[open]")
+        d.locator("input").first.fill(f"Double-clicked group {stamp}")
+        d.get_by_role("button", name="Create group").dblclick()
+        slow.pump(2.5)
+        if len(get("/api/groups", HA)) - g0 != 1:
+            bad("double click", f"a double click on Create group made {len(get('/api/groups', HA)) - g0} groups")
+        if pg.locator(".error").count():
+            bad("double click", f"Create group says {pg.locator('.error').first.inner_text()!r}")
+    finally:
+        slow.release()
+        ctx.close()
+    ctx, pg = page()
+    slow = Slow(pg, "**/api/si-documents", 0.8, method="POST")
+    try:
+        s0 = len(get("/api/si-documents"))
+        pg.goto(B + "/si")
+        pg.get_by_label("Paper title").fill(f"Double-clicked paper {stamp}")
+        pg.get_by_role("button", name="New document").dblclick()
+        slow.pump(2.5)
+        if len(get("/api/si-documents")) - s0 != 1:
+            bad("double click", f"a double click on New document made {len(get('/api/si-documents')) - s0} documents")
+    finally:
+        slow.release()
+        ctx.close()
+
+    # 4. Deduct amounts from inventory, and Register a product
+    exp = httpx.post(B + "/api/experiments", headers=H, json={"title": f"Deduct once {stamp}", "notebook_id": nb["id"]}).json()
+    smiles = "C" * 19 + "O"
+    rows = [{"role": "reactant", "name": "Benzoic acid", "smiles": "", "mw": 122.12, "material_id": mat["id"], "lot_id": lot["id"],
+             "limiting": True, "basis": "mass", "mass_mg": 50, "equiv": 1},
+            {"role": "product", "name": f"Nonadecanol {stamp}", "smiles": smiles, "equiv": 1, "basis": "equiv", "actual_mass_mg": 30}]
+    rxn = next(e for e in get(f"/api/experiments/{exp['id']}")["entries"] if e["kind"] == "reaction")
+    httpx.put(f"{B}/api/entries/{rxn['id']}", headers=H, json={"content": {"rows": rows}})
+    sec = f"#entry-{rxn['id']}"
+    stored = lambda: next(e for e in get(f"/api/experiments/{exp['id']}")["entries"] if e["id"] == rxn["id"])["content"]  # noqa: E731
+    ctx, pg = page()
+    slow = Slow(pg, "**/api/lots/*/transactions", 1.5, method="POST")
+    try:
+        n0 = len(ledger())
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        pg.wait_for_selector(f"{sec} .rxn-grid")
+        pg.locator(sec).get_by_role("button", name="Deduct amounts from inventory").click()
+        pg.locator("dialog[open]").get_by_role("button", name="Deduct 1 amount").dblclick()
+        name = pg.locator(f"{sec} input[aria-label='Name']").first  # typed while it runs (0.36.4: put back as it was)
+        name.click()
+        name.press("End")
+        pg.keyboard.type(" (typed meanwhile)")
+        slow.pump(4)
+        pg.wait_for_timeout(2500)  # the section saves itself
+        if len(ledger()) - n0 != 1:
+            bad("deduct", f"Deduct took {len(ledger()) - n0} amounts from the lot (one row, deducted once)")
+        if not stored()["rows"][0].get("deducted"):
+            bad("deduct", "the used mark wasn't saved, so Deduct is offered again")
+        if "(typed meanwhile)" not in stored()["rows"][0]["name"]:
+            bad("deduct", f"what was typed while deducting was wiped: {stored()['rows'][0]['name']!r}")
+        pg.reload()
+        pg.wait_for_selector(f"{sec} .rxn-grid")
+        if not pg.locator(f"{sec} .used").count():
+            bad("deduct", "after a reload the row no longer shows it was used")
+    finally:
+        slow.release()
+        ctx.close()
+    ctx, pg = page()
+    slow = Slow(pg, "**/api/materials/register-product", 0.8, method="POST")
+    try:
+        pg.goto(f"{B}/experiments/{exp['id']}")
+        pg.wait_for_selector(f"{sec} .rxn-grid")
+        pg.locator(sec).get_by_role("button", name="Register").dblclick()
+        slow.pump(3)
+        same = [m for m in get(f"/api/materials?q=Nonadecanol {stamp}") if m["name"] == f"Nonadecanol {stamp}"]
+        if len(same) != 1:
+            bad("double click", f"a double click on Register made {len(same)} materials for one product")
+    finally:
+        slow.release()
+        ctx.close()
+
+    # 5. plugin sections: a pause after a space or Enter, and number boxes
+    pexp = httpx.post(B + "/api/experiments", headers=H, json={"title": f"Cell culture {stamp}", "notebook_id": nb["id"], "sections": "no_chemistry"}).json()
+    r = httpx.post(f"{B}/api/experiments/{pexp['id']}/entries", headers=H, json={"kind": "custom", "plugin_section": "cell-biology/passage"})
+    if r.status_code != 201:
+        bad("plugin", f"couldn't add a cell-culture section ({r.status_code})")
+        return found
+    pent = r.json()
+    psec = f"#entry-{pent['id']}"
+    values = lambda: next(e for e in get(f"/api/experiments/{pexp['id']}")["entries"] if e["id"] == pent["id"])["content"]["values"]  # noqa: E731
+    ctx, pg = page()
+    try:
+        pg.goto(f"{B}/experiments/{pexp['id']}")
+        pg.wait_for_selector(psec)
+        box = pg.locator(psec).get_by_label("Medium")
+        box.click()
+        pg.keyboard.type("DMEM ", delay=20)
+        pg.wait_for_timeout(2500)  # it saves itself meanwhile
+        pg.keyboard.type("high glucose", delay=20)
+        pg.wait_for_timeout(2500)
+        if box.input_value() != "DMEM high glucose" or values().get("medium") != "DMEM high glucose":
+            bad("plugin", f"a space typed before a pause was lost: box {box.input_value()!r}, saved {values().get('medium')!r}")
+        via = pg.locator(psec).get_by_label("Viability")
+        via.click()
+        via.fill("7")
+        pg.keyboard.press("Tab")
+        pg.wait_for_timeout(2000)
+        for typed in ("1,000", "abc", "1e400", "0x10"):
+            via.click()
+            via.fill(typed)
+            pg.keyboard.press("Tab")
+            pg.wait_for_timeout(1500)
+            said = pg.locator(f"{psec} .num-problem").all_inner_texts()
+            if values().get("viability") != 7 or via.input_value() != typed or not said:
+                bad("plugin number", f"{typed!r} in Viability: box {via.input_value()!r}, saved {values().get('viability')!r}, said {said}")
+            via.click()
+            pg.keyboard.press("Escape")  # back to what was there
+            if via.input_value() != "7":
+                bad("plugin number", f"Escape after {typed!r} shows {via.input_value()!r}, not 7")
+        via.click()
+        via.fill("1 000")
+        pg.keyboard.press("Tab")
+        pg.wait_for_timeout(2000)
+        if values().get("viability") != 1000:
+            bad("plugin number", f"'1 000' was saved as {values().get('viability')!r}")
+        whole = pg.locator(psec).get_by_label("From passage")
+        whole.click()
+        whole.fill("0.5")
+        pg.keyboard.press("Tab")
+        pg.wait_for_timeout(1500)
+        if values().get("from_p") is not None or "Whole numbers" not in " ".join(pg.locator(f"{psec} .num-problem").all_inner_texts()):
+            bad("plugin number", f"0.5 in a whole-number box: saved {values().get('from_p')!r}")
+    finally:
+        ctx.close()
     return found
 
 
