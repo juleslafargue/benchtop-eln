@@ -99,8 +99,8 @@ def test_a_first_look_at_a_big_folder_doesnt_hold_the_database(client, users, no
         (d / f"old {i}.csv").write_text(str(i))
     real_discover, seen = instruments.discover, {}
 
-    def discover(root, kind):
-        for n, item in enumerate(real_discover(root, kind)):
+    def discover(root, kind, problems=None):
+        for n, item in enumerate(real_discover(root, kind, problems)):
             if n == 900:
                 seen["in_time"], seen["save"] = colleague_saves_while(client, users["alice"], notebook, lambda: None)
             yield item

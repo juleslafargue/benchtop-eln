@@ -669,10 +669,11 @@ def scan(session: Session, inst: Instrument, now: Optional[datetime] = None) -> 
         if row.state == "settling" and now - row.changed_at >= quiet:
             due.append((row, p))
     # gone before it was taken (deleted, or renamed while being copied). Not when Benchtop couldn't look: inside a
-    # subfolder it couldn't list, or when the whole folder lists as empty (a share or drive not really there)
+    # subfolder it couldn't list, or when a folder that holds files Benchtop has seen lists as completely empty (a share
+    # or drive not really there: an unmounted drive leaves an empty folder behind)
     blind = [k for k, exc in looked if isinstance(exc, UnreadableFolder)]
     missing = [rel for rel, row in latest.items() if row.state == "settling" and rel not in seen]
-    if missing and not seen:
+    if missing and not seen and any(r.state not in ("settling", "vanished") for r in latest.values()):
         counts["problems"].append(("", EmptyLook(len(missing))))
     else:
         for rel in missing:

@@ -25,3 +25,9 @@ test('a small change to a big lot is shown in a smaller unit, not as 0', () => {
   assert.equal(d.amountText(5, 'mL'), '5 mL')
   assert.equal(d.amountText(0, 'kg'), '0 kg')
 })
+
+test('the balance beside it shows that it changed', () => {
+  assert.equal(d.balanceText(1 - 4e-7), '0.9999996')
+  assert.equal(d.balanceText(0.25), '0.25')
+  assert.equal(d.balanceText(1), '1')
+})

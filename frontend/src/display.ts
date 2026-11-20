@@ -26,3 +26,7 @@ export function amountText(v: number | null | undefined, unit: string): string {
   for (const [u, f] of SMALLER[unit] || []) if (Math.abs(v * f) >= 0.1 || u === SMALLER[unit][SMALLER[unit].length - 1][0]) return `${fmt(v * f, 4)} ${unitLabel(u)}`
   return `${Number(v.toPrecision(3))} ${unitLabel(unit)}`
 }
+/** A lot's balance in the usage list: to 4 decimals, or as many significant figures as it takes to show it isn't the
+ *  round number next to it (1 kg less 0.4 mg is 0.9999996, not "1"). */
+export const balanceText = (v: number | null | undefined): string =>
+  v == null || !Number.isFinite(v) ? '' : Number(v.toFixed(4)) === v ? String(v) : String(Number(v.toPrecision(10)))

@@ -127,6 +127,7 @@ def test_a_folder_that_lists_empty_is_a_look_that_failed_not_everything_gone(cli
     exp = _exp(client, h, "Empty mount")
     folder = tmp_path / "mnt"
     folder.mkdir()
+    (folder / "last year.csv").write_text("already there")  # a drive with files on it
     inst = add(folder)
     scan(0)
     f = folder / f"{exp['eid']} run.csv"

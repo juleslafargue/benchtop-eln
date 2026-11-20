@@ -240,7 +240,7 @@ run `docker compose … up -d` again, and in **Admin → Instruments** use paths
 | Setting | Default | |
 |---|---|---|
 | `BENCHTOP_INSTRUMENT_SCAN_SECONDS` | `60` | how often the folders are looked through; `0` turns watching off |
-| `BENCHTOP_INSTRUMENT_MAX_MB` | `2048` | the largest arrival copied in; bigger ones wait in the Inbox with a note |
+| `BENCHTOP_INSTRUMENT_MAX_MB` | `2048` | the largest arrival copied in, in MB of 1,000,000 bytes (as the Finder counts them); bigger ones wait in the Inbox with a note |
 
 **Disk space.** Instrument data is copied into Benchtop's data folder, so the disk holding it needs room for
 it (raw LC-MS data can be hundreds of MB per run). Backups keep each file only once, so they grow by about
