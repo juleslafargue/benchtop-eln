@@ -58,6 +58,9 @@ def _notify(session, uid: int, kind: str, actor: User, exp: Experiment, c: Comme
     if uid == actor.id or uid in done:
         return
     done.add(uid)
+    u = session.get(User, uid)
+    if u is None or not access_for(session, u).can_read(exp):
+        return  # 0.36.6: someone who commented once but can't open the record now (left its group) isn't told of replies
     session.add(Notification(user_id=uid, kind=kind, actor_id=actor.id, experiment_id=exp.id, comment_id=c.id, text=text))
 
 
@@ -192,8 +195,10 @@ def list_notifications(user: CurrentUser, session: DB, limit: int = 30, unread: 
         if exp is not None and not acc.can_read(exp):  # access was taken away since
             continue
         out.append(notification_out(session, n))
-    count = len(session.exec(select(Notification.id).where(Notification.user_id == user.id, Notification.read_at == None)).all())  # noqa: E711
-    return {"items": out, "unread": count}
+    # 0.36.6: only the ones this person can still see (the badge said 3 while the list showed 1)
+    unread = session.exec(select(Notification.experiment_id).where(Notification.user_id == user.id, Notification.read_at == None)).all()  # noqa: E711
+    hidden = {e.id for e in session.exec(select(Experiment).where(Experiment.id.in_({x for x in unread if x}))) if not acc.can_read(e)}
+    return {"items": out, "unread": sum(1 for x in unread if x not in hidden)}
 
 
 class ReadIn(BaseModel):

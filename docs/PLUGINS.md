@@ -78,15 +78,16 @@ description = "O₂ and H₂O levels and items transferred"
 | `default` | all but longtext | Starting value |
 | `width` | fields | `third`, `half` (the default) or `full` (the default for `longtext`) |
 | `unit` | number | Shown after the box and in exports |
-| `min`, `max` | number | Out-of-range values are flagged |
+| `min`, `max` | number | Out-of-range values are flagged (`min` can't be larger than `max`) |
+| `decimals` | number | How many digits after the decimal point, 0 to 10; 0 allows whole numbers only (a passage number) |
 | `warn_below`, `warn_above` | number | A warning (with your `help` text) when crossed |
-| `options` | select | The list of choices |
+| `options` | select | The list of choices (up to 60); a `default` must be one of them |
 
 Checkbox fields are drawn as a checklist and count towards "*n* of *m* ticked".
 
 ### Tables
 
-A table has an `id`, a `label`, optional `help` and `min_rows`, and a list of `[[sections.tables.columns]]`. Columns take the same options as fields, but only the types `text`, `number`, `select`, `checkbox` and `date`. A required column must be filled in on every row that has anything in it. `min_rows` sets how many rows are needed before signing.
+A table has an `id`, a `label`, optional `help` and `min_rows`, and a list of `[[sections.tables.columns]]`. Columns take the same options as fields, but only the types `text`, `number`, `select`, `checkbox` and `date`. A required column must be filled in on every row that has anything in it. `min_rows` sets how many rows are needed before signing: a whole number from 0 to 500 (a table keeps up to 500 rows).
 
 ## Instrument-file readers
 
@@ -120,5 +121,5 @@ A reader needs a `filename` pattern, a `detect` pattern or both, so it isn't tri
 
 - **Only admins** can add, switch on or remove plugins. Everyone can use the section types of switched-on plugins.
 - Adding, enabling, disabling and removing a plugin are recorded in the audit trail, with the file's SHA-256.
-- Files are limited to 200 KB; definitions are checked thoroughly, and a file with a mistake is listed with the reason instead of being loaded.
+- Files are limited to 200 KB; definitions are checked thoroughly, and a file with a mistake is listed with the reason instead of being loaded. Values have to be of the right kind: `true` and `false` without quotes, numbers without quotes, text in quotes, and lists in square brackets. The message names the value that's wrong, for example "sections.glovebox.f: required must be true or false (without quotes), not text".
 - The plugin format is versioned (`api = 1`). If a future Benchtop changes it, it will say which files need updating rather than misreading them.

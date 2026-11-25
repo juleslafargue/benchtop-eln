@@ -990,6 +990,8 @@ table.grid select:disabled { background-image: none; padding-right: 4px !importa
   white-space: pre-wrap; word-break: break-all; margin: 4px 0 8px; }
 .hook-row, .plugin-row { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; }
 .hook-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 520px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+.hook-failing { margin-top: 4px; padding: 6px 10px; border-left: 3px solid var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--paper)); color: var(--ink); font-size: 13px; border-radius: 4px; overflow-wrap: anywhere; }
+.hook-failing strong { color: color-mix(in srgb, var(--danger) 80%, var(--ink)); }
 .hook-actions { display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-end; align-items: center; flex: none; max-width: 52%; }
 .hook-events { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .hook-events legend { font-size: 13px; color: var(--ink-2); margin-bottom: 4px; }

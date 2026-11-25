@@ -97,7 +97,8 @@ function NewToken({ viewer, onClose, onMade }: { viewer: boolean; onClose: () =>
 // ====================================================================== webhooks (Admin page)
 
 interface Delivery { id: number; event: string; created_at: string; status_code: number | null; ok: boolean; error: string; attempts: number; duration_ms: number | null }
-interface Hook { id: number; name: string; url: string; events: string[]; format: 'json' | 'slack' | 'teams'; include_private: boolean; active: boolean; has_secret: boolean; created_at: string; last: Delivery | null; secret?: string }
+interface Failing { count: number; more: boolean; since: string; last_ok_at: string | null; error: string }
+interface Hook { id: number; name: string; url: string; events: string[]; format: 'json' | 'slack' | 'teams'; include_private: boolean; active: boolean; has_secret: boolean; created_at: string; last: Delivery | null; failing?: Failing | null; secret?: string }
 
 export function Webhooks() {
   const { toast } = useApp()
@@ -133,9 +134,12 @@ export function Webhooks() {
               <span className="tag" style={{ marginLeft: 8 }}>{{ json: 'JSON', slack: 'Slack', teams: 'Teams' }[h.format]}</span>
               {!h.active && <span className="tag" style={{ marginLeft: 6 }}>paused</span>}
               <div className="faint hook-url" title={h.url}>{h.url}</div>
-              <div className="faint">{h.events.map(e => e.replace('experiment.', '').replace('.created', ' created')).join(', ')}{h.include_private ? ' · includes private notebooks' : ''}</div>
-              {h.last && <div className={h.last.ok ? 'ok-text' : 'warn-text'} style={{ fontSize: 13 }}>
-                {h.last.ok ? '✓' : '✗'} Last delivery {ago(h.last.created_at)}: {h.last.event}, {h.last.ok ? `HTTP ${h.last.status_code}` : h.last.error}</div>}
+              <div className="faint">{h.events.map(e => e.replace('experiment.', '').replace('.created', ' created')).join(', ')}{h.include_private ? ' · includes group-only and private notebooks' : ''}</div>
+              {h.failing ? <div className="hook-failing" role="status">
+                <strong>Failing: {h.failing.count === 1 ? 'the latest delivery' : `the last ${h.failing.count}${h.failing.more ? '+' : ''} deliveries`} didn't arrive</strong>
+                {' '}(since {ago(h.failing.since)}; {h.failing.last_ok_at ? `the last one that arrived was ${ago(h.failing.last_ok_at)}` : 'none has arrived yet'}).
+                <div>{h.failing.error}</div></div>
+                : h.last && <div className="ok-text" style={{ fontSize: 13 }}>✓ Last delivery {ago(h.last.created_at)}: {h.last.event}, HTTP {h.last.status_code}</div>}
             </div>
             <div className="hook-actions">
               <button className="btn ghost sm" onClick={() => test(h)}>Send test</button>
@@ -191,7 +195,7 @@ function HookForm({ hook, events, onClose, onSaved }: { hook: Hook | null; event
             <input type="checkbox" checked={f.events.includes(k)} onChange={e => setF({ ...f, events: e.target.checked ? [...f.events, k] : f.events.filter(x => x !== k) })} />{label}</label>)}
         </fieldset>
         <label className="row" style={{ gap: 8 }}><input type="checkbox" checked={f.include_private} onChange={e => setF({ ...f, include_private: e.target.checked })} />
-          Include experiments in private notebooks (their titles would be sent too)</label>
+          Include experiments in group-only and private notebooks (their titles would be sent too)</label>
         {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
       </div>
     </Modal>

@@ -353,11 +353,36 @@ def is_from_benchtop(body: bytes, header: str, secret: str) -> bool:
 ### What's sent, and when
 
 - **Identifiers only, never record content.** A payload has the experiment's number, title, status, author, notebook and link, plus who did what. A returned or voided experiment also carries the reason given.
-- **Private notebooks are left out** unless you tick *Include experiments in private notebooks*.
+- **Records not everyone can read are left out**: those in group-only and private notebooks (before 0.36.6, group-only notebooks' titles were sent). Tick *Include experiments in group-only and private notebooks* only for a receiver that just those people can see.
 - **Events are sent only after the change is saved.** A failed action, like a wrong signing password, sends nothing.
-- **Delivery runs in the background.** It's retried up to three times when the receiver is down or busy (network errors, HTTP 5xx or 429). It isn't retried when the receiver refuses (other 4xx).
-- **History:** each webhook keeps its last 50 deliveries. **Send test** sends a test message.
+- **Delivery runs in the background**, never in the request that caused it, and each webhook has its own queue, so a receiver that is slow or down only delays its own messages.
+- **Short time limits.** Each try has 5 seconds to connect and 15 seconds in all. Benchtop reads only the status of the reply (200, 404…), never what the receiver sends back.
+- **Three tries at most**: when the receiver is down, doesn't answer in time or is busy (HTTP 5xx or 429), Benchtop tries again 30 seconds later and then 2 minutes later, and then stops. It doesn't try again when the receiver refuses (other 4xx).
+- **Redirects aren't followed.** If the receiver answers with a redirect (HTTP 3xx), the delivery is recorded as failed: put the final address in the webhook.
+- **History:** each webhook keeps its last 50 deliveries. **Send test** sends a test message and shows the answer. When the latest delivery failed, Admin → Integrations says so in red, with how many in a row have failed, since when, and the last time one arrived.
 - **Links:** set `BENCHTOP_PUBLIC_URL` (for example `https://eln.mylab.ca`) so the links in messages point somewhere colleagues can open.
+
+### Where webhooks may send
+
+Webhooks only call public addresses on the internet (Slack, Teams, your own service). Since 0.36.6 Benchtop refuses
+addresses on **this computer** (`localhost`, `127.0.0.1`, `::1`), on a **private network** (`10.x`, `172.16–31.x`,
+`192.168.x`, `100.64–127.x`, `fc00::/7`), **link-local** and **cloud metadata** addresses (`169.254.169.254`), and other
+reserved ones, however they're written (`2130706433`, `0x7f.1`, `[::ffff:127.0.0.1]`…). This keeps someone with an admin
+account from using webhooks to reach services that only the server itself can reach.
+
+The address is checked when the webhook is saved, and again at every delivery: Benchtop looks the name up, checks every
+address it points to, and calls the address it checked (so a name can't be switched to an inside address in between).
+
+**Your lab's own receiver on the private network** (a Mattermost server, a script on the instrument PC): whoever runs
+the server lists it in `BENCHTOP_WEBHOOK_ALLOW`, separated by commas: host names, addresses or networks, for example
+
+```
+BENCHTOP_WEBHOOK_ALLOW=chat.lab.internal,10.20.0.0/16
+```
+
+Put it in `deploy/.env` on a lab server (then restart Benchtop), or set it before `./benchtop start`. A webhook to an
+address that isn't allowed is refused with a message saying so, and deliveries to one saved before 0.36.6 fail with the
+same message in the webhook's history.
 
 ## What stays stable
 

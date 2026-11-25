@@ -101,6 +101,10 @@ class Settings:
         # (Microsoft Entra ID never does). Only for a provider where your organisation sets everyone's address.
         self.oidc_trust_email = os.environ.get("BENCHTOP_OIDC_TRUST_EMAIL", "off").lower() in ("1", "on", "true", "yes")
         self.password_login = os.environ.get("BENCHTOP_PASSWORD_LOGIN", "on").lower() not in ("0", "off", "false", "no")
+        # 0.36.6: webhooks never call this computer or private-network addresses (10.x, 192.168.x, cloud metadata…),
+        # except the host names, addresses and networks listed here (comma-separated), for a lab's own receiver:
+        # e.g. BENCHTOP_WEBHOOK_ALLOW=chat.lab.internal,10.20.0.0/16
+        self.webhook_allow = [a.strip().lower() for a in os.environ.get("BENCHTOP_WEBHOOK_ALLOW", "").split(",") if a.strip()]
         self.public_url = os.environ.get("BENCHTOP_PUBLIC_URL", "").rstrip("/")  # e.g. https://eln.mylab.ca
         self.lan_url = os.environ.get("BENCHTOP_LAN_URL", "").rstrip("/")  # set by ./benchtop lab: this computer's address on the network
         # demo mode (./benchtop demo): the sign-in page lists the demo lab's accounts; set only for demo data

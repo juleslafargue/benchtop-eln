@@ -215,7 +215,7 @@ def extras(instrument_dir: Path) -> list[str]:
             ok(c.post("/api/auth/tokens", headers=a, json={"name": "Plate reader script", "scope": "read"}), "token")
             done.append("API token")
         if hasattr(models, "Webhook"):
-            ok(c.post("/api/webhooks", headers=admin, json={"name": "Lab chat", "url": "http://127.0.0.1:9/hook",
+            ok(c.post("/api/webhooks", headers=admin, json={"name": "Lab chat", "url": "https://chat.example.invalid/hook",
                                                             "events": ["experiment.signed"], "active": False}), "webhook")
             done.append("webhook (inactive)")
 

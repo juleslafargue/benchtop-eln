@@ -80,10 +80,11 @@ def revoke_token(token_id: int, user: CurrentUser, session: DB):
 # ====================================================================== webhooks
 
 def hook_out(session, h: Webhook) -> dict[str, Any]:
-    last = session.exec(select(WebhookDelivery).where(WebhookDelivery.webhook_id == h.id).order_by(WebhookDelivery.id.desc())).first()
+    rows = session.exec(select(WebhookDelivery).where(WebhookDelivery.webhook_id == h.id).order_by(WebhookDelivery.id.desc()).limit(50)).all()
     return {"id": h.id, "name": h.name, "url": h.url, "events": h.events or [], "format": h.format, "include_private": h.include_private,
             "active": h.active, "has_secret": bool(h.secret), "created_at": h.created_at.isoformat() + "Z",
-            "last": delivery_out(last) if last else None}
+            "last": delivery_out(rows[0]) if rows else None,
+            "failing": webhooks.failing(list(rows))}  # 0.36.6: since when, and how many in a row
 
 
 def delivery_out(d: WebhookDelivery) -> dict[str, Any]:
@@ -102,9 +103,17 @@ class HookIn(BaseModel):
 
 def _check_hook(body: HookIn) -> None:
     if body.url is not None:
-        u = urlparse(body.url.strip())
-        if u.scheme not in ("https", "http") or not u.netloc:
-            raise HTTPException(422, "The address must start with https:// (or http:// on your own network)")
+        try:
+            u = urlparse(body.url.strip())
+            u.port  # noqa: B018 - a port that isn't a number raises here
+        except ValueError:
+            raise HTTPException(422, "That isn't a web address Benchtop can use") from None
+        if u.scheme not in ("https", "http") or not u.hostname:
+            raise HTTPException(422, "The address must start with https:// (or http://)")
+        try:
+            webhooks.check_address(body.url)  # 0.36.6: not this computer or the private network, unless the server allows it
+        except webhooks.Refused as e:
+            raise HTTPException(422, str(e)) from None
     if body.events is not None:
         bad = [e for e in body.events if e not in webhooks.EVENTS]
         if bad:

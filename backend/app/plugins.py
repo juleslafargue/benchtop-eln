@@ -73,9 +73,70 @@ def _num_or_none(v: Any) -> float | None:
     return f if f == f and abs(f) != float("inf") else None
 
 
-def _field(f: dict, where: str, types: set[str]) -> dict:
+MAX_ROWS = 500      # rows a table keeps (clean_content); min_rows can't ask for more
+MAX_OPTIONS = 60    # choices in a select
+MAX_DECIMALS = 10
+
+
+# 0.36.6: each value is checked for its type, so a mistake gets a message naming it (lists where a table was meant, a
+# word where a number was, "no" for false…) instead of an Internal Server Error, or a limit that made no sense (min_rows
+# of -3, 2.5 or 100 000 000; decimals of 500). Definitions stored with sections made before then are only tidied
+# (strict=False): those records must still open and save as they did.
+
+def _what(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true/false"
+    if isinstance(v, (int, float)):
+        return "a number"
+    if isinstance(v, str):
+        return "text"
+    if isinstance(v, dict):
+        return "a table"
+    if isinstance(v, list):
+        return "a list"
+    return type(v).__name__
+
+
+def _list(v: Any, where: str, of: str) -> list:
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise PluginError(f"{where} must be {of}, not {_what(v)}")
+    return v
+
+
+def _bool(v: Any, where: str, strict: bool) -> bool:
+    if v is None or isinstance(v, bool) or not strict:
+        return bool(v)
+    raise PluginError(f"{where} must be true or false (without quotes), not {_what(v)}")
+
+
+def _number(v: Any, where: str, strict: bool) -> float | None:
+    if v is None or not strict:
+        return _num_or_none(v)
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or _num_or_none(v) is None:
+        raise PluginError(f"{where} must be a number (without quotes), not {_what(v)}")
+    return float(v)
+
+
+def _whole(v: Any, where: str, lo: int, hi: int, default: int, strict: bool) -> int:
+    if not strict:  # tidy a stored definition: anything odd becomes the nearest sensible value
+        f = _num_or_none(v)
+        return default if f is None else max(lo, min(hi, int(f)))
+    if v is None:
+        return default
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != int(v):
+        raise PluginError(f"{where} must be a whole number from {lo} to {hi}, not {v!r}")
+    if not lo <= v <= hi:
+        raise PluginError(f"{where} must be from {lo} to {hi}, not {int(v)}")
+    return int(v)
+
+
+def _field(f: dict, where: str, types: set[str], strict: bool = True) -> dict:
     if not isinstance(f, dict):
         raise PluginError(f"{where}: each field must be a table")
+    if strict and not isinstance(f.get("id"), str):
+        raise PluginError(f"{where}: each field needs an id (text, in quotes)")
     fid = _s(f.get("id"), 48)
     if not re.match(r"^[a-z0-9_][a-z0-9_-]*$", fid):
         raise PluginError(f"{where}: field id “{fid}” must use lowercase letters, digits, _ or -")
@@ -86,41 +147,66 @@ def _field(f: dict, where: str, types: set[str]) -> dict:
     for k in ("unit", "help", "placeholder"):
         if f.get(k):
             out[k] = _s(f[k], 200)
-    if f.get("required"):
+    if _bool(f.get("required"), f"{where}.{fid}: required", strict):
         out["required"] = True
     if t == "select":
         opts = f.get("options")
         if not isinstance(opts, list) or not opts:
             raise PluginError(f"{where}.{fid}: a select needs a list of options")
-        out["options"] = [_s(o, 80) for o in opts][:60]
+        if strict:
+            if any(isinstance(o, (dict, list, bool)) for o in opts):
+                raise PluginError(f"{where}.{fid}: each option must be a word or a number")
+            if len(opts) > MAX_OPTIONS:
+                raise PluginError(f"{where}.{fid}: a select can have up to {MAX_OPTIONS} options, not {len(opts)}")
+        out["options"] = [_s(o, 80) for o in opts][:MAX_OPTIONS]
     if t == "number":
-        for k in ("min", "max", "warn_below", "warn_above", "decimals"):
-            v = _num_or_none(f.get(k))
+        for k in ("min", "max", "warn_below", "warn_above"):
+            v = _number(f.get(k), f"{where}.{fid}: {k}", strict)
             if v is not None:
                 out[k] = v
+        if f.get("decimals") is not None:
+            out["decimals"] = _whole(f.get("decimals"), f"{where}.{fid}: decimals", 0, MAX_DECIMALS, 6, strict)
+        if strict and "min" in out and "max" in out and out["min"] > out["max"]:
+            raise PluginError(f"{where}.{fid}: min ({out['min']:g}) is larger than max ({out['max']:g})")
     if "default" in f and t != "longtext":
-        out["default"] = f["default"] if t in ("checkbox", "number") else _s(f["default"], 200)
+        d = f["default"]
+        if strict and t == "checkbox" and not isinstance(d, bool):
+            raise PluginError(f"{where}.{fid}: the default of a checkbox must be true or false (without quotes)")
+        if strict and t == "number":
+            d = _number(d, f"{where}.{fid}: default", strict)
+        if strict and t == "select" and _s(d, 80) not in out["options"]:
+            raise PluginError(f"{where}.{fid}: the default “{_s(d, 80)}” isn't one of the options")
+        if strict and t not in ("checkbox", "number") and isinstance(d, (dict, list)):
+            raise PluginError(f"{where}.{fid}: default must be text, not {_what(d)}")
+        out["default"] = d if t in ("checkbox", "number") else _s(d, 200)
     if f.get("width") in ("half", "full", "third"):
         out["width"] = f["width"]
     return out
 
 
-def _section(sec: dict, pid: str) -> dict:
+def _section(sec: dict, pid: str, strict: bool = True) -> dict:
+    if not isinstance(sec, dict):
+        raise PluginError(f"each section must be a table, written [[sections]], not {_what(sec)}")
     sid = _s(sec.get("id"), 48)
-    if not ID.match(sid):
+    if not ID.match(sid) or (strict and not isinstance(sec.get("id"), str)):
         raise PluginError(f"section id “{sid}” must be lowercase letters, digits and dashes")
     where = f"sections.{sid}"
-    fields = [_field(f, where, FIELD_TYPES) for f in sec.get("fields") or []]
+    fields = [_field(f, where, FIELD_TYPES, strict) for f in _list(sec.get("fields"), f"{where}.fields",
+                                                                    "a list of tables, written [[sections.fields]]")]
     tables = []
-    for t in sec.get("tables") or []:
+    for t in _list(sec.get("tables"), f"{where}.tables", "a list of tables, written [[sections.tables]]"):
+        if not isinstance(t, dict):
+            raise PluginError(f"{where}: each table must be a table, written [[sections.tables]], not {_what(t)}")
         tid = _s(t.get("id"), 48)
         if not re.match(r"^[a-z0-9_][a-z0-9_-]*$", tid):
             raise PluginError(f"{where}: table id “{tid}” must use lowercase letters, digits, _ or -")
-        cols = [_field(c, f"{where}.{tid}", COLUMN_TYPES) for c in t.get("columns") or []]
+        cols = [_field(c, f"{where}.{tid}", COLUMN_TYPES, strict) for c in _list(
+            t.get("columns"), f"{where}.{tid}.columns", "a list of tables, written [[sections.tables.columns]]")]
         if not cols:
             raise PluginError(f"{where}.{tid}: a table needs at least one column")
         tables.append({"id": tid, "label": _s(t.get("label") or tid, 80), "columns": cols,
-                       "min_rows": int(_num_or_none(t.get("min_rows")) or 0), "help": _s(t.get("help"), 200)})
+                       "min_rows": _whole(t.get("min_rows"), f"{where}.{tid}: min_rows", 0, MAX_ROWS, 0, strict),
+                       "help": _s(t.get("help"), 200)})
     if not fields and not tables:
         raise PluginError(f"{where}: add at least one field or table")
     ids = [f["id"] for f in fields] + [t["id"] for t in tables]
@@ -131,9 +217,14 @@ def _section(sec: dict, pid: str) -> dict:
 
 
 def _reader(r: dict, pid: str) -> dict:
+    if not isinstance(r, dict):
+        raise PluginError(f"each reader must be a table, written [[readers]], not {_what(r)}")
     rid = _s(r.get("id"), 48)
-    if not ID.match(rid):
+    if not ID.match(rid) or not isinstance(r.get("id"), str):
         raise PluginError(f"reader id “{rid}” must be lowercase letters, digits and dashes")
+    for k in ("detect", "filename", "data_after", "name", "technique", "conditions", "x_label", "y_label", "kind", "decimal"):
+        if isinstance(r.get(k), (dict, list, bool)):
+            raise PluginError(f"readers.{rid}: {k} must be text, not {_what(r[k])}")
     detect = _s(r.get("detect"), 300)
     fname = _s(r.get("filename"), 300)
     try:
@@ -145,7 +236,12 @@ def _reader(r: dict, pid: str) -> dict:
             re.compile(str(r["data_after"]))
     except re.error as e:
         raise PluginError(f"readers.{rid}: bad pattern ({e})") from None
-    exts = [e.lower() if str(e).startswith(".") else "." + str(e).lower() for e in (r.get("extensions") or [".csv", ".txt"])][:10]
+    raw_exts = r.get("extensions") if r.get("extensions") is not None else [".csv", ".txt"]
+    if isinstance(raw_exts, str):
+        raw_exts = [raw_exts]  # extensions = ".csv": one is clear enough
+    if not isinstance(raw_exts, list) or any(not isinstance(e, str) or not e.strip(".") for e in raw_exts):
+        raise PluginError(f"readers.{rid}: extensions must be a list of file endings, like [\".csv\", \".txt\"]")
+    exts = [e.lower() if str(e).startswith(".") else "." + str(e).lower() for e in raw_exts][:10]
     kind = _s(r.get("kind") or "other", 10)
     if kind not in READER_KINDS:
         raise PluginError(f"readers.{rid}: kind must be one of {', '.join(sorted(READER_KINDS))}")
@@ -154,21 +250,28 @@ def _reader(r: dict, pid: str) -> dict:
         raise PluginError(f"readers.{rid}: delimiter must be auto, \",\", \";\", \"tab\", \"|\" or \"whitespace\"")
 
     def col(v, name):
-        if isinstance(v, bool) or v is None:
+        if isinstance(v, bool) or v is None or isinstance(v, (float, list, dict)):
             raise PluginError(f"readers.{rid}: {name} must be a column number (starting at 1) or a header name")
         if isinstance(v, int):
             if v < 1:
                 raise PluginError(f"readers.{rid}: column numbers start at 1")
             return v
         return _s(v, 80)
+
+    def scale(name):
+        v = _number(r.get(name), f"readers.{rid}: {name}", True)
+        if v == 0:
+            raise PluginError(f"readers.{rid}: {name} can't be 0 (every value would become 0)")
+        return v or 1.0
     return {"plugin": pid, "id": rid, "name": _s(r.get("name") or rid, 80), "technique": _s(r.get("technique") or "Chromatogram", 40),
             "conditions": _s(r.get("conditions"), 120), "kind": kind, "extensions": exts, "detect": detect, "filename": fname,
             "delimiter": "\t" if delim == "tab" else delim, "decimal": "," if r.get("decimal") == "," else ".",
-            "data_after": _s(r.get("data_after"), 300), "header": bool(r.get("header", False)),
+            "data_after": _s(r.get("data_after"), 300), "header": _bool(r.get("header", False), f"readers.{rid}: header", True),
             "x": col(r.get("x", 1), "x"), "y": col(r.get("y", 2), "y"),
             "x_label": _s(r.get("x_label") or "x", 60), "y_label": _s(r.get("y_label") or "Intensity", 60),
-            "x_scale": _num_or_none(r.get("x_scale")) or 1.0, "y_scale": _num_or_none(r.get("y_scale")) or 1.0,
-            "reversed": bool(r.get("reversed", False)), "dips": bool(r.get("dips", False))}
+            "x_scale": scale("x_scale"), "y_scale": scale("y_scale"),
+            "reversed": _bool(r.get("reversed", False), f"readers.{rid}: reversed", True),
+            "dips": _bool(r.get("dips", False), f"readers.{rid}: dips", True)}
 
 
 def parse(text: str, path: str = "", bundled: bool = False) -> Plugin:
@@ -180,16 +283,21 @@ def parse(text: str, path: str = "", bundled: bool = False) -> Plugin:
     meta = data.get("plugin")
     if not isinstance(meta, dict):
         raise PluginError("Missing the [plugin] table at the top")
+    if not isinstance(meta.get("id"), str) or not ID.match(meta["id"].strip()[:48]):
+        raise PluginError("plugin id must be lowercase letters, digits and dashes, in quotes, like id = “glovebox-log”")
     pid = _s(meta.get("id"), 48)
-    if not ID.match(pid):
-        raise PluginError("plugin id must be lowercase letters, digits and dashes, like “glovebox-log”")
     api = meta.get("api", 1)
-    if api != API_VERSION:
+    if api != API_VERSION or isinstance(api, bool):
+        if not isinstance(api, int) or isinstance(api, bool):
+            raise PluginError(f"api must be a whole number without quotes (api = {API_VERSION}), not {api!r}")
         raise PluginError(f"Written for plugin API {api}; this Benchtop understands API {API_VERSION}")
+    for k in ("name", "version", "author", "description", "homepage"):
+        if isinstance(meta.get(k), (dict, list)):
+            raise PluginError(f"plugin {k} must be text, not {_what(meta[k])}")
     p = Plugin(id=pid, name=_s(meta.get("name") or pid, 80), version=_s(meta.get("version"), 20), author=_s(meta.get("author"), 80),
                description=_s(meta.get("description"), 400), homepage=_s(meta.get("homepage"), 200), path=path, bundled=bundled)
-    p.sections = [_section(s, pid) for s in data.get("sections") or []]
-    p.readers = [_reader(r, pid) for r in data.get("readers") or []]
+    p.sections = [_section(s, pid) for s in _list(data.get("sections"), "sections", "a list of tables, written [[sections]]")]
+    p.readers = [_reader(r, pid) for r in _list(data.get("readers"), "readers", "a list of tables, written [[readers]]")]
     for r in p.readers:
         if not r["detect"] and not r["filename"]:
             raise PluginError(f"readers.{r['id']}: add a detect pattern (text inside the file) or a filename pattern, so it isn't used for every file")
@@ -213,6 +321,9 @@ def discover() -> list[Plugin]:
                 p = parse(f.read_text(encoding="utf-8"), str(f), bundled)
             except (PluginError, OSError, UnicodeDecodeError) as e:
                 p = Plugin(id=f.stem, name=f.stem, path=str(f), bundled=bundled, errors=[str(e)])
+            except Exception as e:  # a mistake the checks above didn't foresee: this file is listed as broken, not the page
+                p = Plugin(id=f.stem, name=f.stem, path=str(f), bundled=bundled,
+                           errors=[f"Benchtop couldn't read this file ({type(e).__name__}: {e})"[:300]])
             if p.id in found and not found[p.id].errors:
                 if bundled is False:  # your own copy wins over a bundled example of the same id
                     found[p.id] = p
@@ -285,8 +396,8 @@ def clean_content(content: dict) -> dict:
     schema = content.get("schema")
     if not isinstance(schema, dict) or not isinstance(schema.get("fields"), list):
         raise PluginError("This section has no definition")
-    try:  # re-check the stored definition, so a hand-edited one can't smuggle anything in
-        schema = _section(schema, _s(schema.get("plugin"), 48))
+    try:  # re-check the stored definition, so a hand-edited one can't smuggle anything in (tidied, not refused: 0.36.6)
+        schema = _section(schema, _s(schema.get("plugin"), 48), strict=False)
     except (PluginError, AttributeError, TypeError) as e:
         raise PluginError(f"This section's definition isn't valid: {e}") from None
     vals = content.get("values") if isinstance(content.get("values"), dict) else {}
