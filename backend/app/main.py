@@ -43,6 +43,25 @@ def _refresh_safety() -> dict | None:
         return safety.refresh_due(s)
 
 
+def _warm_compounds() -> int:
+    from sqlmodel import select
+
+    from . import chem
+    from .db import engine
+    from .models import Entry, EntryKind, Material
+    n = 0
+    with Session(engine) as s:
+        smiles = [m.smiles for m in s.exec(select(Material).where(Material.kind.in_(["product", "sample"]))) if m.smiles]
+        for e in s.exec(select(Entry).where(Entry.kind == EntryKind.reaction, Entry.deleted == False)):  # noqa: E712
+            rows = (e.content or {}).get("rows")
+            smiles += [r["smiles"] for r in rows if isinstance(r, dict) and r.get("role") == "product"
+                       and isinstance(r.get("smiles"), str) and r["smiles"].strip()] if isinstance(rows, list) else []
+    for sm in smiles:
+        chem.compound_row(sm)
+        n += 1
+    return n
+
+
 def _sync_obsidian() -> dict | None:
     if not settings.obsidian_dir:
         return None
@@ -107,6 +126,10 @@ async def _housekeeping_loop() -> None:
                 log.info("Benchtop %s is available (this is %s)", u["available"]["version"], u["current"])
         except Exception:
             log.exception("Update check failed")
+        try:  # 0.36.6: the Compounds page's numbers worked out ahead, so its first visit after a start is quick too
+            await asyncio.to_thread(_warm_compounds)
+        except Exception:
+            log.exception("Working out the Compounds page failed")
         try:
             res = await asyncio.to_thread(_refresh_safety)
             if res and res["checked"]:
