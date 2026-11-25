@@ -79,10 +79,13 @@ def local(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_webhooks_left(client, admin):
-    """Each test starts and ends with no webhooks, even when one fails part-way."""
+    """Each test starts and ends with no webhooks (other test files may leave some), even when one fails part-way."""
+    def clear():
+        for h in client.get("/api/webhooks", headers=admin).json()["webhooks"]:
+            client.delete(f"/api/webhooks/{h['id']}", headers=admin)
+    clear()
     yield
-    for h in client.get("/api/webhooks", headers=admin).json()["webhooks"]:
-        client.delete(f"/api/webhooks/{h['id']}", headers=admin)
+    clear()
 
 
 def _hook(client, admin, url, events=("experiment.created",)):
@@ -163,7 +166,7 @@ def test_retries_are_bounded_and_one_delivery_is_one_row(client, admin, users, n
     calls = []
     monkeypatch.setattr(webhooks, "synchronous", False)
     monkeypatch.setattr(webhooks, "RETRY_AFTER", (0.2, 0.2), raising=False)
-    monkeypatch.setattr(webhooks, "sender", lambda url, raw, headers: calls.append(time.monotonic()) or 503)
+    monkeypatch.setattr(webhooks, "sender", lambda url, raw, headers: (calls.append(time.monotonic()) if url.endswith("/busy") else None) or 503)
     h = _hook(client, admin, "https://example.org/busy")
     new_exp(client, users["alice"], notebook)
     deadline = time.monotonic() + 10
@@ -207,7 +210,7 @@ def test_deliveries_still_waiting_for_a_deleted_webhook_never_go_to_a_new_one(cl
     time.sleep(0.3)
     client.delete(f"/api/webhooks/{old['id']}", headers=admin)
     calls = []
-    monkeypatch.setattr(webhooks, "sender", lambda url, raw, headers: calls.append(json.loads(raw)["experiment"]["eid"]) or 200)
+    monkeypatch.setattr(webhooks, "sender", lambda url, raw, headers: calls.append(json.loads(raw)["experiment"]["eid"]) or 200)  # noqa: E501
     new = _hook(client, admin, "https://example.org/new-receiver")
     exp = new_exp(client, users["alice"], notebook)
     deadline = time.monotonic() + 10

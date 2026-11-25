@@ -182,6 +182,7 @@ def verify(token: bytes, digest: bytes, nonce: int | None = None) -> dict[str, A
         if cert is None:
             raise TimestampError("the token doesn't include the service's certificate")
         _check_signature(si, cert, tst_der)
+        _valid_when_made(cert, out["gen_time"])
         eku = cert.extended_key_usage_value
         if eku is not None and "time_stamping" not in eku.native:
             raise TimestampError("the certificate isn't for timestamping")
@@ -193,6 +194,23 @@ def verify(token: bytes, digest: bytes, nonce: int | None = None) -> dict[str, A
     except Exception as exc:  # noqa: BLE001 - malformed token
         out["error"] = f"unreadable token ({exc.__class__.__name__})"
     return out
+
+
+def _valid_when_made(cert, gen_time) -> None:
+    """The service's certificate must have been valid at the time it gives the timestamp (0.36.6: an expired or
+    not-yet-valid one was accepted). Its expiring later doesn't matter: a timestamp made while the certificate was
+    valid stays valid, as RFC 3161 and `openssl ts -verify` treat it, so old stamps don't turn bad over the years."""
+    if not isinstance(gen_time, datetime):
+        raise TimestampError("the timestamp has no time")
+    start, end = cert["tbs_certificate"]["validity"]["not_before"].native, cert["tbs_certificate"]["validity"]["not_after"].native
+    t = gen_time if gen_time.tzinfo else gen_time.replace(tzinfo=timezone.utc)
+    day = "%d %b %Y"
+    if t < start:
+        raise TimestampError(f"the service's certificate wasn't valid yet when it made the timestamp (valid from "
+                             f"{start:{day}}, timestamp {t:{day} %H:%M} UTC)")
+    if t > end:
+        raise TimestampError(f"the service's certificate had expired when it made the timestamp (expired "
+                             f"{end:{day}}, timestamp {t:{day} %H:%M} UTC)")
 
 
 _roots_cache: dict[bytes, list] | None = None

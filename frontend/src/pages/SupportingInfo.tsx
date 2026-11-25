@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../App'
 import { ago, api, ApiError, depictUrl, type ExperimentSummary } from '../api'
-import { Mol, useOneAtATime } from '../components/bits'
+import { Mol, useDebounced, useOneAtATime } from '../components/bits'
 import Modal from '../components/Modal'
 import { checkLines, siFileName, siModel, techniqueLabel, type SiCompound, type SiDocument, type SiImage, type SiItem } from '../si'
 import { hydrogensInFormula } from '../spectra'
@@ -317,6 +317,16 @@ function ExperimentPicker({ taken, onPick, onClose }: { taken: Set<number>; onPi
   const [nb, setNb] = useState('')
   const [err, setErr] = useState('')
   useEffect(() => { api.get<ExperimentSummary[]>('/api/experiments?limit=1000').then(setExps).catch(e => setErr(e.message)) }, [])
+  // 0.36.6: the newest 1,000 are loaded at once; what's typed is also looked up on the server, so older ones are found
+  const dq = useDebounced(q, 200)
+  useEffect(() => {
+    const t = dq.trim()
+    if (t.length < 2) return
+    let on = true
+    api.get<ExperimentSummary[]>(`/api/experiments?q=${encodeURIComponent(t)}&limit=40`)
+      .then(rows => { if (on) setExps(old => [...(old || []), ...rows.filter(r => !(old || []).some(o => o.id === r.id))]) }).catch(() => {})
+    return () => { on = false }
+  }, [dq])
   const found = useMemo(() => {
     const t = q.trim().toLowerCase()
     const num = /^(exp-?)?0*(\d+)$/i.exec(t)

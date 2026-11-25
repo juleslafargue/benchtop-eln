@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState, type ComponentProps } from 'react'
-import { depictUrl } from '../api'
+import { api, depictUrl } from '../api'
 
 const StructureEditorLazy = lazy(() => import('./StructureEditor'))
 
@@ -178,4 +178,29 @@ export function useOneAtATime(): [boolean, (fn: () => Promise<unknown>) => Promi
     try { await fn() } finally { going.current = false; setBusy(false) }
   }, [])
   return [busy, run]
+}
+
+/** A newest-first list read `page` at a time (0.36.6: audit trails stopped at the latest 150): the first page, then
+ *  older ones on request, each starting below the oldest id shown. `total` is how many there are in all. */
+export function useOlderPages<T extends { id: number }>(url: string, page = 200) {
+  const [rows, setRows] = useState<T[] | null>(null)
+  const [total, setTotal] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const sep = url.includes('?') ? '&' : '?'
+  useEffect(() => {
+    let on = true
+    setRows(null); setErr('')
+    api.getList<T>(`${url}${sep}limit=${page}`).then(r => { if (on) { setRows(r.rows); setTotal(r.total) } }, e => { if (on) setErr(e.message) })
+    return () => { on = false }
+  }, [url, page, sep])
+  const more = async () => {
+    if (!rows?.length || busy) return
+    setBusy(true); setErr('')
+    try {
+      const r = await api.getList<T>(`${url}${sep}limit=${page}&before_id=${rows[rows.length - 1].id}`)
+      setRows(x => [...(x || []), ...r.rows.filter(n => !(x || []).some(o => o.id === n.id))])
+    } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
+  }
+  return { rows, total, more, busy, err, left: Math.max(0, total - (rows?.length || 0)) }
 }

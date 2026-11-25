@@ -10,6 +10,8 @@ import { EmailSettingsPanel, PdfaStatusPanel, TimestampSettingsPanel, WitnessSet
 import InstrumentsPanel from '../components/AdminInstruments'
 import PasswordField from '../components/PasswordField'
 import { auditSentence, type AuditNames } from '../auditText'
+import { useOlderPages } from '../components/bits'
+import CutShort from '../components/CutShort'
 
 function EditUser({ u, onClose, onSaved }: { u: User; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState({ username: u.username, full_name: u.full_name, email: u.email })
@@ -142,6 +144,8 @@ interface BackupInfo {
   directory: string; keep: number; interval_hours: number; backups: { name: string; size: number; created_at: string }[]
   copy_dir: string | null; copy_dir_from_env: boolean; copies: number; warnings: string[]; files?: { files: number; bytes: number }
   last_copy: { ok: boolean; at: string; name: string; folder: string; error?: string } | null
+  last_success?: { at: string; name: string } | null; last_failure?: { at: string; error: string } | null; failing?: boolean
+  last_copy_ok?: { at: string; name: string } | null
   last_check: BackupTest | null; suggestions: { label: string; path: string }[]
   data_check?: DataCheck
   disk?: DiskSpace
@@ -286,6 +290,11 @@ function Backups() {
         Saved in <code>{info.directory}</code>. Attached files are kept once for all backups, in the <code>benchtop-files</code> folder
         beside them{info.files && info.files.files > 0 ? ` (${info.files.files.toLocaleString()} files, ${fmtBytes(info.files.bytes)})` : ''}:
         keep that folder with the backups if you move or copy them. To restore, stop Benchtop and run <code>./benchtop restore &lt;file&gt;</code>.</p>}
+      {info && (info.last_success || info.last_failure) && <dl className="backup-status">
+        <dt>Last backup</dt><dd>{info.last_success ? <>{when(info.last_success.at)} <span className="faint">({info.last_success.name})</span></> : 'none has worked yet'}</dd>
+        {info.last_failure && <><dt>Last failure</dt><dd className={info.failing ? 'warn-text' : 'faint'}>{when(info.last_failure.at)}: {info.last_failure.error}
+          {!info.failing && ' (backups have worked since)'}</dd></>}
+      </dl>}
       {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
       {info && info.warnings.length > 0 && <div className="notice" role="status">{info.warnings.map(w => <div key={w}>{w}</div>)}</div>}
 
@@ -295,7 +304,7 @@ function Backups() {
           {folder === null ? <>
             <p>{info.copy_dir ? <>Every backup is also copied to <code>{info.copy_dir}</code> ({info.copies} there now).</>
               : 'Backups are only on this computer. If it is lost or its drive fails, so are they. Choose a second place: iCloud Drive, or an external drive.'}</p>
-            {info.last_copy && <p className={info.last_copy.ok ? 'faint' : 'error'}>{info.last_copy.ok ? `Last copied ${when(info.last_copy.at)}.` : `Last copy failed (${when(info.last_copy.at)}): ${info.last_copy.error}`}</p>}
+            {info.last_copy && <p className={info.last_copy.ok ? 'faint' : 'error'}>{info.last_copy.ok ? `Last copied ${when(info.last_copy.at)}.` : `Last copy failed (${when(info.last_copy.at)}): ${info.last_copy.error}${info.last_copy_ok ? ` The last copy that worked: ${when(info.last_copy_ok.at)}.` : ''}`}</p>}
             {info.copy_dir_from_env ? <p className="faint">Set by BENCHTOP_BACKUP_COPY_DIR in this server's settings.</p>
               : <div className="row" style={{ gap: 6 }}>
                 <button className="btn sm" onClick={() => setFolder(info.copy_dir || info.suggestions[0]?.path || '')}>{info.copy_dir ? 'Change folder' : 'Choose a folder'}</button>
@@ -461,10 +470,11 @@ function Users() {
 
 function AuditTrail() {
   const { groups } = useApp()
-  const [events, setEvents] = useState<AuditEvent[]>([])
+  const list = useOlderPages<AuditEvent>('/api/audit', 150)
+  const events = list.rows || []
   const [people, setPeople] = useState<User[]>([])
   const [chain, setChain] = useState<any>(null)
-  useEffect(() => { api.get<AuditEvent[]>('/api/audit?limit=150').then(setEvents); api.get<User[]>('/api/users').then(setPeople).catch(() => {}) }, [])
+  useEffect(() => { api.get<User[]>('/api/users').then(setPeople).catch(() => {}) }, [])
   const names: AuditNames = {
     people: Object.fromEntries(people.map(u => [u.username, displayName(u)])),
     userIds: Object.fromEntries(people.map(u => [u.id, displayName(u)])),
@@ -474,7 +484,7 @@ function AuditTrail() {
     <section className="stack" style={{ gap: 8 }}>
       <div className="spread"><h2 style={{ fontSize: 17 }}>Audit trail</h2>
         <button className="btn sm" onClick={async () => setChain(await api.get('/api/audit/verify'))}>Verify hash chain</button></div>
-      <p className="faint" style={{ margin: 0 }}>Every change anyone makes, newest first (the latest 150 here). Each event is chained to the one before by its fingerprint, so an event changed or removed outside Benchtop breaks the chain: Verify hash chain checks all of them. Open Details to see an event exactly as it is stored.</p>
+      <p className="faint" style={{ margin: 0 }}>Every change anyone makes, newest first{list.total ? ` (${list.total.toLocaleString()} in all; ${events.length.toLocaleString()} shown)` : ''}. Each event is chained to the one before by its fingerprint, so an event changed or removed outside Benchtop breaks the chain: Verify hash chain checks all of them. Open Details to see an event exactly as it is stored.</p>
       {chain && <p className={chain.ok ? 'notice' : 'error'} style={chain.ok ? { borderLeftColor: 'var(--witnessed)' } : undefined}>
         {chain.ok ? `All ${chain.checked} events verified. Chain head ${chain.head.slice(0, 16)}…${chain.forks ? ` (${chain.forks} pair${chain.forks === 1 ? ' was' : 's were'} written at the same moment by an older version; both intact, not tampering.)` : ''}` : `Chain broken at event #${chain.broken_at} (${chain.reason}). Records from that point may have been altered.`}</p>}
       <div className="panel panel-pad">
@@ -491,6 +501,8 @@ function AuditTrail() {
                   <dt>Event</dt><dd className="mono">#{e.id} · {e.hash}</dd>
                 </dl></details></span></li>
         })}</ul>
+        {list.err && <p className="error" role="alert">Couldn't load the audit trail: {list.err}</p>}
+    <CutShort shown={events.length} total={list.total} things="events" busy={list.busy} onMore={list.more} />
       </div>
     </section>
   )

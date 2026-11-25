@@ -7,7 +7,7 @@ import html
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from sqlmodel import col, or_, select
 
 from .. import audit, chem, paging
@@ -269,16 +269,19 @@ def search(user: CurrentUser, session: DB, response: Response, q: str = "", mode
 
 
 @router.get("/audit")
-def audit_log(_: Admin, session: DB, limit: int = 200, before_id: int | None = None,
-              object_type: str | None = None, username: str | None = None):
-    q = select(AuditEvent).order_by(AuditEvent.id.desc()).limit(limit)
-    if before_id:
-        q = q.where(AuditEvent.id < before_id)
+def audit_log(_: Admin, session: DB, response: Response, limit: int = Query(200, ge=1, le=paging.MAX_LIMIT),
+              before_id: int | None = None, object_type: str | None = None, username: str | None = None):
+    """The lab's audit trail, newest first, `limit` at a time; `before_id` (the oldest id shown) goes further back.
+    X-Total-Count says how many match in all (0.36.6: the Admin page showed the latest 150, with no way back)."""
+    q = select(AuditEvent)
     if object_type:
         q = q.where(AuditEvent.object_type == object_type)
     if username:
         q = q.where(AuditEvent.username == username)
-    return [audit_out(ev) for ev in session.exec(q)]
+    paging.set_total(response, paging.count(session, q))
+    if before_id:
+        q = q.where(AuditEvent.id < before_id)
+    return [audit_out(ev) for ev in session.exec(q.order_by(AuditEvent.id.desc()).limit(limit))]
 
 
 @router.get("/audit/verify")

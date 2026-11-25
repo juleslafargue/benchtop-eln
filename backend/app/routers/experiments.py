@@ -406,9 +406,19 @@ def list_experiments(
     notebook_id: int | None = None, status_: ExperimentStatus | None = Query(None, alias="status"),
     owner_id: int | None = None, templates: bool = False,
     limit: int = paging.limit_param(200), offset: int = paging.offset_param(),
+    q_: str = Query("", alias="q", max_length=200, description="Only those whose number or title contains this (0.36.6)"),
 ):
     from ..access import visible_experiment_filter
     q = visible_experiment_filter(select(Experiment).where(Experiment.is_template == templates), session, user)
+    text = q_.strip()
+    if text:  # 0.36.6: pickers (⌘K, the SI builder, screens) find older records too, not only the newest few hundred
+        from sqlalchemy import or_
+        num = re.fullmatch(r"(?i)(?:exp-?)?0*(\d{1,9})", text)
+        like = "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        conds = [Experiment.title.ilike(like, escape="\\")]  # the number (eid) is worked out from the id: below
+        if num:
+            conds.append(Experiment.id == int(num.group(1)))
+        q = q.where(or_(*conds))
     if notebook_id is not None:
         q = q.where(Experiment.notebook_id == notebook_id)
     if status_ is not None:
@@ -1353,7 +1363,11 @@ def experiment_writeup(exp_id: int, user: CurrentUser, session: DB):
 
 
 @router.get("/experiments/{exp_id}/audit")
-def experiment_audit(exp_id: int, user: CurrentUser, session: DB):
+def experiment_audit(exp_id: int, user: CurrentUser, session: DB, response: Response,
+                     limit: int | None = paging.limit_param(None),
+                     before_id: int | None = Query(None, ge=1, description="Only events older than this one (0.36.6)")):
+    """The record's history, newest first: all of it, or `limit` at a time going back with `before_id` (the oldest id
+    of the page before). X-Total-Count says how many there are in all."""
     exp = read_experiment(session, user, exp_id)
     entry_ids = [e.id for e in session.exec(select(Entry).where(Entry.experiment_id == exp.id))]
     att_ids = [a.id for a in session.exec(select(Attachment).where(Attachment.experiment_id == exp.id))]
@@ -1363,7 +1377,11 @@ def experiment_audit(exp_id: int, user: CurrentUser, session: DB):
         ((AuditEvent.object_type == "experiment") & (AuditEvent.object_id == exp.id))
         | ((AuditEvent.object_type == "entry") & (AuditEvent.object_id.in_(entry_ids or [-1])))
         | ((AuditEvent.object_type == "attachment") & (AuditEvent.object_id.in_(att_ids or [-1])))
-    ).order_by(AuditEvent.id.desc())
+    )
+    paging.set_total(response, paging.count(session, q))
+    if before_id:
+        q = q.where(AuditEvent.id < before_id)
+    q = q.order_by(AuditEvent.id.desc()).limit(limit)
     return [audit_out(ev) for ev in session.exec(q)]
 
 

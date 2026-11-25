@@ -20,7 +20,7 @@ export default function ScreenEntry({ content, onChange, readOnly, experimentId 
   const [yText, setYText] = useState(levelsText(ys))
   const [exps, setExps] = useState<ExperimentSummary[]>([])
   useEffect(() => { setXText(levelsText(xs)); setYText(levelsText(ys)) }, [xs.join('|'), ys.join('|')]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (edit && !exps.length) api.get<ExperimentSummary[]>('/api/experiments').then(setExps).catch(() => {}) }, [edit, exps.length])
+  useEffect(() => { if (edit && !exps.length) api.get<ExperimentSummary[]>('/api/experiments?limit=1000').then(setExps).catch(() => {}) }, [edit, exps.length])
 
   const set = (patch: any) => onChange({ ...content, ...patch })
   const setCell = (k: string, c: Cell) => set({ cells: { ...cells, [k]: c } })
@@ -101,7 +101,9 @@ export default function ScreenEntry({ content, onChange, readOnly, experimentId 
                 <label className="field">{content.response || 'Value'}<input className="input" autoFocus inputMode="decimal" defaultValue={c.value ?? ''}
                   onBlur={e => setCell(edit, { ...c, value: e.target.value.trim() === '' ? null : Number(e.target.value) })} /></label>
                 <label className="field">Experiment<select className="select" value={c.experiment_id ?? ''} onChange={e => setCell(edit, { ...c, experiment_id: e.target.value ? Number(e.target.value) : undefined })}>
-                  <option value="">None</option>{exps.filter(e => e.id !== experimentId).map(e => <option key={e.id} value={e.id}>{e.eid} · {e.title}</option>)}</select></label>
+                  <option value="">None</option>
+                  {c.experiment_id && !exps.some(e => e.id === c.experiment_id) && <option value={c.experiment_id}>{`EXP-${String(c.experiment_id).padStart(5, '0')} (an older record)`}</option>}
+                  {exps.filter(e => e.id !== experimentId).map(e => <option key={e.id} value={e.id}>{e.eid} · {e.title}</option>)}</select></label>
               </div>
               <label className="field">Note<input className="input" defaultValue={c.note || ''} onBlur={e => setCell(edit, { ...c, note: e.target.value })} placeholder="e.g. 85:15 conversion by LCMS" /></label>
               <div className="row"><button className="btn sm primary" onClick={() => setEdit(null)}>Done</button>

@@ -18,11 +18,12 @@ def _name(cn: str) -> x509.Name:
     return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn), x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Tests")])
 
 
-def _issue(subject: x509.Name, key, issuer: x509.Name, issuer_key, *, ca: bool, tsa: bool) -> x509.Certificate:
+def _issue(subject: x509.Name, key, issuer: x509.Name, issuer_key, *, ca: bool, tsa: bool,
+           valid: tuple[int, int] = (-1, 365)) -> x509.Certificate:
     now = dt.datetime.now(dt.timezone.utc)
     b = (x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(key.public_key())
-         .serial_number(x509.random_serial_number()).not_valid_before(now - dt.timedelta(days=1))
-         .not_valid_after(now + dt.timedelta(days=365))
+         .serial_number(x509.random_serial_number()).not_valid_before(now + dt.timedelta(days=valid[0]))
+         .not_valid_after(now + dt.timedelta(days=valid[1]))
          .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True))
     if tsa:
         b = b.add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.TIME_STAMPING]), critical=True)
@@ -33,7 +34,11 @@ class FakeTSA:
     """chain=False: a self-signed service (like FreeTSA, not from a well-known authority).
     chain=True: issued by a test root through an intermediate, like DigiCert; `root` is that root."""
 
-    def __init__(self, name: str = "Benchtop Test TSA", chain: bool = False):
+    def __init__(self, name: str = "Benchtop Test TSA", chain: bool = False, valid: tuple[int, int] = (-1, 365),
+                 stamped_days_ago: float = 0):
+        """valid: the service certificate's first and last day, in days from now (0.36.6: expired or not yet valid
+        ones). stamped_days_ago: the time the service writes in its timestamps, as if it had made them then."""
+        self.stamped_days_ago = stamped_days_ago
         self.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.extra: list[ax509.Certificate] = []
         self.root = None
@@ -42,10 +47,10 @@ class FakeTSA:
             mid_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
             self.root = _issue(_name("Test Root CA"), root_key, _name("Test Root CA"), root_key, ca=True, tsa=False)
             mid = _issue(_name("Test Timestamping CA"), mid_key, self.root.subject, root_key, ca=True, tsa=False)
-            self.cert = _issue(_name(name), self.key, mid.subject, mid_key, ca=False, tsa=True)
+            self.cert = _issue(_name(name), self.key, mid.subject, mid_key, ca=False, tsa=True, valid=valid)
             self.extra = [ax509.Certificate.load(mid.public_bytes(serialization.Encoding.DER))]
         else:
-            self.cert = _issue(_name(name), self.key, _name(name), self.key, ca=True, tsa=True)
+            self.cert = _issue(_name(name), self.key, _name(name), self.key, ca=True, tsa=True, valid=valid)
         self.cert_der = self.cert.public_bytes(serialization.Encoding.DER)
         self.acert = ax509.Certificate.load(self.cert_der)
         self.mode = "ok"
@@ -71,7 +76,7 @@ class FakeTSA:
             imprint = tsp.MessageImprint({"hash_algorithm": algos.DigestAlgorithm({"algorithm": "sha256"}), "hashed_message": b"\x00" * 32})
         self.serial += 1
         tst = tsp.TSTInfo({"version": "v1", "policy": "1.2.3.4.1", "message_imprint": imprint, "serial_number": self.serial,
-                           "gen_time": dt.datetime.now(dt.timezone.utc).replace(microsecond=0), "nonce": req["nonce"].native})
+                           "gen_time": (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=self.stamped_days_ago)).replace(microsecond=0), "nonce": req["nonce"].native})
         tst_der = tst.dump()
         ess = tsp.SigningCertificateV2({"certs": [tsp.ESSCertIDv2({"hash_algorithm": algos.DigestAlgorithm({"algorithm": "sha256"}),
                                                                    "cert_hash": hashlib.sha256(self.cert_der).digest()})]})

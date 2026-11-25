@@ -82,6 +82,28 @@ def druglike(mol: Chem.Mol) -> dict[str, Any]:
     }
 
 
+@lru_cache(maxsize=20000)
+def _compound_row(text: str) -> tuple | None:
+    """What the Compounds page shows for one structure, worked out once per structure while the server runs (0.36.6:
+    it was worked out again for every product row on every visit, about 2 ms each: 3.3 s for 1,500 records).
+    Kept as a tuple so callers can't change the cached copy."""
+    try:
+        mol = mol_from_any(text)
+    except ChemError:
+        return None
+    d = {"smiles": Chem.MolToSmiles(mol), "formula": rdMolDescriptors.CalcMolFormula(mol), "mw": round(Descriptors.MolWt(mol), 4),
+         "inchikey": Chem.MolToInchiKey(mol) or "", "hbd": rdMolDescriptors.CalcNumHBD(mol), "hba": rdMolDescriptors.CalcNumHBA(mol),
+         "logp": round(Descriptors.MolLogP(mol), 2), "tpsa": round(rdMolDescriptors.CalcTPSA(mol), 2),
+         "rotatable_bonds": rdMolDescriptors.CalcNumRotatableBonds(mol), **druglike(mol)}
+    return tuple((k, tuple(v) if isinstance(v, list) else v) for k, v in d.items())
+
+
+def compound_row(text: str) -> dict[str, Any] | None:
+    """The same as properties() gives for the Compounds page's columns (without the InChI and molfile), cached."""
+    t = _compound_row(text)
+    return None if t is None else {k: list(v) if isinstance(v, tuple) else v for k, v in t}
+
+
 def depict_svg(text: str, width: int = 300, height: int = 200, highlight: str = "", atom_ids: list[int] | None = None,
                numbers: bool = False) -> str:
     mol = mol_from_any(text)

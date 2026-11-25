@@ -20,6 +20,8 @@ import { reminderText } from '../signCheck'
 import { sigLine } from '../display'
 import { onReturn } from '../onReturn'
 import type { Attachment, Entry, User, UserBrief } from '../api'
+import { useOlderPages } from '../components/bits'
+import CutShort from '../components/CutShort'
 
 const STATUS_WORD = { open: 'Draft', signed: 'Signed', witnessed: 'Witnessed', voided: 'Voided', locked: 'Locked' }
 const STEPS = ['Draft', 'Signed', 'Witnessed'] as const
@@ -247,8 +249,8 @@ function MentionedIn({ expId }: { expId: number }) {
 }
 
 function AuditTab({ expId }: { expId: number }) {
-  const [events, setEvents] = useState<AuditEvent[]>([])
-  useEffect(() => { api.get<AuditEvent[]>(`/api/experiments/${expId}/audit`).then(setEvents) }, [expId])
+  const list = useOlderPages<AuditEvent>(`/api/experiments/${expId}/audit`, 200)
+  const events = list.rows || []
   const describe = (e: AuditEvent) => {
     const d = e.details || {}
     if (e.object_type === 'entry') return `${e.action} section${d.title ? ` “${d.title}”` : ''}${d.version ? ` → v${d.version}` : ''}`
@@ -261,7 +263,7 @@ function AuditTab({ expId }: { expId: number }) {
     if (e.action === 'zenodo_discard') return `discarded the draft on ${d.site}`
     return e.action
   }
-  return (
+  return (<>
     <ul className="timeline">
       {events.map(e => (
         <li key={e.id}>
@@ -271,7 +273,9 @@ function AuditTab({ expId }: { expId: number }) {
         </li>
       ))}
     </ul>
-  )
+    {list.err && <p className="error" role="alert">Couldn't load the history: {list.err}</p>}
+    <CutShort shown={events.length} total={list.total} things="events" busy={list.busy} onMore={list.more} />
+  </>)
 }
 
 /** One page per record: going from one record to another (a link, a follow-up just made, Back) starts the page afresh,

@@ -9,6 +9,10 @@ import Scanner from '../components/Scanner'
 import { SafetyBadge, SignalWord } from '../components/Safety'
 import { expiryDay, lotProblem, type ScanAnswer, type ScannedLot } from '../scan'
 import { LotForm, LotHistory } from './MaterialDetail'
+import CutShort from '../components/CutShort'
+import { addPage } from '../listNotice'
+
+const LOTS_PAGE = 200
 
 function AdjustDialog({ lot, onClose, onDone }: { lot: Lot; onClose: () => void; onDone: () => void }) {
   const [amount, setAmount] = useState<number | null>(null)
@@ -128,14 +132,33 @@ export default function Inventory() {
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('available')
   const [lots, setLots] = useState<Lot[]>([])
+  // 0.36.6: in pages, saying how many there are, like Materials (every container came at once before)
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const search = useRef(0)  // a page that arrives after the search changed is dropped
   const [adjust, setAdjust] = useState<Lot | null>(null)
   const [history, setHistory] = useState<Lot | null>(null)
   const [scanning, setScanning] = useState(false)
   const [scan, setScan] = useState<ScanAnswer | null>(null)
   const [adding, setAdding] = useState<{ code: string; material: Material | null } | null>(null)
   const dq = useDebounced(q, 200)
-  const load = () => api.get<Lot[]>(`/api/lots?q=${encodeURIComponent(dq)}${status ? `&status=${status}` : ''}`).then(setLots)
-  useEffect(() => { load() }, [dq, status]) // eslint-disable-line react-hooks/exhaustive-deps
+  const lotsUrl = (offset: number, limit: number) => `/api/lots?q=${encodeURIComponent(dq)}${status ? `&status=${status}` : ''}&limit=${limit}&offset=${offset}`
+  /** fresh: a new search (the first page); otherwise the rows shown are read again after a change (as many as shown) */
+  const load = (fresh = false) => {
+    const my = fresh ? ++search.current : search.current
+    return api.getList<Lot>(lotsUrl(0, fresh ? LOTS_PAGE : Math.max(LOTS_PAGE, lots.length)))
+      .then(r => { if (my === search.current) { setLots(r.rows); setTotal(r.total) } })
+  }
+  useEffect(() => { setLoadingMore(false); load(true) }, [dq, status]) // eslint-disable-line react-hooks/exhaustive-deps
+  const showMore = async () => {
+    const my = search.current
+    setLoadingMore(true)
+    try {
+      const r = await api.getList<Lot>(lotsUrl(lots.length, LOTS_PAGE))
+      if (my === search.current) { setLots(old => addPage(old, r.rows)); setTotal(r.total) }
+    } catch (e: any) { if (my === search.current) toast(e.message) }
+    finally { if (my === search.current) setLoadingMore(false) }
+  }
 
   const setLotStatus = async (l: Lot, s: string) => { await api.patch(`/api/lots/${l.id}`, { status: s }); load() }
 
@@ -192,6 +215,7 @@ export default function Inventory() {
           </tbody>
         </table>
       </div>
+      <CutShort shown={lots.length} total={total} things="containers" busy={loadingMore} onMore={showMore} />
       {adjust && <AdjustDialog lot={adjust} onClose={() => setAdjust(null)} onDone={() => { setAdjust(null); load() }} />}
       {history && <LotHistory lot={history} onClose={() => setHistory(null)} />}
       {scanning && <Scanner title="Scan a bottle" intro="A container label (such as VIM's), a supplier's barcode, or a Benchtop code like EXP-00025 or a sample code."

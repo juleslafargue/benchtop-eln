@@ -16,6 +16,7 @@ import sqlite3
 import sys
 import tempfile
 import zipfile
+import zlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -208,6 +209,9 @@ def check_backup(zip_path: Path) -> dict[str, Any]:
                 if "benchtop.db" not in names or "manifest.json" not in names:
                     return {"ok": False, "checks": [_item("Backup file", False, "Not a Benchtop backup")], "counts": {}}
                 manifest = json.loads(z.read("manifest.json"))
+                if not isinstance(manifest, dict) or not isinstance(manifest.get("files", {}), dict):
+                    return {"ok": False, "checks": [_item("Backup file", False, "Its list of contents (manifest.json) is damaged")],
+                            "counts": {}}
                 bad = z.testzip()
                 if bad:
                     return {"ok": False, "checks": [_item("Backup file", False, f"Damaged inside the zip: {bad}")], "counts": {}}
@@ -221,7 +225,7 @@ def check_backup(zip_path: Path) -> dict[str, Any]:
                             return {"ok": False, "checks": [_item("Backup file", False, f"Unsafe path inside: {n}")], "counts": {}}
                         t.parent.mkdir(parents=True, exist_ok=True)
                         t.write_bytes(z.read(n))
-        except (zipfile.BadZipFile, OSError, json.JSONDecodeError) as exc:
+        except (zipfile.BadZipFile, OSError, ValueError, EOFError, zlib.error) as exc:  # 0.36.6: every kind of damage
             return {"ok": False, "checks": [_item("Backup file", False, f"Couldn't read it: {exc}")], "counts": {}}
         db_ok = hashlib.sha256((root / "benchtop.db").read_bytes()).hexdigest() == manifest.get("database_sha256")
         first = _item("Backup file", db_ok, f"unpacked; made by Benchtop {manifest.get('app_version', '?')}" if db_ok

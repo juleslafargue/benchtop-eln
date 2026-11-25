@@ -3,6 +3,9 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { ago, api, fmt, type Status } from '../api'
 import { Mol } from '../components/bits'
+import CutShort from '../components/CutShort'
+
+const PAGE = 200
 
 interface MadeIn { id: number; eid: string; title: string; status: Status; date: string; yield_pct: number | null }
 interface Compound {
@@ -24,7 +27,10 @@ export default function Compounds() {
   const [sort, setSort] = useState<{ key: Key; dir: 1 | -1 }>({ key: 'name', dir: 1 })
   const [onlyRo5, setOnlyRo5] = useState(false)
   const [err, setErr] = useState('')
+  // 0.36.6: the table draws 200 rows at first (each row's structure is a picture); Show more draws the next 200
+  const [upTo, setUpTo] = useState(PAGE)
   useEffect(() => { api.get<Compound[]>('/api/compounds').then(setRows).catch(e => setErr(e.message)) }, [])
+  useEffect(() => { setUpTo(PAGE) }, [sort, onlyRo5])
   const shown = useMemo(() => {
     const r = (rows || []).filter(c => !onlyRo5 || (c.lipinski_violations.length <= 1 && !c.veber_violations.length))
     return [...r].sort((a, b) => {
@@ -51,7 +57,7 @@ export default function Compounds() {
         <table className="plain">
           <thead><tr>{th('name', 'Compound')}<th>Structure</th>{COLS.map(([k, l, t]) => th(k, l, t))}<th>Rules</th>{th('made', 'Made in', 'Experiments that made this compound')}</tr></thead>
           <tbody>
-            {shown.map(c => <tr key={c.smiles}>
+            {shown.slice(0, upTo).map(c => <tr key={c.smiles}>
               <td><b style={{ fontWeight: 600 }}>{c.name || c.formula}</b><div className="faint">{c.formula}{c.material ? <> · <Link to={`/materials/${c.material.id}`}>{c.material.mid}</Link></> : null}</div></td>
               <td><span className="mat-thumb" style={{ width: 110, height: 66, display: 'block' }}><Mol smiles={c.smiles} w={220} h={132} /></span></td>
               <td className="num">{fmt(c.mw, 1)}</td><td className="num">{fmt(c.logp, 2)}</td><td className="num">{fmt(c.tpsa, 1)}</td>
@@ -67,6 +73,7 @@ export default function Compounds() {
           </tbody>
         </table>
       </div>
+      <CutShort shown={Math.min(upTo, shown.length)} total={shown.length} things="compounds" busy={false} onMore={() => setUpTo(n => n + PAGE)} />
     </div>
   )
 }

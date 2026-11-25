@@ -105,30 +105,61 @@ _lock = threading.Lock()  # one backup at a time in this server (two clicks, or 
 
 
 def create_backup(reason: str = "manual") -> dict[str, Any]:
+    """Each backup starts afresh: nothing from a failed one (a folder that was missing, a full disk) is carried over,
+    and the next one that works clears the warning. Failures come back as BackupError with a plain message (0.36.6:
+    a backup folder that wasn't there gave "Internal Server Error" on Back up now)."""
     with _lock:
         try:
             out = _create_backup(reason)
         except Exception as exc:  # recorded so the admin dashboard says why, not just that backups are getting old
-            _note_failure(exc)
-            raise
-        _note_failure(None)
+            msg = _note_failure(exc)
+            if isinstance(exc, BackupError):
+                raise
+            raise BackupError(msg) from exc
+        _note_success(out["name"])
         return out
 
 
-def _note_failure(exc: BaseException | None) -> None:
+def _failure_message(exc: BaseException) -> str:
     import errno
-    if exc is None:
-        if load_state().get("last_failure"):
-            _save_state(last_failure=None)
-        return
+    if isinstance(exc, BackupError):
+        return str(exc)
     if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
-        msg = "the disk is full. Free some space (or choose a backup folder on a bigger disk)."
-    else:
-        msg = str(exc) or exc.__class__.__name__
+        return "the disk is full. Free some space (or choose a backup folder on a bigger disk)."
+    if isinstance(exc, OSError):
+        where = exc.filename or settings.backup_dir
+        why = exc.strerror or str(exc)
+        return (f"Benchtop couldn't write to {where} ({why}). If the backup folder is on a drive or a network share, "
+                "check that it's connected and that Benchtop may write there; the next backup tries again by itself.")
+    return f"{exc.__class__.__name__}: {exc}"[:500]
+
+
+def _note_failure(exc: BaseException) -> str:
+    msg = _failure_message(exc)
     try:
         _save_state(last_failure={"at": datetime.now(timezone.utc).isoformat(), "error": msg})
     except OSError:  # a full disk can't take the note either; the log still has it
         pass
+    return msg
+
+
+def _note_success(name: str) -> None:
+    """The last backup that worked; the last failure is kept too (the Admin page shows both, and warns only while the
+    failure is the newer of the two)."""
+    try:
+        _save_state(last_success={"at": datetime.now(timezone.utc).isoformat(), "name": name})
+    except OSError:
+        pass
+
+
+def failing_now(st: dict[str, Any]) -> bool:
+    """Is the last failure newer than the last backup that worked?"""
+    f, ok = st.get("last_failure"), st.get("last_success")
+    if not f:
+        return False
+    if not ok:  # made before 0.36.6, which removed the failure as soon as a backup worked
+        return True
+    return f.get("at", "") > ok.get("at", "")
 
 
 def _require_room(need: int, folder: Path, what: str) -> None:
@@ -454,15 +485,21 @@ def copy_to_second_place(src: Path) -> dict[str, Any] | None:
             except FileNotFoundError:
                 raise BackupError(f"A file this backup needs ({sha[:12]}…) is missing from {src.parent / FILES}") from None
         part = d / f".{src.name}.{os.getpid()}-{threading.get_ident()}.part"
-        shutil.copyfile(src, part)
-        if _sha256(part) != _sha256(src):
+        try:
+            shutil.copyfile(src, part)
+            if _sha256(part) != _sha256(src):
+                raise BackupError("The copy didn't match the original; it was removed")
+            part.replace(d / src.name)
+        finally:  # 0.36.6: a copy cut short (the drive full or pulled out) used to stay there, taking up the room
             part.unlink(missing_ok=True)
-            raise BackupError("The copy didn't match the original; it was removed")
-        part.replace(d / src.name)
+        for old in d.glob(f".{PREFIX}*.part"):  # and ones left by an older Benchtop
+            if old.stat().st_mtime < time.time() - 3600:
+                old.unlink(missing_ok=True)
         for old in copy_backups()[settings.backup_keep:]:
             old.unlink(missing_ok=True)
         _collect_garbage(d, copy_backups())
         res = {"ok": True, "at": now, "name": src.name, "folder": str(d), "new_files": new_files}
+        _save_state(last_copy_ok={"at": now, "name": src.name})
     except (OSError, KeyError, ValueError, zipfile.BadZipFile, BackupError) as exc:
         import errno
         full = isinstance(exc, OSError) and exc.errno == errno.ENOSPC
@@ -520,9 +557,9 @@ def health() -> dict[str, Any]:
                         "another one (Postgres). Back up the database with pg_dump and copy the attached files yourself; "
                         "see “Postgres (advanced)” in docs/SERVER.md.")
     elif settings.backup_interval_hours > 0:
-        if st.get("last_failure"):
+        if failing_now(st):
             warnings.append(f"The last backup failed: {st['last_failure']['error']}")
-        if newest is None and not st.get("last_failure"):
+        if newest is None and not failing_now(st):
             warnings.append("No backups yet.")
         elif age_h is not None and age_h > max(72, settings.backup_interval_hours * 3):
             warnings.append(f"The newest backup is {age_h / 24:.0f} days old.")
@@ -534,6 +571,8 @@ def health() -> dict[str, Any]:
             bad = [c["name"] for c in st["last_check"].get("checks", []) if not c["ok"]]
             warnings.append(f"The latest backup test found problems ({', '.join(bad) or 'see Admin → Backups'}).")
     return {"copy_dir": str(copy_dir()) if copy_dir() else None, "copy_dir_from_env": "BENCHTOP_BACKUP_COPY_DIR" in os.environ,
+            "last_success": st.get("last_success") or ({"at": newest["created_at"], "name": newest["name"]} if newest else None),
+            "last_failure": st.get("last_failure"), "failing": failing_now(st), "last_copy_ok": st.get("last_copy_ok"),
             "last_copy": st.get("last_copy"), "last_check": st.get("last_check"), "copies": len(copy_backups()),
             "files": storage(), "warnings": warnings}
 
@@ -596,20 +635,35 @@ def _restore(zip_path: str, allow_missing: bool = False) -> tuple[Path, list[str
     zp = Path(zip_path).expanduser().resolve()
     if not zp.exists():
         raise BackupError(f"{zp} not found")
+    if zp.is_dir():
+        raise BackupError(f"{zp} is a folder. Give the backup file inside it (benchtop-backup-….zip). Nothing was changed.")
     problems: list[str] = []
     token = f"{datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}-{threading.get_ident()}"
     stage = settings.data_dir / f".restore-{token}"
     db = _sqlite_path()
     new_db = db.with_name(f".restore-{token}.db")  # beside the database, so putting it in place is one rename
     try:
-        with zipfile.ZipFile(zp) as z:
+        try:
+            z = zipfile.ZipFile(zp)
+        except (zipfile.BadZipFile, EOFError) as exc:
+            raise BackupError(f"{zp.name} isn't a backup Benchtop can read: {_zip_problem(exc, zp)} Nothing was changed.") from None
+        with z:
             names = z.namelist()
             if "benchtop.db" not in names or "manifest.json" not in names:
-                raise BackupError("Not a Benchtop backup (missing benchtop.db or manifest.json)")
-            manifest = json.loads(z.read("manifest.json"))
-            db_bytes = z.read("benchtop.db")
+                raise BackupError("Not a Benchtop backup (missing benchtop.db or manifest.json). Nothing was changed.")
+            manifest = _read_checked_manifest(z, zp)
+            try:
+                db_bytes = z.read("benchtop.db")
+            except (zipfile.BadZipFile, EOFError, OSError, ValueError) as exc:  # zlib.error is an Exception: below
+                raise BackupError(f"{zp.name} is damaged: its database can't be unpacked ({exc}). The file was probably cut "
+                                  "short or changed while being copied; try another copy of it, or an older backup. "
+                                  "Nothing was changed.") from None
             if hashlib.sha256(db_bytes).hexdigest() != manifest["database_sha256"]:
-                raise BackupError("Backup is corrupt: database checksum does not match")
+                raise BackupError("Backup is corrupt: database checksum does not match. Try another copy of it, or an "
+                                  "older backup. Nothing was changed.")
+            if not db_bytes.startswith(b"SQLite format 3\0"):
+                raise BackupError(f"{zp.name} doesn't hold a Benchtop database (its benchtop.db isn't a database file). "
+                                  "Nothing was changed.")
             from .migrations import SCHEMA_VERSION
             if (manifest.get("schema_version") or 0) > SCHEMA_VERSION:
                 raise BackupError(f"This backup was made by a newer Benchtop ({manifest.get('app_version')}); install that version "
@@ -657,6 +711,7 @@ def _restore(zip_path: str, allow_missing: bool = False) -> tuple[Path, list[str
             f.write(db_bytes)
             f.flush()
             os.fsync(f.fileno())
+        _check_database(new_db, zp)
         # everything is ready. From here on, a restore cut off part-way (Benchtop killed, the Mac turned off) is
         # finished the next time Benchtop starts, so the data is never left half old, half restored (0.24.2)
         aside = settings.data_dir / f"pre-restore-{datetime.now():%Y%m%d-%H%M%S}"
@@ -667,10 +722,76 @@ def _restore(zip_path: str, allow_missing: bool = False) -> tuple[Path, list[str
         _write_journal({"stage": str(stage), "new_db": str(new_db), "db": str(db), "aside": str(aside), "from": str(zp)})
         _finish_restore()
         return aside, problems
+    except BackupError:
+        raise
+    except Exception as exc:  # anything else wrong with the file: a plain message, never a traceback (0.36.6)
+        if (settings.data_dir / JOURNAL).exists():
+            raise  # the data is already being swapped: not a problem with the file
+        import zlib
+        if isinstance(exc, (zipfile.BadZipFile, zlib.error, EOFError)):
+            raise BackupError(f"{zp.name} is damaged ({exc}): part of it can't be unpacked. Try another copy of it, or an "
+                              "older backup. Nothing was changed.") from None
+        if isinstance(exc, OSError) and exc.errno == __import__("errno").ENOSPC:
+            raise BackupError("There isn't room on the disk to unpack the backup. Free some space and try again. "
+                              "Nothing was changed.") from None
+        raise BackupError(f"Benchtop couldn't restore {zp.name} ({type(exc).__name__}: {exc}). Nothing was changed.") from None
     finally:
         if not (settings.data_dir / JOURNAL).exists():
             shutil.rmtree(stage, ignore_errors=True)
             new_db.unlink(missing_ok=True)
+
+
+def _zip_problem(exc: BaseException, zp: Path) -> str:
+    try:
+        size = zp.stat().st_size
+    except OSError:
+        size = -1
+    if size == 0:
+        return "the file is empty."
+    with open(zp, "rb") as f:
+        start = f.read(4)
+    if start == b"PK\x03\x04":
+        return "it's a zip file, but cut short or damaged (was it still being copied?)."
+    return "it isn't a zip file."
+
+
+def _read_checked_manifest(z: zipfile.ZipFile, zp: Path) -> dict[str, Any]:
+    """The backup's manifest, with the fields a restore relies on checked for their type."""
+    bad = f"{zp.name} has a damaged list of contents (manifest.json)"
+    try:
+        m = json.loads(z.read("manifest.json"))
+    except (ValueError, UnicodeDecodeError, zipfile.BadZipFile, EOFError, OSError) as exc:
+        raise BackupError(f"{bad}: {exc}. Nothing was changed.") from None
+    if not isinstance(m, dict):
+        raise BackupError(f"{bad}. Nothing was changed.")
+    if not isinstance(m.get("database_sha256"), str):
+        raise BackupError(f"{bad}: it has no fingerprint for the database. Nothing was changed.")
+    sv = m.get("schema_version")
+    if sv is not None and (isinstance(sv, bool) or not isinstance(sv, int)):
+        raise BackupError(f"{bad}: its database version isn't a number. Nothing was changed.")
+    files = m.get("files")
+    if files is not None and (not isinstance(files, dict) or not all(isinstance(k, str) and _SHA.fullmatch(k) for k in files)):
+        raise BackupError(f"{bad}: its list of attached files is damaged. Nothing was changed.")
+    return m
+
+
+def _check_database(db: Path, zp: Path) -> None:
+    """The unpacked database opens and is a Benchtop one, before anything is swapped."""
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            ok = con.execute("PRAGMA quick_check").fetchone()[0]
+            tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        raise BackupError(f"The database in {zp.name} is damaged ({exc}). Try another copy of it, or an older backup. "
+                          "Nothing was changed.") from None
+    if ok != "ok":
+        raise BackupError(f"The database in {zp.name} is damaged ({ok}). Try another copy of it, or an older backup. "
+                          "Nothing was changed.")
+    if not {"user", "experiment"} <= tables:
+        raise BackupError(f"{zp.name} doesn't hold a Benchtop database. Nothing was changed.")
 
 
 JOURNAL = "restore-in-progress.json"

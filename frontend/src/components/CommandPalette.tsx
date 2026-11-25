@@ -49,6 +49,19 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
       .then(r => { if (on) setByCode({ q: dq, ...r }) }, () => { if (on) setByCode(null) })
     return () => { on = false }
   }, [dq])
+  // 0.36.6: only the newest 500 of each are loaded, so the server is asked too: an older record or material is found
+  // by its number, title or name (the longest word typed; every word is still checked here)
+  useEffect(() => {
+    const word = dq.trim().split(/\s+/).sort((a, b) => b.length - a.length)[0] || ''
+    if (word.length < 2) return
+    let on = true
+    const add = <T extends { id: number }>(set: (f: (old: T[]) => T[]) => void) => (rows: T[]) => {
+      if (on) set(old => [...old, ...rows.filter(r => !old.some(o => o.id === r.id))])
+    }
+    api.get<ExperimentSummary[]>(`/api/experiments?q=${encodeURIComponent(word)}&limit=30`).then(add(setExps)).catch(() => {})
+    api.get<Material[]>(`/api/materials?q=${encodeURIComponent(word)}&limit=30`).then(add(setMats)).catch(() => {})
+    return () => { on = false }
+  }, [dq])
 
   const go = (path: string) => () => { onClose(); nav(path) }
   const items: Item[] = useMemo(() => [

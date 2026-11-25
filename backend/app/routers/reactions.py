@@ -146,9 +146,8 @@ def compounds(user: CurrentUser, session: DB, response: Response,
     seen: dict[str, dict[str, Any]] = {}
 
     def add(smiles: str, name: str, **extra: Any) -> dict[str, Any] | None:
-        try:
-            p = chem.properties(smiles)
-        except chem.ChemError:
+        p = chem.compound_row(smiles) if isinstance(smiles, str) and smiles.strip() else None
+        if p is None:
             return None
         key = p["inchikey"] or p["smiles"]
         row = seen.get(key)
