@@ -133,7 +133,9 @@ Audit trails come newest first and go back with `before_id` (the `id` of the old
 | List | Rows when `limit` is left out |
 |---|---|
 | `GET /api/experiments/{id}/audit` (a record's history) | all |
-| `GET /api/audit` (the lab's, for admins) | 200 |
+
+The lab's whole audit trail (Admin › Audit trail) pages the same way, 200 at a time, but only for an admin signed
+in: tokens can't read it.
 
 ```python
 def fetch_all(path, page=1000, **params):

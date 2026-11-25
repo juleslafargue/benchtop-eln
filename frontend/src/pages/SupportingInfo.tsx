@@ -378,7 +378,7 @@ function ExperimentPicker({ taken, onPick, onClose }: { taken: Set<number>; onPi
   // 0.36.6: the newest 1,000 are loaded at once; what's typed is also looked up on the server, so older ones are found
   const dq = useDebounced(q, 200)
   useEffect(() => {
-    const t = dq.trim()
+    const t = dq.trim().slice(0, 200)
     if (t.length < 2) return
     let on = true
     api.get<ExperimentSummary[]>(`/api/experiments?q=${encodeURIComponent(t)}&limit=40`)

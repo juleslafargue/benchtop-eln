@@ -52,7 +52,7 @@ export default function CommandPalette({ onClose, onNewExperiment, onNewNotebook
   // 0.36.6: only the newest 500 of each are loaded, so the server is asked too: an older record or material is found
   // by its number, title or name (the longest word typed; every word is still checked here)
   useEffect(() => {
-    const word = dq.trim().split(/\s+/).sort((a, b) => b.length - a.length)[0] || ''
+    const word = (dq.trim().split(/\s+/).sort((a, b) => b.length - a.length)[0] || '').slice(0, 200)
     if (word.length < 2) return
     let on = true
     const add = <T extends { id: number }>(set: (f: (old: T[]) => T[]) => void) => (rows: T[]) => {

@@ -621,6 +621,27 @@ def test_making_experiments_and_finding_what_mentions_them(client, me, nb, other
     assert client.get(f"/api/experiments/{other['experiment']['id']}/mentioned-in", headers=me["read"]).status_code == 404
 
 
+# ------------------------------------------------------------------ a record's history in pages, records by number or title (0.36.6)
+
+AUDIT = {"id": int, "ts": "time", "username": str, "action": str, "object_type": str, "object_id": (int, NONE), "details": (dict, NONE),
+         "hash": str}
+
+
+def test_a_records_history_in_pages_and_records_found_by_title(client, me, nb, other):
+    e = new_exp(client, me, nb, "Contract history 0366 zephyr")
+    everything = client.get(f"/api/experiments/{e['id']}/audit", headers=me["read"])
+    total = int(everything.headers["X-Total-Count"])
+    rows = all_shaped(everything.json(), AUDIT, "GET /api/experiments/{id}/audit")
+    page = client.get(f"/api/experiments/{e['id']}/audit", headers=me["read"], params={"limit": 1})
+    assert len(page.json()) == 1 and int(page.headers["X-Total-Count"]) == total == len(rows)
+    older = client.get(f"/api/experiments/{e['id']}/audit", headers=me["read"], params={"before_id": rows[0]["id"]}).json()
+    assert [x["id"] for x in older] == [x["id"] for x in rows[1:]]
+    assert client.get(f"/api/experiments/{e['id']}/audit", headers=me["read"], params={"limit": 0}).status_code == 422
+    assert client.get(f"/api/experiments/{other['experiment']['id']}/audit", headers=me["read"]).status_code == 404
+    found = client.get("/api/experiments", headers=me["read"], params={"q": "0366 zephyr"}).json()
+    assert [x["id"] for x in found] == [e["id"]]
+
+
 # ------------------------------------------------------------------ every documented endpoint is checked here
 
 COVERED = {
@@ -632,7 +653,7 @@ COVERED = {
     "POST /api/materials/{id}/lots", "GET /api/lots", "GET /api/scan", "PATCH /api/lots/{id}", "POST /api/lots/{id}/transactions",
     "GET /api/lots/{id}/transactions", "POST /api/lots/transactions/{id}/reverse", "POST /api/materials/register-product",
     "GET /api/compounds", "GET /api/samples/lookup", "GET /api/search",
-    "POST /api/experiments", "GET /api/experiments/{id}/mentioned-in",
+    "POST /api/experiments", "GET /api/experiments/{id}/mentioned-in", "GET /api/experiments/{id}/audit",
 }
 
 
