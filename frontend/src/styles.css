@@ -74,7 +74,7 @@ code { font-family: var(--mono); font-size: 0.85em; }
 .nav a:hover, .nb-link:hover { background: var(--paper-2); color: var(--ink); }
 .nav a.active, .nb-link.active { background: var(--accent-soft); color: var(--ink); }
 .side-heading { font-size: 13px; color: var(--ink-3); padding: 0 8px 4px; display: flex; justify-content: space-between; align-items: center; }
-.nb-link .count { font-size: 12px; color: var(--ink-3); }
+.nb-link .count { font-size: 12px; color: var(--ink-2); }  /* 0.36.6: ink-3 was 4.0:1 on the open notebook's tint */
 .side-foot { margin-top: auto; font-size: 13px; color: var(--ink-2); padding: 0 8px; display: flex; flex-direction: column; gap: 6px; }
 .main { padding: 28px 36px 80px; min-width: 0; }
 .page { max-width: 1120px; margin: 0 auto; }
@@ -83,6 +83,8 @@ code { font-family: var(--mono); font-size: 0.85em; }
 /* ---------- typography helpers */
 .page-title { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
 .lede { color: var(--ink-2); margin: 6px 0 0; max-width: 70ch; }
+/* 0.36.6: example text in boxes had the browser's grey (#757575): 3.5:1 in dark mode, 4.4:1 in light */
+::placeholder { color: var(--ink-3); opacity: 1; }
 .muted { color: var(--ink-2); }
 .faint { color: var(--ink-3); font-size: 13px; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -453,8 +455,9 @@ table.plain td.num { text-align: right; }
 .cite-title { color: var(--ink); }
 .ref-doi { font-family: var(--sans); font-size: 13px; color: var(--accent); overflow-wrap: anywhere; }
 .ref-note { font-family: var(--sans); font-size: 13.5px; color: var(--ink-2); margin-top: 2px; white-space: pre-wrap; }
-.ref-actions { display: flex; gap: 2px; flex-shrink: 0; font-family: var(--sans); opacity: .55; transition: opacity .12s; }
-.ref-item:hover .ref-actions, .ref-actions:focus-within { opacity: 1; }
+.ref-actions { display: flex; gap: 2px; flex-shrink: 0; font-family: var(--sans); }
+.ref-actions .btn { color: var(--ink-3); transition: color .12s; }  /* 0.36.6: quiet by colour, not opacity (.55 gave 2.5:1) */
+.ref-item:hover .ref-actions .btn, .ref-actions:focus-within .btn { color: var(--ink); }
 .ref-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 10px; border: 1px solid var(--rule); border-radius: 10px;
   padding: 10px 12px 12px; background: var(--paper-2); }
 .ref-form .w-full { grid-column: 1 / -1; }
@@ -619,7 +622,7 @@ kbd { font: 11px var(--sans); border: 1px solid var(--rule-strong); border-botto
 .w-main .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .w-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; padding: 12px; align-content: start; }
 .w-actions .btn { justify-content: center; }
-.w-actions kbd { margin-left: 4px; background: transparent; color: inherit; border-color: currentColor; opacity: .7; }
+.w-actions kbd { margin-left: 4px; background: transparent; color: inherit; border-color: currentColor; }  /* 0.36.6: no opacity (2.9:1) */
 .w-note { flex: 1; border: 0; resize: none; padding: 10px 12px; background: color-mix(in srgb, var(--signed) 7%, var(--paper)); font: 15px/1.5 var(--serif); color: var(--ink); outline: none; }
 .w-header { font-size: 19px; font-weight: 600; padding: 0 2px 4px; margin: 0; border-bottom: 2px solid var(--ink); }
 .w-header-in { font-size: 17px; font-weight: 600; margin: auto 8px 6px; }
@@ -654,7 +657,7 @@ kbd { font: 11px var(--sans); border: 1px solid var(--rule-strong); border-botto
 .fld-cap { font-size: 11.5px; font-weight: 600; color: var(--ink-3); letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sp-group { display: inline-flex; align-items: center; gap: 6px; }
 .sp-cap { font-size: 12px; color: var(--ink-3); }
-.sp-toolbar kbd { font-size: 10.5px; padding: 0 4px; margin-left: 3px; opacity: .65; border: 1px solid currentColor; border-radius: 4px; background: transparent; color: inherit; }
+.sp-toolbar kbd { font-size: 10.5px; padding: 0 4px; margin-left: 3px; border: 1px solid currentColor; border-radius: 4px; background: transparent; color: var(--ink-3); }
 .sp-h4 { margin: 4px 0 0; font-size: 12.5px; font-weight: 600; color: var(--ink-2); text-transform: none; }
 
 /* ---------- safety */

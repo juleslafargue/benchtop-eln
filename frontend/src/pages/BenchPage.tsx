@@ -6,6 +6,7 @@ import { logLine, parseTimer, startTimer, fmtDuration } from '../bench'
 import { TimerTray } from '../components/BenchTools'
 import Scanner from '../components/Scanner'
 import { lotProblem, mass, rowLine, rowsForLot, vol, withBottle, type ScanAnswer } from '../scan'
+import { useScanned } from '../components/ScanCatcher'
 
 /** Scan a bottle at the bench: is it one this reaction needs, how much to weigh, and is it fit to use? The reaction
  *  table can be told to use it for its row. That save says which version of the table it changes, so an edit made
@@ -28,6 +29,8 @@ function CheckBottle({ exp, editable, reload }: { exp: Experiment; editable: boo
       setAnswer(a); setPicked(a.lots.length === 1 ? a.lots[0].id : null)
     } catch (e: any) { setErr(e.message) }
   }
+  useScanned(code => { setScanning(false); lookUp(code) })  // 0.36.6: a scanner used with no box focused
+
   const use = async (index: number) => {
     if (!entry || !lot) return
     const next = withBottle(rows, index, lot)

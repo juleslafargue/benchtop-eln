@@ -112,6 +112,11 @@ def create_backup(user: Admin, session: DB):
         b = backup.create_backup(f"manual by {user.username}")
     except backup.BackupError as exc:
         raise HTTPException(400, str(exc))
+    except OSError as exc:  # 0.36.6: the backup folder not there, or not writable, gave "Internal Server Error"
+        from .. import diskspace
+        if diskspace.is_disk_full(exc):
+            raise  # the full-disk message (507), as before
+        raise HTTPException(400, f"The backup failed: {backup._failure_message(exc)}") from None
     audit.record(session, user, "backup", "system", None, name=b["name"], size=b["size"])
     session.commit()
     return b

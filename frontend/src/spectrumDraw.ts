@@ -291,7 +291,7 @@ export function drawSpectrum(g: CanvasRenderingContext2D, w: number, h: number, 
     g.beginPath(); g.moveTo(px, plotBottom); g.lineTo(px, plotBottom + 4); g.stroke()
     g.fillText(String(+v.toFixed(4)), px, plotBottom + 16)
   }
-  g.textAlign = 'right'; g.fillText(spec.xLabel, w - M.r, plotBottom + 30)
+  const xLabelFont = font(11)
 
   // integral values below the axis (NMR convention)
   const ref = withArea[refIdx]?.area
@@ -301,6 +301,7 @@ export function drawSpectrum(g: CanvasRenderingContext2D, w: number, h: number, 
   g.font = font(11, 600); g.fillStyle = pal.green; g.textAlign = 'center'
   // each value goes in the first of three rows where it doesn't collide with one already placed
   const usedRows: { px: number; w: number; row: number }[] = []
+  const placedValues: { a: number; b: number; px: number; text: string; row: number }[] = []
   ;[...withArea].sort((p, q) => toPx((p.a + p.b) / 2) - toPx((q.a + q.b) / 2)).forEach(r => {
     const a = toPx(r.a), b = toPx(r.b), px = (a + b) / 2
     const text = ref ? (r.area / ref * refH).toFixed(2) : ''
@@ -308,10 +309,22 @@ export function drawSpectrum(g: CanvasRenderingContext2D, w: number, h: number, 
     let row = 0
     while (row < 2 && usedRows.some(q => q.row === row && Math.abs(q.px - px) < (q.w + tw) / 2)) row++
     usedRows.push({ px, w: tw, row })
-    g.fillRect(Math.min(a, b), plotBottom + 22, Math.abs(b - a), 1.5)
-    if (row) g.fillRect(px - 0.4, plotBottom + 23.5, 0.8, row * 12)
-    if (text) g.fillText(text, px, plotBottom + 34 + row * 12)
+    placedValues.push({ a, b, px, text, row })
   })
+  // the axis label ("δ (ppm)") at the right, level with the first row of values: or, when a value is there (a peak
+  // near 0 ppm on a phone), below them (0.36.6: 2.99 was drawn over it)
+  g.font = xLabelFont
+  const lw = g.measureText(spec.xLabel).width + 6, lx1 = w - M.r + 3, lx0 = w - M.r - lw
+  const clashes = (row: number) => usedRows.some(q => q.row === row && q.px + q.w / 2 > lx0 && q.px - q.w / 2 < lx1)
+  const labelRow = clashes(0) ? 2 : 0  // a value in the third row as well, right under it, is rare enough to leave
+  g.fillStyle = pal.ink3; g.textAlign = 'right'
+  g.fillText(spec.xLabel, w - M.r, plotBottom + (labelRow === 0 ? 30 : 58))
+  g.font = font(11, 600); g.fillStyle = pal.green; g.textAlign = 'center'
+  for (const v of placedValues) {
+    g.fillRect(Math.min(v.a, v.b), plotBottom + 22, Math.abs(v.b - v.a), 1.5)
+    if (v.row) g.fillRect(v.px - 0.4, plotBottom + 23.5, 0.8, v.row * 12)
+    if (v.text) g.fillText(v.text, v.px, plotBottom + 34 + v.row * 12)
+  }
 
   // signal labels in the top strip, spread apart, each with a leader line down to its multiplet
   if (signalTags.length) {

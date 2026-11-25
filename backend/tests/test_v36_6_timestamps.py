@@ -5,6 +5,7 @@ expired or not-yet-valid certificate was accepted and shown as certified. A time
 was valid stays valid after it expires (as RFC 3161 and `openssl ts -verify` treat it), so old ones don't turn bad."""
 import base64
 import hashlib
+import re
 
 import pytest
 from sqlmodel import Session, select
@@ -67,8 +68,10 @@ def _stored_by_an_older_benchtop(client, users, notebook, use, fake: FakeTSA, ti
     return sid
 
 
-def _check_item():
-    return next(c for c in check.check_live()["checks"] if c["name"] == "Trusted timestamps")
+def _named(sid: int) -> bool:
+    """Does ./benchtop check name this signature's timestamp as one that doesn't verify? (Other tests' may be named too.)"""
+    item = next(c for c in check.check_live()["checks"] if c["name"] == "Trusted timestamps")
+    return bool(re.search(rf"\(signatures [^)]*\b{sid}\b", item["detail"])) and not item["ok"]
 
 
 def _forget(sid: int) -> None:
@@ -86,8 +89,7 @@ def test_a_timestamp_made_while_the_certificate_was_valid_stays_valid_after_it_e
     assert timestamps.verify(_token(old, digest), digest)["ok"]
     sid = _stored_by_an_older_benchtop(client, users, notebook, use, old, "Certified, then the certificate expired")
     try:
-        item = _check_item()
-        assert item["ok"], item
+        assert not _named(sid)
     finally:
         _forget(sid)
 
@@ -99,7 +101,6 @@ def test_the_data_check_names_a_stored_timestamp_whose_certificate_had_expired(c
     assert not info["ok"] and "had expired" in info["error"], info
     sid = _stored_by_an_older_benchtop(client, users, notebook, use, expired, "Certified with an expired certificate")
     try:
-        item = _check_item()
-        assert not item["ok"] and f"signatures {sid}" in item["detail"], item
+        assert _named(sid)
     finally:
         _forget(sid)

@@ -70,8 +70,24 @@ function SiList() {
 
 // ------------------------------------------------------------------ one document
 
+// 0.36.6: typing here is kept the way the record's sections keep it. Before, a change made less than a second before
+// leaving the page (a click on a link) was never saved, closing the tab with changes not saved gave no warning, a save
+// that failed wasn't tried again, and nothing was kept in the browser. Now leaving saves at once, the tab warns, a
+// failed save is tried again, and a copy stays in this browser until the server has it, offered back on opening.
+const STORE: Storage | null = (() => { try { return window.localStorage } catch { return null } })()
+const copyKey = (user: number, doc: number) => `benchtop.si-draft.${user}.${doc}`
+interface KeptCopy { draft: Draft; version: number; at: number }
+function readCopy(user: number, doc: number): KeptCopy | null {
+  try { const c = JSON.parse(STORE?.getItem(copyKey(user, doc)) || 'null'); return c && c.draft && typeof c.version === 'number' ? c : null } catch { return null }
+}
+function writeCopy(user: number, doc: number, c: KeptCopy | null) {
+  try { if (c) STORE?.setItem(copyKey(user, doc), JSON.stringify(c)); else STORE?.removeItem(copyKey(user, doc)) } catch { /* storage full or blocked */ }
+}
+const sameDraft = (a: Draft, b: Draft) => JSON.stringify(a) === JSON.stringify(b)
+
 function SiEditor({ id }: { id: number }) {
-  const { canWrite, toast } = useApp()
+  const { canWrite, toast, user } = useApp()
+  const [kept, setKept] = useState<KeptCopy | null>(null)  // typing from before that the server never got
   const nav = useNavigate()
   const [doc, setDoc] = useState<SiDocument | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -92,8 +108,10 @@ function SiEditor({ id }: { id: number }) {
       version.current = d.version; setDoc(d)
       const dr = { title: d.title, general: d.general, page_size: d.page_size, items: d.items }
       draftRef.current = savedRef.current = dr; setDraft(dr); setSaveState('saved')
+      const c = readCopy(user.id, id)
+      if (c && !sameDraft(c.draft, dr)) setKept(c); else writeCopy(user.id, id, null)
     }).catch(e => setErr(e.message))
-  }, [id])
+  }, [id, user.id])
   useEffect(load, [load])
 
   // saved a moment after each change; one save at a time, each from the version the last one left
@@ -106,7 +124,8 @@ function SiEditor({ id }: { id: number }) {
       try {
         const d = await api.put<SiDocument>(`/api/si-documents/${id}`, { ...body, expected_version: version.current })
         version.current = d.version; setDoc(d); savedRef.current = body
-        setSaveState(draftRef.current === body ? 'saved' : 'unsaved')
+        retries.current = 0
+        if (draftRef.current === body) { setSaveState('saved'); writeCopy(user.id, id, null) } else setSaveState('unsaved')
       } catch (e: any) {
         if (e instanceof ApiError && e.status === 409) setSaveState('conflict')
         else { setSaveState('failed'); toast(e.message) }
@@ -115,20 +134,54 @@ function SiEditor({ id }: { id: number }) {
     })()
     await inflight.current
     if (queued.current) { queued.current = false; await save() }
-  }, [id, toast])
+  }, [id, toast, user.id])
   const timer = useRef<number>()
+  const retries = useRef(0)
   const change = (p: Partial<Draft>) => {
     if (!draftRef.current) return
     const next = { ...draftRef.current, ...p }
     draftRef.current = next; setDraft(next); setSaveState('unsaved')
+    writeCopy(user.id, id, { draft: next, version: version.current, at: Date.now() })
     clearTimeout(timer.current); timer.current = window.setTimeout(() => { save() }, 700)
+  }
+  // a save that failed (Benchtop out of reach) is tried again, a little later each time, and at once when back online
+  useEffect(() => {
+    if (saveState !== 'failed') return
+    const t = window.setTimeout(() => { save() }, Math.min(30_000, 3000 * 2 ** retries.current++))
+    const online = () => { save() }
+    window.addEventListener('online', online)
+    return () => { clearTimeout(t); window.removeEventListener('online', online) }
+  }, [saveState, save])
+  // closing the tab with changes the server doesn't have yet: the browser asks first
+  useEffect(() => {
+    if (saveState === 'saved') return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault() }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [saveState])
+  // the other window's version, then this window's typing saved over it
+  const keepMine = async () => {
+    try {
+      const d = await api.get<SiDocument>(`/api/si-documents/${id}`)
+      version.current = d.version
+      setSaveState('unsaved')
+      await save()
+    } catch (e: any) { toast(e.message) }
+  }
+  const putBack = async () => {
+    if (!kept) return
+    setKept(null)
+    change(kept.draft)
   }
   const flush = async () => {
     clearTimeout(timer.current)
     if (inflight.current) await inflight.current
     if (draftRef.current !== savedRef.current) await save()
   }
-  useEffect(() => () => clearTimeout(timer.current), [])
+  // leaving the page: what isn't saved yet is saved now (it used to wait for the timer, which leaving cancelled)
+  const flushRef = useRef(flush)
+  flushRef.current = flush
+  useEffect(() => () => { clearTimeout(timer.current); if (draftRef.current && draftRef.current !== savedRef.current) flushRef.current() }, [])
 
   const byExp = useMemo(() => new Map((doc?.compounds || []).map(c => [c.experiment_id, c])), [doc])
   if (err) return <p className="error">{err}</p>
@@ -205,7 +258,12 @@ function SiEditor({ id }: { id: number }) {
           <button className="btn primary" onClick={build} disabled={!!progress || !shown.some(c => c.visible)}>{progress ? 'Building…' : 'Download Word file'}</button>
         </div>
       </div>
-      {saveState === 'conflict' && <p className="notice" role="alert">This document was changed in another window or tab. <button className="btn sm" onClick={load}>Reload it</button> (your last change here isn't saved).</p>}
+      {saveState === 'conflict' && <p className="notice" role="alert">This document was changed in another window or tab, so your
+        last change here isn't saved yet. <button className="btn sm" onClick={keepMine}>Keep what's here</button>{' '}
+        <button className="btn sm ghost" onClick={() => { writeCopy(user.id, id, null); load() }}>Use the other version</button></p>}
+      {kept && <p className="notice" role="alert">This browser has changes to this document that weren't saved
+        ({ago(new Date(kept.at).toISOString())}). <button className="btn sm" onClick={putBack}>Put them back</button>{' '}
+        <button className="btn sm ghost" onClick={() => { writeCopy(user.id, id, null); setKept(null) }}>Discard them</button></p>}
       {(progress || built) && <p className="notice" role="status" aria-live="polite">{progress || built}</p>}
 
       <div className="si-doc">

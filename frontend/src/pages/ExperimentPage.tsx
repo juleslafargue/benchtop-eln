@@ -21,6 +21,7 @@ import { sigLine } from '../display'
 import { onReturn } from '../onReturn'
 import type { Attachment, Entry, User, UserBrief } from '../api'
 import { useOlderPages } from '../components/bits'
+import Modal from '../components/Modal'
 import CutShort from '../components/CutShort'
 
 const STATUS_WORD = { open: 'Draft', signed: 'Signed', witnessed: 'Witnessed', voided: 'Voided', locked: 'Locked' }
@@ -307,6 +308,7 @@ function ExperimentRecord() {
   const [justAdded, setJustAdded] = useState<number | null>(null)
   const [importNotes, setImportNotes] = useState<string[]>([])
   const [scaling, setScaling] = useState(false)
+  const [asTemplate, setAsTemplate] = useState(false)  // 0.36.6: asks first when the record isn't open to everyone
   const [sharing, setSharing] = useState<UserBrief[] | null>(null)
   const [followUp, setFollowUp] = useState(false)
   const [focusEntry, setFocusEntry] = useState<number | null>(null)
@@ -665,7 +667,7 @@ function ExperimentRecord() {
                 <div className="stack" style={{ gap: 6 }}>
                   {canWrite && !exp.notebook_archived && <button className="btn sm" onClick={() => clone(false)}>Duplicate</button>}
                   {canWrite && !exp.is_template && !exp.notebook_archived && <button className="btn sm" onClick={() => setScaling(true)}>Repeat at another scale…</button>}
-                  {canWrite && !exp.is_template && <button className="btn sm" onClick={() => clone(true)}>Save as template</button>}
+                  {canWrite && !exp.is_template && <button className="btn sm" onClick={() => exp.audience?.visibility === 'everyone' ? clone(true) : setAsTemplate(true)}>Save as template</button>}
                   {publishLater && <PublishPanel exp={exp} onChange={load} />}
                 </div>
               </details>}
@@ -686,6 +688,14 @@ function ExperimentRecord() {
       {followUp && <FollowUpDialog eid={exp.eid} title={exp.title} notebookId={exp.notebook_id}
         url={`/api/experiments/${exp.id}/follow-up`} onClose={() => setFollowUp(false)} onDone={() => setFollowUp(false)} />}
       {sharing && <ShareDialog experimentId={exp.id} eid={exp.eid} preselect={sharing} onClose={() => { setSharing(null); load() }} />}
+      {asTemplate && <Modal title="Save as a template everyone can open?" onClose={() => setAsTemplate(false)} footer={<>
+        <button className="btn" onClick={() => setAsTemplate(false)}>Cancel</button>
+        <button className="btn primary" onClick={() => { setAsTemplate(false); clone(true) }}>Save as template</button></>}>
+        <p style={{ marginTop: 0 }}>Templates can be opened by everyone with a Benchtop account. This record can be opened only by{' '}
+          {exp.audience?.visibility === 'group' ? `${exp.audience.group?.name || 'its group'}` : 'you (and the leads of its group, if any)'},
+          and its sections (the procedure, amounts, notes and tables, but not its files) are copied into the template.</p>
+        <p style={{ marginBottom: 0 }}>To keep it to fewer people, use <b>Duplicate</b> instead: the copy stays in this record's notebook.</p>
+      </Modal>}
       {scaling && (() => {
         const rx = exp.entries.find(e => e.kind === 'reaction')?.content
         const lim = (rx?.rows || []).find((r: any) => r.limiting)

@@ -1,3 +1,4 @@
+import { endsScan } from '../scanBurst'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Modal from './Modal'
 import { canUseLiveCamera, cleanCode, readCodes, type Decoded } from '../scan'
@@ -62,7 +63,11 @@ export default function Scanner({ title = 'Scan a barcode', intro, onCode, onClo
 
   const answer = useRef(onCode)
   answer.current = onCode
-  const found = useCallback((code: string) => { stop(); answer.current(code) }, [stop])
+  // once: a scanner that sends Enter twice (CR and LF), or Enter while the camera also reads the code, gave two
+  // look-ups, two lots or two uses of a bottle (0.36.6)
+  const done = useRef(false)
+  const found = useCallback((code: string) => { stop(); if (done.current) return; done.current = true; answer.current(code) }, [stop])
+  const lastKey = useRef(0)
 
   const loop = useCallback(async (my: number) => {
     let read
@@ -168,6 +173,11 @@ export default function Scanner({ title = 'Scan a barcode', intro, onCode, onClo
           <label className="field" htmlFor="scan-typed">Or type the code (a USB or Bluetooth barcode scanner types it here too)</label>
           <div className="row" style={{ flexWrap: 'nowrap' }}>
             <input id="scan-typed" className="input grow" value={typed} onChange={e => setTyped(e.target.value)} autoFocus={!touch}
+              onKeyDown={e => {  // a scanner set to send Tab after the code: that Tab ends the scan rather than moving on
+                const gap = e.timeStamp - lastKey.current
+                lastKey.current = e.timeStamp
+                if (e.key === 'Tab' && !e.shiftKey && endsScan('Tab', gap, cleanCode(typed).length)) { e.preventDefault(); submitTyped() }
+              }}
               autoComplete="off" autoCapitalize="characters" spellCheck={false} enterKeyHint="search" placeholder="Barcode" />
             <button className="btn" type="submit" disabled={!cleanCode(typed)}>Look up</button>
           </div>

@@ -106,16 +106,15 @@ _lock = threading.Lock()  # one backup at a time in this server (two clicks, or 
 
 def create_backup(reason: str = "manual") -> dict[str, Any]:
     """Each backup starts afresh: nothing from a failed one (a folder that was missing, a full disk) is carried over,
-    and the next one that works clears the warning. Failures come back as BackupError with a plain message (0.36.6:
-    a backup folder that wasn't there gave "Internal Server Error" on Back up now)."""
+    and the next one that works clears the warning. A failure is recorded in plain words (last_failure); the error
+    itself is raised as it was (Back up now and ./benchtop backup show the plain words: 0.36.6, it was "Internal Server
+    Error" when the backup folder wasn't there)."""
     with _lock:
         try:
             out = _create_backup(reason)
         except Exception as exc:  # recorded so the admin dashboard says why, not just that backups are getting old
-            msg = _note_failure(exc)
-            if isinstance(exc, BackupError):
-                raise
-            raise BackupError(msg) from exc
+            _note_failure(exc)
+            raise
         _note_success(out["name"])
         return out
 
@@ -778,7 +777,8 @@ def _read_checked_manifest(z: zipfile.ZipFile, zp: Path) -> dict[str, Any]:
 def _check_database(db: Path, zp: Path) -> None:
     """The unpacked database opens and is a Benchtop one, before anything is swapped."""
     try:
-        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        # immutable: read as it is, without the -wal and -shm files a database saved in WAL mode would get beside it
+        con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
         try:
             ok = con.execute("PRAGMA quick_check").fetchone()[0]
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
@@ -938,6 +938,9 @@ def _main(argv: list[str]) -> int:
             return 1
     except BackupError as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:  # a backup folder that isn't there, a full disk… (0.36.6: a traceback)
+        print(f"Error: the backup failed: {_failure_message(exc)}", file=sys.stderr)
         return 2
     return 0
 

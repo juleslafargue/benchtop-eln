@@ -53,7 +53,7 @@ def test_a_missing_backup_folder_gets_a_plain_message_and_the_next_backup_clears
     assert r.status_code == 400, r.text
     assert "couldn't write to" in r.json()["detail"] and "tries again" in r.json()["detail"], r.text
     h = client.get("/api/admin/backups", headers=admin).json()
-    assert h["failing"] and h["last_failure"]["error"] == r.json()["detail"]
+    assert h["failing"] and h["last_failure"]["error"] in r.json()["detail"]
     assert any(w.startswith("The last backup failed") for w in h["warnings"])
     assert h["last_success"]["at"] == first["last_success"]["at"]  # still says when the last good one was
     bd.unlink()

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useApp } from '../App'
 import { unitLabel, api, day, fmt, type Lot, type Material } from '../api'
 import { Mol, NumInput, useDebounced, useOneAtATime } from '../components/bits'
@@ -10,6 +10,7 @@ import { SafetyBadge, SignalWord } from '../components/Safety'
 import { expiryDay, lotProblem, type ScanAnswer, type ScannedLot } from '../scan'
 import { LotForm, LotHistory } from './MaterialDetail'
 import CutShort from '../components/CutShort'
+import { useScanned } from '../components/ScanCatcher'
 import { addPage } from '../listNotice'
 
 const LOTS_PAGE = 200
@@ -182,6 +183,13 @@ export default function Inventory() {
     load()
   }
   const scanNext = () => { setScan(null); setScanning(true) }
+  // 0.36.6: a scanner used with no box focused (here, or on another page, which opens this one with ?scan=)
+  useScanned(code => { setScanning(false); lookUp(code) })
+  const [params, setParams] = useSearchParams()
+  useEffect(() => {
+    const code = params.get('scan')
+    if (code) { setParams({}, { replace: true }); lookUp(code) }
+  }, [params]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="stack" style={{ gap: 20 }}>

@@ -27,6 +27,7 @@ import PasswordDialog from './components/PasswordDialog'
 import BenchPage from './pages/BenchPage'
 import Guide from './pages/Guide'
 import { Shortcuts } from './components/Shortcuts'
+import ScanCatcher from './components/ScanCatcher'
 
 export interface ToastAction { label: string; run: () => void }
 interface Ctx {
@@ -150,6 +151,7 @@ export default function App() {
 
   return (
     <AppCtx.Provider value={{ user, notebooks, archivedNotebooks, refreshNotebooks, groups, refreshGroups, toast, logout, canWrite: user.role !== 'viewer', setUser }}>
+      <ScanCatcher />
       {loc.pathname.startsWith('/bench/') ? <ErrorBoundary page label="the bench view" resetKey={loc.pathname}><Routes><Route path="/bench/:id" element={<BenchPage />} /></Routes></ErrorBoundary> : <>
       <Layout>
         <ErrorBoundary page label="this page" resetKey={loc.pathname}>
