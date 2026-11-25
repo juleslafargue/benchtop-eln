@@ -132,8 +132,14 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
     for palette in ("notebook", "steel", "litmus", "contrast"):
         for scheme in ("light", "dark"):
             runs.append((f"theme {palette} {scheme}", "slaurent", {"width": 1300, "height": 850}, scheme, themed, palette))
+    only = [x for x in os.environ.get("BENCHTOP_SMOKE_ONLY", "").split(",") if x]  # e.g. stress_fixes_366: just that part
     with sync_playwright() as p:
         browser = p.chromium.launch()
+        if only:
+            for name in only:
+                problems += globals()[name](browser, tok["hweiss"], tok["slaurent"])
+            browser.close()
+            return problems
         for label, user, viewport, scheme, paths, *rest in runs:
             palette = rest[0] if rest else "benchtop"
             httpx.patch(B + "/api/auth/me", headers={"Authorization": "Bearer " + tok[user]}, json={"preferences": {"palette": palette}})
@@ -227,6 +233,7 @@ def sweep(sync_playwright) -> list[tuple[str, str, str, str]]:
         problems += zoomed(browser, tok["slaurent"])
         problems += reaction_headings(browser, tok["slaurent"])
         problems += data_and_security(browser, tok["hweiss"], tok["slaurent"])
+        problems += stress_fixes_366(browser, tok["hweiss"], tok["slaurent"])
         browser.close()
     return problems
 
@@ -2873,6 +2880,225 @@ def data_and_security(browser, admin_token: str, token: str) -> list[tuple[str, 
         ctx.close()
     return found
 
+
+
+def stress_fixes_366(browser, admin_token: str, token: str) -> list[tuple[str, str, str, str]]:
+    """0.36.6, the rest of the 0.36.2 stress test, in the browser. Each check here failed on 0.36.5."""
+    print("0.36.6: a barcode scanner on a record, failing webhooks, audit trails and long lists in pages, ⌘K finding old "
+          "records, typing on the SI page, templates from group-only records, example-text contrast…", flush=True)
+    A = {"Authorization": "Bearer " + admin_token}
+    H = {"Authorization": "Bearer " + token}
+    found: list[tuple[str, str, str, str]] = []
+    where = {"path": ""}
+
+    def bad(kind: str, what: str) -> None:
+        found.append(("0.36.6", where["path"], kind, what[:220]))
+
+    def page(t: str = token, **kw):
+        ctx = browser.new_context(viewport={"width": 1400, "height": 900}, **kw)
+        ctx.add_init_script(f"localStorage.setItem('benchtop.token', '{t}')")
+        return ctx, ctx.new_page()
+
+    def notice(pg) -> str:
+        el = pg.query_selector(".cut-short [role=status]")
+        return el.inner_text().strip() if el else ""
+    me = httpx.get(B + "/api/auth/me", headers=H).json()
+    httpx.patch(B + "/api/auth/me", headers=H, json={"preferences": {"guide_dismissed": True, "palette": "benchtop"}})
+    httpx.patch(B + "/api/auth/me", headers=A, json={"preferences": {"guide_dismissed": True, "palette": "benchtop"}})
+    with httpx.Client(base_url=B, headers=H, timeout=60) as c:
+        nb = c.post("/api/notebooks", json={"name": "Stress checks 0.36.6"}).json()
+        old = c.post("/api/experiments", json={"title": "Grignard probe 0366, the oldest", "notebook_id": nb["id"], "sections": "no_chemistry"}).json()
+        rec = c.post("/api/experiments", json={"title": "Scanner and history check", "notebook_id": nb["id"], "sections": "no_chemistry"}).json()
+        entry = c.post(f"/api/experiments/{rec['id']}/entries", json={"kind": "text", "title": "Notes"}).json()
+        for i in range(205):
+            c.put(f"/api/entries/{entry['id']}", json={"content": {"html": f"<p>version {i}</p>"}})
+        for i in range(505):  # the newest 500 are all ⌘K loads at first
+            c.post("/api/experiments", json={"title": f"Later record {i}", "notebook_id": nb["id"], "sections": "no_chemistry"})
+        mat = c.post("/api/materials", json={"name": "Paging check solvent", "kind": "solvent"}).json()
+        for i in range(205):
+            c.post(f"/api/materials/{mat['id']}/lots", json={"amount": 1, "unit": "mL", "barcode": f"PAGE366-{i:03d}", "allow_duplicate": True})
+        for i in range(210):  # more compounds than the table draws at first
+            c.post("/api/materials", json={"name": f"Product 366-{i}", "kind": "product", "smiles": "C" * (i % 20 + 1) + "O" + "N" * (i // 20 + 1)})
+
+    # 1. a USB barcode scanner on a record, with no box focused: a scan, not the P (phone), T and L shortcuts
+    ctx, pg = page()
+    where["path"] = f"/experiments/{rec['id']}"
+    try:
+        pg.goto(B + where["path"])
+        pg.wait_for_selector(".entry")
+        pg.wait_for_timeout(500)
+        pg.mouse.click(5, 450)  # nothing focused
+        pg.keyboard.type("PTL-0042", delay=4)
+        pg.keyboard.press("Enter")
+        pg.wait_for_timeout(1500)
+        opened = [d.inner_text().split("\n")[0] for d in pg.query_selector_all("dialog[open] h2")]
+        if any(o in ("Open on your phone",) for o in opened) or pg.query_selector(".bench-bar, .bench-tools input"):
+            bad("scanner", f"scanning PTL-0042 went to the page's shortcuts (P, T, L): {opened}")
+        if "/inventory" not in pg.url or "PTL-0042" not in pg.inner_text("dialog[open]" if opened else "body"):
+            bad("scanner", f"after a scan with no box focused the page is {pg.url} ({opened}), not the Inventory looking PTL-0042 up")
+        # a person pressing P still opens the phone dialog
+        pg.goto(B + where["path"])
+        pg.wait_for_selector(".entry")
+        pg.mouse.click(5, 450)
+        pg.keyboard.press("p")
+        pg.wait_for_timeout(600)
+        if not pg.query_selector("dialog[open] h2:has-text('Open on your phone')"):
+            bad("scanner", "pressing P (a person) no longer opens the phone dialog")
+    except Exception as e:  # noqa: BLE001
+        bad("scanner", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # 2. a failing webhook is said plainly on the Admin page
+    ctx, pg = page(admin_token)
+    where["path"] = "/admin/integrations"
+    try:
+        h = httpx.post(B + "/api/webhooks", headers=A, json={"name": "Gone receiver", "url": "https://receiver.example.invalid/hook",
+                                                         "events": ["experiment.signed"]}).json()
+        httpx.post(B + f"/api/webhooks/{h['id']}/test", headers=A, timeout=60)
+        pg.goto(B + where["path"])
+        pg.wait_for_selector(".hook-row")
+        txt = pg.inner_text(".hook-row:has-text('Gone receiver')")
+        if "Failing" not in txt or "none has arrived yet" not in txt:
+            bad("webhooks", f"a webhook whose deliveries fail shows {txt[:160]!r}")
+        httpx.delete(B + f"/api/webhooks/{h['id']}", headers=A)
+    except Exception as e:  # noqa: BLE001
+        bad("webhooks", str(e).splitlines()[0][:160])
+
+    # 3. the lab's audit trail goes back past 150 events
+    where["path"] = "/admin/audit"
+    try:
+        total = int(httpx.get(B + "/api/audit?limit=1", headers=A).headers["X-Total-Count"])
+        pg.goto(B + where["path"])
+        pg.wait_for_selector(".audit-list li")
+        pg.wait_for_timeout(500)
+        if notice(pg) != f"Showing the first 150 of {total:,} events.":
+            bad("audit", f"the page says {notice(pg)!r} with {total} events")
+        else:
+            pg.click(".cut-short button")
+            pg.wait_for_function("document.querySelectorAll('.audit-list li').length > 150", timeout=15000)
+    except Exception as e:  # noqa: BLE001
+        bad("audit", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    ctx, pg = page()
+    # 4. a record's audit trail goes back past 200 events
+    where["path"] = f"/experiments/{rec['id']}"
+    try:
+        n = int(httpx.get(B + f"/api/experiments/{rec['id']}/audit?limit=1", headers=H).headers.get("X-Total-Count", "0"))
+        pg.goto(B + where["path"])
+        pg.click("[role=tab]:has-text('Audit trail')")
+        pg.wait_for_selector(".timeline li")
+        pg.wait_for_timeout(500)
+        if n <= 200 or notice(pg) != f"Showing the first 200 of {n:,} events.":
+            bad("record history", f"{n} events; the page says {notice(pg)!r} under {pg.locator('.timeline li').count()} shown")
+        else:
+            pg.click(".cut-short button")
+            pg.wait_for_function(f"document.querySelectorAll('.timeline li').length === {n}", timeout=15000)
+    except Exception as e:  # noqa: BLE001
+        bad("record history", str(e).splitlines()[0][:160])
+
+    # 5. the Inventory comes in pages
+    where["path"] = "/inventory"
+    try:
+        pg.goto(B + "/inventory")
+        pg.fill("input[aria-label='Search the inventory']", "PAGE366-")
+        pg.wait_for_timeout(1500)
+        if notice(pg) != "Showing the first 200 of 205 containers.":
+            bad("inventory", f"205 matching containers; the page says {notice(pg)!r}")
+        else:
+            pg.click(".cut-short button")
+            pg.wait_for_function("document.querySelectorAll('table.plain tbody tr').length === 205", timeout=15000)
+    except Exception as e:  # noqa: BLE001
+        bad("inventory", str(e).splitlines()[0][:160])
+
+    # 6. the Compounds table draws 200 rows at first, quickly
+    where["path"] = "/compounds"
+    try:
+        t0 = time.time()
+        pg.goto(B + "/compounds")
+        pg.wait_for_selector("table.plain tbody tr td b", timeout=30000)
+        took = time.time() - t0
+        rows = pg.locator("table.plain tbody tr").count()
+        if rows != 200 or not notice(pg).startswith("Showing the first 200 of"):
+            bad("compounds", f"{rows} rows drawn at first, notice {notice(pg)!r}")
+        if took > 5:
+            bad("compounds", f"the page took {took:.1f} s to show its compounds")
+    except Exception as e:  # noqa: BLE001
+        bad("compounds", str(e).splitlines()[0][:160])
+
+    # 7. ⌘K finds a record older than the newest 500
+    where["path"] = "⌘K"
+    try:
+        pg.goto(B + "/")
+        pg.wait_for_selector(".palette-trigger")
+        pg.click(".palette-trigger")
+        pg.fill(".palette-input", "Grignard probe 0366")
+        pg.wait_for_selector(f".palette-list li:has-text('{old['eid']}')", timeout=5000)
+    except Exception as e:  # noqa: BLE001
+        bad("⌘K", f"{old['eid']} (older than the newest 500 records) wasn't found: {str(e).splitlines()[0][:100]}")
+
+    # 8. typing on the SI page, then leaving at once: it's saved
+    doc = httpx.post(B + "/api/si-documents", headers=H, json={"title": "SI typing check"}).json()
+    where["path"] = f"/si/{doc['id']}"
+    try:
+        pg.goto(B + where["path"])
+        pg.wait_for_selector("text=Paper title")
+        box = pg.get_by_label("Paper title")
+        box.fill("")
+        box.type("Total synthesis, typed then left", delay=15)
+        pg.click("a[href='/']")
+        pg.wait_for_timeout(2500)
+        title = httpx.get(B + f"/api/si-documents/{doc['id']}", headers=H).json()["title"]
+        if title != "Total synthesis, typed then left":
+            bad("SI typing", f"typed, then left the page at once: the server has {title!r}")
+    except Exception as e:  # noqa: BLE001
+        bad("SI typing", str(e).splitlines()[0][:160])
+
+    # 9. a group-only record saved as a template: asked first, since templates are open to everyone
+    where["path"] = "save as template"
+    try:
+        g = next((x for x in httpx.get(B + "/api/groups", headers=H).json() if x.get("my_role")), None)
+        if g:
+            gnb = httpx.post(B + "/api/notebooks", headers=H, json={"name": "Group-only 0.36.6", "group_id": g["id"], "visibility": "group"}).json()
+            gr = httpx.post(B + "/api/experiments", headers=H, json={"title": "Unpublished route", "notebook_id": gnb["id"], "sections": "no_chemistry"}).json()
+            n_tpl = len(httpx.get(B + "/api/experiments?templates=true", headers=H).json())
+            pg.goto(B + f"/experiments/{gr['id']}")
+            pg.wait_for_selector(".entry")
+            pg.click("summary:has-text('More…')")
+            pg.click("button:has-text('Save as template')")
+            pg.wait_for_timeout(800)
+            if not pg.query_selector("dialog[open] h2:has-text('Save as a template everyone can open?')"):
+                bad("template", "a group-only record became a template everyone can open, without a word")
+            if len(httpx.get(B + "/api/experiments?templates=true", headers=H).json()) != n_tpl:
+                bad("template", "the template was made before anyone said yes")
+        else:
+            bad("template", "the demo account is in no group")
+    except Exception as e:  # noqa: BLE001
+        bad("template", str(e).splitlines()[0][:160])
+    ctx.close()
+
+    # 10. example text in boxes is readable in dark mode (it was the browser's #757575: 3.5:1)
+    ctx, pg = page(color_scheme="dark")
+    where["path"] = "/materials (dark)"
+    try:
+        pg.goto(B + "/materials")
+        pg.wait_for_selector("input[placeholder^='Search by name']")
+        ratio = pg.evaluate("""() => {
+            const el = document.querySelector("input[placeholder^='Search by name']")
+            const rgb = s => s.match(/\\d+(\\.\\d+)?/g).slice(0, 3).map(Number)
+            const lum = c => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]) }
+            let bg = null
+            for (let e = el; e && !bg; e = e.parentElement) { const c = getComputedStyle(e).backgroundColor; if (!/rgba\\(.*, 0\\)|transparent/.test(c)) bg = rgb(c) }
+            const fg = rgb(getComputedStyle(el, '::placeholder').color)
+            const a = lum(fg), b = lum(bg)
+            return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+        }""")
+        if ratio < 4.5:
+            bad("contrast", f"the search box's example text is {ratio:.2f}:1 against its background (4.5:1 needed)")
+    except Exception as e:  # noqa: BLE001
+        bad("contrast", str(e).splitlines()[0][:160])
+    ctx.close()
+    return found
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))

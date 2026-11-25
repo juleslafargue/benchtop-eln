@@ -123,6 +123,18 @@ of the three, so paging until `offset` reaches it fetches all three in full.
 
 Before 0.31, `GET /api/materials` stopped at 500 without saying so, and had no `offset`.
 
+`GET /api/experiments?q=…` (0.36.6) lists only the records whose title contains the text, or whose number it is
+(`EXP-00025`, `exp-25` or `25`), however old: Benchtop's own pickers use it to find records beyond the newest few
+hundred.
+
+Audit trails come newest first and go back with `before_id` (the `id` of the oldest event you have) rather than
+`offset`, so an event added meanwhile doesn't shift the pages. Both say how many events there are in `X-Total-Count`:
+
+| List | Rows when `limit` is left out |
+|---|---|
+| `GET /api/experiments/{id}/audit` (a record's history) | all |
+| `GET /api/audit` (the lab's, for admins) | 200 |
+
 ```python
 def fetch_all(path, page=1000, **params):
     """Every row of a list, one page at a time."""

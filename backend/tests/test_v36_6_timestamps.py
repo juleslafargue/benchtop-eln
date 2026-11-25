@@ -68,10 +68,12 @@ def _stored_by_an_older_benchtop(client, users, notebook, use, fake: FakeTSA, ti
     return sid
 
 
-def _named(sid: int) -> bool:
-    """Does ./benchtop check name this signature's timestamp as one that doesn't verify? (Other tests' may be named too.)"""
-    item = next(c for c in check.check_live()["checks"] if c["name"] == "Trusted timestamps")
-    return bool(re.search(rf"\(signatures [^)]*\b{sid}\b", item["detail"])) and not item["ok"]
+def _bad() -> int:
+    """How many stored timestamps ./benchtop check says don't verify (other tests' may be among them)."""
+    item = next((c for c in check.check_live()["checks"] if c["name"] == "Trusted timestamps"), None)
+    if item is None or item["ok"]:
+        return 0
+    return int(re.match(r"(\d+) don't verify", item["detail"]).group(1))
 
 
 def _forget(sid: int) -> None:
@@ -87,9 +89,10 @@ def test_a_timestamp_made_while_the_certificate_was_valid_stays_valid_after_it_e
     old = FakeTSA(valid=(-400, -30), stamped_days_ago=100)
     digest = hashlib.sha256(b"a signature description").digest()
     assert timestamps.verify(_token(old, digest), digest)["ok"]
+    before = _bad()
     sid = _stored_by_an_older_benchtop(client, users, notebook, use, old, "Certified, then the certificate expired")
     try:
-        assert not _named(sid)
+        assert _bad() == before
     finally:
         _forget(sid)
 
@@ -99,8 +102,9 @@ def test_the_data_check_names_a_stored_timestamp_whose_certificate_had_expired(c
     digest = hashlib.sha256(b"another description").digest()
     info = timestamps.verify(_token(expired, digest), digest)
     assert not info["ok"] and "had expired" in info["error"], info
+    before = _bad()
     sid = _stored_by_an_older_benchtop(client, users, notebook, use, expired, "Certified with an expired certificate")
     try:
-        assert _named(sid)
+        assert _bad() == before + 1
     finally:
         _forget(sid)

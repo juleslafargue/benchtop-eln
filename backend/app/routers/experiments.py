@@ -1561,13 +1561,25 @@ def _render_entry(e: Entry, atts: dict[int, Attachment], pdf: bool = False, figu
             h += f"<p class='meta' style='font-size:11px'>Section type: {html.escape(sch.get('name', ''))} (plugin {html.escape(sch['plugin'])})</p>"
     elif e.kind == EntryKind.table:
         cols = [col if isinstance(col, dict) else {"name": col} for col in c.get("columns") or [] if col is not None]
-        h += "<table><tr>" + "".join(
-            f"<th>{html.escape(str(col.get('name', '')))}{(' (' + html.escape(str(col['unit'])) + ')') if col.get('unit') else ''}</th>"
-            for col in cols) + "</tr>"
-        for row in c.get("rows") or []:
-            if isinstance(row, list):
-                h += "<tr>" + "".join(f"<td>{_fmt(v)}</td>" for v in row) + "</tr>"
-        h += "</table>"
+        heads = [f"{html.escape(str(col.get('name', '')))}{(' (' + html.escape(str(col['unit'])) + ')') if col.get('unit') else ''}"
+                 for col in cols]
+        rows = [row for row in c.get("rows") or [] if isinstance(row, list)]
+        width = max([len(heads)] + [len(r) for r in rows])
+        heads += [""] * (width - len(heads))
+        # 0.36.6: on paper, a table with many columns comes in parts of at most PDF_COLUMNS, each with the first column
+        # again (30 columns were squeezed to one letter a line, unreadable)
+        groups = [list(range(width))]
+        if pdf and width > PDF_COLUMNS:  # the others shared out evenly, so the last part isn't one lonely column
+            n = -(-(width - 1) // (PDF_COLUMNS - 1))
+            cuts = [1 + round(k * (width - 1) / n) for k in range(n + 1)]
+            groups = [[0] + list(range(cuts[k], cuts[k + 1])) for k in range(n)]
+        for g, idx in enumerate(groups):
+            if len(groups) > 1:
+                h += f"<p class='caption'>Columns {(idx[1] if g else 0) + 1}–{idx[-1] + 1} of {width}{', with the first column again' if g else ''}</p>"
+            h += "<table><tr>" + "".join(f"<th>{heads[i]}</th>" for i in idx) + "</tr>"
+            for row in rows:
+                h += "<tr>" + "".join(f"<td>{_fmt(row[i]) if i < len(row) else ''}</td>" for i in idx) + "</tr>"
+            h += "</table>"
     elif e.kind == EntryKind.purification:
         rows = [("Method", PURIFICATION_LABELS.get(c.get("method"), c.get("method") or "")),
                 ("Stationary phase", c.get("stationary_phase")), ("Eluent", c.get("eluent")),
@@ -1589,7 +1601,7 @@ def _render_entry(e: Entry, atts: dict[int, Attachment], pdf: bool = False, figu
         h += _references_html(c.get("items") or [])
     elif e.kind == EntryKind.file:
         h += "<ul>" + "".join(
-            f"<li>{html.escape(atts[i].filename)} — {atts[i].size:,} bytes — sha256 <code>{atts[i].sha256}</code></li>"
+            f"<li>{html.escape(atts[i].filename)} — {atts[i].size:,} bytes — sha256<br><code>{atts[i].sha256}</code></li>"
             for i in c.get("attachment_ids", []) if i in atts) + "</ul>"
         h += "".join(_inline_images(f'<p><img data-attachment-id="{i}"></p>', atts, pdf)
                      for i in c.get("attachment_ids", []) if i in atts and atts[i].content_type.startswith("image/"))
@@ -1706,7 +1718,13 @@ def report_html(session, exp: Experiment, pdf: bool = False, *, page_size: str =
                                                                    Attachment.withdrawn_at == None))}  # noqa: E711
     owner = session.get(User, exp.owner_id)
     sigs = signatures_out(session, exp.id)
-    body = "".join(_render_entry_safe(e, atts, pdf, figures) for e in live_entries(session, exp.id))
+    entries = live_entries(session, exp.id)
+    body = "".join(_render_entry_safe(e, atts, pdf, figures) for e in entries)
+    in_sections = {i for e in entries if e.kind == EntryKind.file for i in (e.content or {}).get("attachment_ids") or [] if isinstance(i, int)}
+    in_sections |= {it.get("attachment_id") for e in entries if e.kind == EntryKind.characterization
+                    for it in (e.content or {}).get("items") or [] if isinstance(it, dict)}
+    in_sections |= {int(x) for e in entries for x in re.findall(r'data-attachment-id=\\?"(\d+)', json.dumps(e.content or {}))}
+    body += _files_html(atts, in_sections)
     def stamp(s):
         t = s.get("timestamp")
         if not t:
@@ -1758,7 +1776,72 @@ footer{{margin-top:2rem;border-top:1px solid #999;font-size:11px;color:#555}}{pd
 </body></html>"""
     if pdf_fix:
         doc = doc.replace(" ★", " (limiting)").replace("⏱ ", "").replace("⏱", "")
+        note = _unshown_note(doc)
+        if note:
+            doc = doc.replace("</header>", "</header>" + note, 1)
+        doc = _breakable(doc)
     return doc
+
+
+PDF_COLUMNS = 8  # the most table columns side by side on a printed page (0.36.6)
+_LONG_RUN = 20   # a PDF line may break every this many characters of a run without spaces (0.36.6)
+_RUN = re.compile(r"(?:&#?\w+;|[^\s<>&]){70,}")  # runs this long or longer (a SHA-256, 64 characters, stays whole)
+
+
+def _breakable(doc: str) -> str:
+    """Long runs without a space (a SMILES, a URL, a sequence, a long file name) get places to break in the PDF, every
+    20 characters, so they wrap instead of running off the page (0.36.6: the rest was cut off). The break is a hair
+    space (U+200A), the only break the PDF renderer takes that is nearly invisible. Only the text between tags changes,
+    and only in the PDF; the record and its data keep the text as it is."""
+    def split(m: re.Match) -> str:
+        toks = re.findall(r"&#?\w+;|.", m.group(0))
+        return "\u200a".join("".join(toks[k:k + _LONG_RUN]) for k in range(0, len(toks), _LONG_RUN))
+    parts = re.split(r"(<style.*?</style>|<[^>]*>)", doc, flags=re.S)
+    return "".join(p if i % 2 else _RUN.sub(split, p) for i, p in enumerate(parts))
+
+
+_SCRIPTS = (("CJK", "Chinese, Japanese or Korean"), ("HIRAGANA", "Japanese"), ("KATAKANA", "Japanese"), ("HANGUL", "Korean"),
+            ("ARABIC", "Arabic"), ("HEBREW", "Hebrew"), ("DEVANAGARI", "Hindi or another Devanagari script"),
+            ("THAI", "Thai"), ("BENGALI", "Bengali"), ("TAMIL", "Tamil"))
+
+
+def _unshown_note(doc: str) -> str:
+    """When some characters can't be drawn in the PDF's font (they print as □), say so on the page, and where the exact
+    text is (0.36.6: the squares came without a word)."""
+    import unicodedata
+
+    from ..pdfa import _setup, _glyphs
+    _setup()
+    text = re.sub(r"<style.*?</style>|<[^>]*>", "", doc, flags=re.S)
+    missing = {ch for ch in text if ord(ch) > 0x7F and ord(ch) not in _glyphs and not 0xFE00 <= ord(ch) <= 0xFE0F
+               and ch not in "\u200a\u200b\u200c\u200d"}
+    if not missing:
+        return ""
+    kinds: list[str] = []
+    for ch in sorted(missing):
+        name = unicodedata.name(ch, "")
+        kind = next((label for key, label in _SCRIPTS if name.startswith(key) or f" {key} " in f" {name} "), None)
+        if kind is None and name.startswith(("FULLWIDTH", "IDEOGRAPHIC")):
+            kind = "Chinese, Japanese or Korean"
+        kind = kind or ("emoji and symbols" if unicodedata.category(ch).startswith("S") else "other characters")
+        if kind not in kinds:
+            kinds.append(kind)
+    return ("<p class='banner'>Some of this record's text is in characters the PDF's font can't draw "
+            f"({'; '.join(kinds)}), so they show as □ here. The record itself in Benchtop has the exact text, and so do its "
+            ".eln export and, in an archival PDF, the record's data attached inside it.</p>")
+
+
+def _files_html(atts: dict[int, Attachment], shown: set[int]) -> str:
+    """Every file attached to the record, with its size and SHA-256, so the printout lists all that the signature covers
+    (0.36.6: files not placed in a Files section were left out of the PDF and the archive)."""
+    if not atts:
+        return ""
+    loose = [a for a in atts.values() if a.id not in shown]
+    rows = "".join(f"<tr><td>{html.escape(a.filename)}{' *' if a.id not in shown else ''}</td><td>{a.size:,} bytes</td>"
+                   f"<td><code class='mono fp'>{a.sha256}</code></td></tr>" for a in sorted(atts.values(), key=lambda a: a.id))
+    note = "<p class='caption'>* Not shown in a section above.</p>" if loose else ""
+    return (f"<section><h2>Attached files ({len(atts)})</h2><table><tr><th width='33%'>File</th><th width='15%'>Size</th>"
+            f"<th width='52%'>SHA-256</th></tr>{rows}</table>{note}</section>")
 
 
 SPECTRUM_RE = re.compile(r"\.(jdx|dx|jcamp|jcm|csv|tsv|txt|xy|zip)$", re.I)

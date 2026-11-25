@@ -125,6 +125,9 @@ def _failure_message(exc: BaseException) -> str:
         return str(exc)
     if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
         return "the disk is full. Free some space (or choose a backup folder on a bigger disk)."
+    if isinstance(exc, (FileExistsError, NotADirectoryError)):
+        return (f"{exc.filename or settings.backup_dir} isn't a folder (a file is in its place). If the backup folder is on a "
+                "drive or a network share, check that it's connected; the next backup tries again by itself.")
     if isinstance(exc, OSError):
         where = exc.filename or settings.backup_dir
         why = exc.strerror or str(exc)

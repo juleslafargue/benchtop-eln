@@ -311,6 +311,8 @@ def _plain(exc: BaseException, host: str) -> str:
         return str(exc)
     if isinstance(exc, socket.gaierror):
         return f"{host} wasn't found. Check the address."
+    if isinstance(exc, httpx.ProxyError):
+        return f"The server's proxy wouldn't connect to {host} ({str(exc)[:120]}). Ask whoever runs the network to allow it."
     if isinstance(exc, httpx.ConnectTimeout):
         return f"No answer from {host} within {CONNECT_SECONDS:.0f} seconds. Is it running, and can this server reach it?"
     if isinstance(exc, httpx.ConnectError):

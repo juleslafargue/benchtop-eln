@@ -51,7 +51,7 @@ def test_a_missing_backup_folder_gets_a_plain_message_and_the_next_backup_clears
     bd.write_text("not a folder")  # as an unplugged drive's empty mount point can be
     r = client.post("/api/admin/backups", headers=admin)
     assert r.status_code == 400, r.text
-    assert "couldn't write to" in r.json()["detail"] and "tries again" in r.json()["detail"], r.text
+    assert "isn't a folder" in r.json()["detail"] and "tries again" in r.json()["detail"], r.text
     h = client.get("/api/admin/backups", headers=admin).json()
     assert h["failing"] and h["last_failure"]["error"] in r.json()["detail"]
     assert any(w.startswith("The last backup failed") for w in h["warnings"])
